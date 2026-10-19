@@ -10,7 +10,7 @@ const uid = () => (now().toString(36) + Math.random().toString(36).slice(2, 7));
 function seed() {
   const g = 'c_general', b = 'c_build', r = 'c_random', v = 'c_voice';
   return {
-    servers: [{ id: 's_robotics', name: 'Robotics', icon: '🤖' }],
+    servers: [{ id: 's_robotics', name: 'Robotics', icon: 'bot' }],
     channels: [
       { id: g, server: 's_robotics', name: 'general', kind: 'text' },
       { id: b, server: 's_robotics', name: 'build-log', kind: 'text' },
@@ -21,6 +21,7 @@ function seed() {
       [g]: [{ id: uid(), user: { name: 'Flubot', color: '#5b7fd6', bot: true }, text: 'Welcome to **Fluentdat** — your own chat. Type `/help` to see what it can do.', ts: now() }],
       [b]: [], [r]: [], [v]: [],
     },
+    stickers: [],   // ones you make (Settings and the + in the sticker picker); image stickers are kept as data URLs
   };
 }
 
@@ -67,6 +68,11 @@ export const Store = {
     d.channels = d.channels.filter((c) => c.id !== id); delete d.messages[id];
     save(); emit();
   },
+
+  // stickers you make — saved here now, and in Fluentdat-Data once accounts land
+  stickers: () => (load().stickers || []).slice(),
+  addSticker(s) { const d = load(); (d.stickers = d.stickers || []).push({ id: 's_' + uid(), ...s }); save(); emit(); },
+  removeSticker(id) { const d = load(); d.stickers = (d.stickers || []).filter((x) => x.id !== id); save(); emit(); },
 
   // everything, to hand off to a real backend later
   dump: () => JSON.stringify(load(), null, 2),
