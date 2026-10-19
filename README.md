@@ -1,6 +1,6 @@
 # Fluentdat
 
-A chat app I am building, Discord style, on GitHub Pages: servers and channels, stickers, themes you can switch, a camera and mic preview for calls, and slash commands.
+A chat app being built on GitHub Pages: servers and channels, stickers, themes you can switch, a camera and mic preview for calls, and slash commands.
 
 Live: https://trixwotel.github.io/Fluentdat/
 
