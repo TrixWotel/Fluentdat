@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fluentdat</title>
+  <meta name="description" content="A chat app I am building, Discord style, on GitHub Pages.">
+  <style>
+    /* ---- themes (switchable in the user panel) ---- */
+    :root, :root[data-theme="dark"] {
+      --rail: #1a1d23; --side: #20242c; --main: #282d36; --input: #333945; --hover: #2d323c;
+      --text: #e8eaee; --muted: #9aa3ae; --bright: #ffffff; --accent: #5b7fd6; --accent-text: #fff;
+      --line: #15171c; --mine: #3a4253; --bubble: #313743;
+    }
+    :root[data-theme="midnight"] {
+      --rail: #05070d; --side: #0a0e18; --main: #0e1320; --input: #18203250; --hover: #141c2e;
+      --text: #d7e0f2; --muted: #7d89a6; --bright: #fff; --accent: #6ea8ff; --accent-text: #05070d;
+      --line: #04060b; --mine: #16233b; --bubble: #121a2b;
+    }
+    :root[data-theme="ember"] {
+      --rail: #1b1310; --side: #231915; --main: #2c201a; --input: #3a2a22; --hover: #332419;
+      --text: #f3e6dd; --muted: #b59a89; --bright: #fff; --accent: #e8743b; --accent-text: #1b1310;
+      --line: #140d0a; --mine: #43291d; --bubble: #352418;
+    }
+    :root[data-theme="forest"] {
+      --rail: #0f1713; --side: #15201a; --main: #1b2a21; --input: #26382c; --hover: #203128;
+      --text: #e3efe6; --muted: #8fab98; --bright: #fff; --accent: #4bbf73; --accent-text: #0f1713;
+      --line: #0a110d; --mine: #1f3a2a; --bubble: #203425;
+    }
+    :root[data-theme="light"] {
+      --rail: #e4e7ec; --side: #eef1f5; --main: #ffffff; --input: #eef1f5; --hover: #e7ebf1;
+      --text: #1b1f24; --muted: #5b6470; --bright: #000; --accent: #2f6fed; --accent-text: #fff;
+      --line: #d3d8df; --mine: #e5edff; --bubble: #f1f3f7;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--main); color: var(--text); overflow: hidden;
+    }
+    [hidden] { display: none !important; }
+    button { font: inherit; color: inherit; cursor: pointer; border: none; background: none; }
+    .app { display: grid; grid-template-columns: 68px 240px 1fr; height: 100dvh; }
+
+    /* ---- server rail ---- */
+    .rail { background: var(--rail); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0; }
+    .srv { width: 46px; height: 46px; border-radius: 15px; background: var(--side); display: grid; place-items: center;
+      font-size: 1.3rem; transition: border-radius .15s ease, background .15s ease; }
+    .srv:hover, .srv.on { border-radius: 14px; background: var(--accent); color: var(--accent-text); }
+    .srv.add { color: var(--muted); font-size: 1.5rem; }
+    .srv.add:hover { background: var(--hover); color: var(--accent); border-radius: 15px; }
+
+    /* ---- channel sidebar ---- */
+    .side { background: var(--side); display: flex; flex-direction: column; min-width: 0; }
+    .side-head { padding: 16px; font-weight: 700; color: var(--bright); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+    .chan-list { flex: 1; overflow-y: auto; padding: 8px; }
+    .cat { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 12px 8px 4px; display: flex; justify-content: space-between; }
+    .cat button { color: var(--muted); font-size: 1rem; line-height: 1; }
+    .cat button:hover { color: var(--text); }
+    .chan { width: 100%; text-align: left; padding: 7px 10px; border-radius: 8px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+    .chan:hover { background: var(--hover); color: var(--text); }
+    .chan.on { background: var(--hover); color: var(--bright); }
+    .chan .x { margin-left: auto; opacity: 0; font-size: .9rem; }
+    .chan:hover .x { opacity: .6; }
+    .chan .x:hover { opacity: 1; }
+
+    /* user panel */
+    .me { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rail); border-top: 1px solid var(--line); }
+    .avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; flex: none; font-size: .85rem; }
+    .me .name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .me .gear { color: var(--muted); font-size: 1.1rem; padding: 4px; }
+    .me .gear:hover { color: var(--text); }
+
+    /* ---- main ---- */
+    .main { display: flex; flex-direction: column; min-width: 0; background: var(--main); }
+    .top { height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--bright); }
+    .top .hash { color: var(--muted); }
+    .top .spacer { flex: 1; }
+    .top .act { color: var(--muted); font-size: 1.15rem; padding: 6px; border-radius: 8px; }
+    .top .act:hover { color: var(--text); background: var(--hover); }
+    .msgs { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 2px; }
+    .day { text-align: center; color: var(--muted); font-size: .78rem; margin: 10px 0; }
+    .msg { display: flex; gap: 12px; padding: 4px 8px; border-radius: 8px; }
+    .msg:hover { background: var(--hover); }
+    .msg.cont { padding-top: 0; padding-bottom: 0; }
+    .msg.cont .avatar { visibility: hidden; height: 0; }
+    .msg .body { min-width: 0; }
+    .msg .meta { display: flex; align-items: baseline; gap: 8px; }
+    .msg .who { font-weight: 600; color: var(--bright); }
+    .msg .who .tag { font-size: .62rem; background: var(--accent); color: var(--accent-text); border-radius: 4px; padding: 1px 4px; margin-left: 4px; vertical-align: middle; text-transform: uppercase; }
+    .msg .when { font-size: .7rem; color: var(--muted); }
+    .msg .text { white-space: pre-wrap; word-wrap: break-word; }
+    .msg .text code { background: #0004; padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, Menlo, monospace; font-size: .9em; }
+    .msg .text.action { font-style: italic; color: var(--muted); }
+    .msg .sticker { font-size: 3.2rem; line-height: 1.1; }
+
+    /* composer */
+    .composer { padding: 0 16px 20px; }
+    .box { background: var(--input); border-radius: 12px; display: flex; align-items: flex-end; padding: 4px 6px 4px 14px; }
+    .box textarea { flex: 1; background: none; border: none; color: var(--text); resize: none; font: inherit; padding: 12px 0; max-height: 180px; outline: none; }
+    .box textarea::placeholder { color: var(--muted); }
+    .box .tool { font-size: 1.3rem; padding: 8px; color: var(--muted); border-radius: 8px; }
+    .box .tool:hover { color: var(--text); }
+
+    /* sticker / emoji picker */
+    .picker { position: absolute; bottom: 80px; right: 24px; width: 320px; max-height: 300px; overflow-y: auto;
+      background: var(--side); border: 1px solid var(--line); border-radius: 14px; padding: 10px; box-shadow: 0 18px 50px #0007; }
+    .picker h4 { margin: 8px 6px 4px; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+    .picker .set { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; }
+    .picker .set.big { grid-template-columns: repeat(4, 1fr); }
+    .picker button { font-size: 1.4rem; padding: 6px; border-radius: 8px; }
+    .picker .set.big button { font-size: 2rem; }
+    .picker button:hover { background: var(--hover); }
+
+    /* call panel */
+    .call { background: #000; border-bottom: 1px solid var(--line); padding: 12px; display: none; }
+    .call.on { display: block; }
+    .call .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+    .call video { width: 100%; border-radius: 12px; background: #111; aspect-ratio: 16/10; object-fit: cover; }
+    .call .tile { position: relative; }
+    .call .tile span { position: absolute; left: 8px; bottom: 8px; font-size: .75rem; background: #000a; padding: 2px 8px; border-radius: 6px; color: #fff; }
+    .call .ctrls { display: flex; gap: 10px; justify-content: center; margin-top: 12px; }
+    .call .ctrls button { background: var(--input); color: var(--text); width: 46px; height: 46px; border-radius: 50%; font-size: 1.2rem; }
+    .call .ctrls button.off { background: var(--accent); color: var(--accent-text); }
+    .call .ctrls button.leave { background: #e5534b; color: #fff; }
+    .call .note { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 8px; }
+
+    /* dialogs */
+    .scrim { position: fixed; inset: 0; background: #0008; display: grid; place-items: center; z-index: 20; padding: 20px; }
+    .dialog { background: var(--side); border-radius: 16px; padding: 24px; width: 100%; max-width: 420px; }
+    .dialog h3 { margin: 0 0 16px; color: var(--bright); }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
+    .field input { width: 100%; background: var(--input); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; color: var(--text); font: inherit; }
+    .swatches, .themes { display: flex; gap: 8px; flex-wrap: wrap; }
+    .swatches button { width: 34px; height: 34px; border-radius: 50%; border: 2px solid transparent; }
+    .swatches button.on { border-color: var(--bright); }
+    .themes button { padding: 8px 12px; border-radius: 9px; background: var(--input); border: 1px solid var(--line); }
+    .themes button.on { border-color: var(--accent); color: var(--bright); }
+    .dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+    .btn { padding: 9px 16px; border-radius: 9px; background: var(--input); }
+    .btn:hover { background: var(--hover); }
+    .btn.primary { background: var(--accent); color: var(--accent-text); }
+
+    .banner { background: var(--accent); color: var(--accent-text); text-align: center; font-size: .82rem; padding: 6px 12px; }
+    .banner a { color: inherit; font-weight: 700; }
+
+    /* phone */
+    .top .menu { display: none; font-size: 1.3rem; padding: 6px; color: var(--muted); }
+    @media (max-width: 720px) {
+      .app { grid-template-columns: 1fr; }
+      .rail, .side { display: none; }
+      .app.show-side .rail { display: flex; position: absolute; inset: 0 auto 0 0; z-index: 11; }
+      .app.show-side .side { display: flex; position: absolute; inset: 0 auto 0 0; left: 68px; width: 280px; z-index: 10; box-shadow: 0 0 40px #0008; }
+      .top .menu { display: inline-flex; }
+    }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    Early build — messages save in <b id="backend-name">this browser</b> for now. Team sync over GitHub is next.
+  </div>
+  <div class="app" id="app">
+    <nav class="rail" id="rail"></nav>
+    <aside class="side">
+      <div class="side-head" id="server-name">Robotics</div>
+      <div class="chan-list" id="chan-list"></div>
+      <div class="me" id="me-panel"></div>
+    </aside>
+    <section class="main">
+      <header class="top">
+        <button class="menu" id="menu" title="Channels">☰</button>
+        <span class="hash" id="top-hash">#</span>
+        <span id="top-name">general</span>
+        <span class="spacer"></span>
+        <button class="act" id="call-voice" title="Join voice">🔊</button>
+        <button class="act" id="call-video" title="Start video">📹</button>
+      </header>
+      <div class="call" id="call">
+        <div class="videos" id="call-videos"></div>
+        <div class="ctrls">
+          <button id="c-mic" title="Mute">🎙️</button>
+          <button id="c-cam" title="Camera">📷</button>
+          <button id="c-leave" class="leave" title="Leave">📞</button>
+        </div>
+        <div class="note">You're previewing your own camera and mic. Real calls with teammates arrive with the GitHub backend (WebRTC).</div>
+      </div>
+      <div class="msgs" id="msgs"></div>
+      <div class="composer">
+        <div class="box">
+          <textarea id="input" rows="1" placeholder="Message #general   ·   /help for commands"></textarea>
+          <button class="tool" id="sticker-btn" title="Stickers & emoji">😀</button>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
