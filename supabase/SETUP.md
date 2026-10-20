@@ -78,6 +78,9 @@ The database checks these itself, so they hold even if someone changes the app:
 4. A DM is visible only to the two people in it. You can DM people you share a server with, or who have added you as a friend.
 5. Friends are added by exact @handle. Nobody can browse a list of everyone.
 6. Nobody can post as somebody else.
+7. Only the owner can make a server public. Then anyone signed in can find it in Discover and join. Admins can ban people, and a banned person can't come back by invite or from Discover until the ban is lifted.
+8. Admins can make roles (a name and a colour) and hand them out. Roles change how names look and group the member list. What someone may do still comes from owner, admin or member.
+9. Profiles and servers only take real colours and pictures, never links to other websites, so nobody can track who looks at their profile.
 
 ## If something goes wrong
 

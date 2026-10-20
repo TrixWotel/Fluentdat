@@ -20,7 +20,7 @@ const rooms = new Map();            // server id → its presence channel (who h
 let online = {};                    // user id → the status they're showing, while they're here
 let state = { loading: false, error: '', lastSync: 0 };
 const listeners = new Set();
-function blank() { return { me: null, profiles: {}, servers: [], categories: [], channels: [], members: [], dmIndex: [], friends: [], msgs: {}, dms: {} }; }
+function blank() { return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [], friends: [], msgs: {}, dms: {} }; }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const friendly = (m) => (/row-level security/i.test(m) ? 'You don’t have permission to do that here.' : m);
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -46,28 +46,42 @@ const myStatus = () => (cache.me && cache.me.status) || 'online';
 function toUser(p) {
   if (!p) return { name: 'Someone', color: '#8a8f98' };
   return { id: p.id, login: p.handle, name: p.name || p.handle, color: p.color, avatar: p.avatar, pronouns: p.pronouns, about: p.about,
-    status: p.id === myId() ? myStatus() : online[p.id] || 'offline' };
+    plate: p.plate || '', since: p.created_at ? Date.parse(p.created_at) : 0, status: p.id === myId() ? myStatus() : online[p.id] || 'offline' };
 }
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
 const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text, sticker: r.sticker, action: r.action,
   user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : toUser(cache.profiles[r.author]) });
-const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, owner: r.owner });
+const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, owner: r.owner, banner: r.banner || '', description: r.description || '',
+  category: r.category || '', public: !!r.public, since: Date.parse(r.created_at) || 0 });
+const toRole = (r) => ({ id: r.id, server: r.server_id, name: r.name, color: r.color, hoist: r.hoist, position: r.position });
+// someone's roles in a server, top one first
+const rolesOf = (sv, uid) => cache.memberRoles.filter((x) => x.server_id === sv && x.user_id === uid)
+  .map((x) => cache.roles.find((r) => r.id === x.role_id)).filter(Boolean).sort(byPos);
 const toCategory = (r) => ({ id: r.id, server: r.server_id, name: r.name, position: r.position });
 const toChannel = (r) => ({ id: r.id, server: r.server_id, category: r.category_id, name: r.name, kind: r.kind, position: r.position });
 const otherIn = (d) => (d.user_a === myId() ? d.user_b : d.user_a);
+// text channels are lower-case-with-dashes (like Discord); voice channels keep their spaces and capitals
+const chanName = (name, kind) => (kind === 'voice' ? String(name).trim().replace(/\s+/g, ' ') : String(name).trim().replace(/\s+/g, '-').toLowerCase()).slice(0, 60) || (kind === 'voice' ? 'Voice' : 'channel');
 
 // ---------- loading ----------
 async function loadAll() {
   if (!session) return;
   state.loading = true; state.error = ''; emit();
   try {
-    const q = (t) => sb.from(t).select('*').then(must);
-    const [profiles, servers, members, categories, channels, dms, friends] =
-      await Promise.all(['profiles', 'servers', 'server_members', 'categories', 'channels', 'dms', 'friends'].map(q));
+    const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
+    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles] = await Promise.all([
+      q('profiles', 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at'),
+      sb.from('profiles').select('*').eq('id', myId()).then(must),
+      q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles')]);
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
-    cache.me = cache.profiles[myId()] || null;
-    cache.servers = servers.map(toServer);
+    cache.me = mine[0] || null;
+    if (cache.me) cache.profiles[cache.me.id] = cache.me;
+    cache.full = {};
+    const mineIn = new Set(members.filter((m) => m.user_id === myId()).map((m) => m.server_id));
+    cache.servers = servers.filter((sv) => mineIn.has(sv.id)).map(toServer);      // (public servers you haven't joined are visible, not yours)
     cache.members = members;
+    cache.roles = roles;
+    cache.memberRoles = memberRoles;
     cache.categories = categories.sort(byPos).map(toCategory);
     cache.channels = channels.sort(byPos).map(toChannel);
     cache.dmIndex = dms;
@@ -137,7 +151,7 @@ function watchStructure() {
   let t = 0;
   const again = () => { clearTimeout(t); t = setTimeout(loadAll, 400); };
   structure = sb.channel('fluentdat-structure');
-  for (const table of ['servers', 'channels', 'categories', 'server_members', 'profiles', 'dms']) structure.on('postgres_changes', { event: '*', schema: 'public', table }, again);
+  for (const table of ['servers', 'channels', 'categories', 'server_members', 'profiles', 'dms', 'roles', 'member_roles']) structure.on('postgres_changes', { event: '*', schema: 'public', table }, again);
   structure.subscribe();
 }
 // signed in: load everything, keep it live, and notice if the session ends (signed out in another tab, or it ran out)
@@ -249,12 +263,12 @@ export const SupabaseStore = {
   async addChannel(sv, cat, name, kind = 'text') {
     const id = uuid();
     must(await sb.from('channels').insert({ id, server_id: sv, category_id: cat || (SupabaseStore.categories(sv)[0] || {}).id || null,
-      name: String(name).trim().replace(/\s+/g, '-').toLowerCase().slice(0, 60) || 'channel', kind, position: SupabaseStore.channels(sv).length }));
+      name: chanName(name, kind), kind, position: SupabaseStore.channels(sv).length }));
     await loadAll(); return id;
   },
   updateServer(id, patch) {
     const s = SupabaseStore.server(id); if (s) Object.assign(s, patch); emit();
-    const row = {}; for (const k of ['name', 'icon', 'img']) if (k in patch) row[k] = patch[k];
+    const row = {}; for (const k of ['name', 'icon', 'img', 'banner', 'description', 'category', 'public']) if (k in patch) row[k] = patch[k];
     push(sb.from('servers').update(row).eq('id', id).select('id').then(took('Only this server’s admins can change it.')), loadAll);
   },
   updateChannel(id, patch) {
@@ -280,7 +294,62 @@ export const SupabaseStore = {
   },
 
   // ---- members, roles, invites ----
-  members: (sv) => cache.members.filter((m) => m.server_id === sv).map((m) => ({ ...toUser(cache.profiles[m.user_id]), id: m.user_id, role: m.role, me: m.user_id === myId() })),
+  members: (sv) => cache.members.filter((m) => m.server_id === sv).map((m) => {
+    const rs = rolesOf(sv, m.user_id);
+    return { ...toUser(cache.profiles[m.user_id]), id: m.user_id, role: m.role, me: m.user_id === myId(), roles: rs.map((r) => r.id),
+      roleColor: (rs.find((r) => r.color) || {}).color || '', group: rs.find((r) => r.hoist) ? toRole(rs.find((r) => r.hoist)) : null };
+  }),
+  memberColor: (sv, uid) => (rolesOf(sv, uid).find((r) => r.color) || {}).color || '',
+
+  // ---- roles (a name and a colour that admins hand out) ----
+  roles: (sv) => cache.roles.filter((r) => r.server_id === sv).sort(byPos).map(toRole),
+  async addRole(sv, role = {}) {
+    const id = uuid();
+    must(await sb.from('roles').insert({ id, server_id: sv, name: String(role.name || 'new role').trim().slice(0, 40) || 'new role',
+      color: role.color || '', hoist: role.hoist !== false, position: SupabaseStore.roles(sv).length }));
+    await loadAll(); return id;
+  },
+  updateRole(id, patch) {
+    const r = cache.roles.find((x) => x.id === id); if (r) Object.assign(r, patch); emit();
+    const row = {}; for (const k of ['name', 'color', 'hoist', 'position']) if (k in patch) row[k] = patch[k];
+    push(sb.from('roles').update(row).eq('id', id).select('id').then(took('Only this server’s admins can change roles.')), loadAll);
+  },
+  removeRole(id) {
+    cache.roles = cache.roles.filter((r) => r.id !== id); cache.memberRoles = cache.memberRoles.filter((x) => x.role_id !== id); emit();
+    push(sb.from('roles').delete().eq('id', id).select('id').then(took('Only this server’s admins can delete roles.')), loadAll);
+  },
+  async giveRole(sv, user, roleId, on) {
+    if (on) must(await sb.from('member_roles').insert({ server_id: sv, user_id: user, role_id: roleId }));
+    else took('Only this server’s admins can take roles away.')(await sb.from('member_roles').delete().eq('user_id', user).eq('role_id', roleId).select('role_id'));
+    await loadAll();
+  },
+
+  // ---- Discover: public servers anyone signed in can find and join ----
+  async discover(query = '', category = '') {
+    return must(await sb.rpc('discover', { p_query: String(query).trim(), p_category: category || '' })).map((r) => ({ ...toServer(r), members: Number(r.members) || 0, joined: !!r.joined }));
+  },
+  async joinPublic(id) { must(await sb.rpc('join_public', { p_server: id })); await loadAll(); return id; },
+
+  // ---- bans ----
+  async ban(sv, user, reason = '') { must(await sb.rpc('ban_member', { p_server: sv, p_user: user, p_reason: reason })); await loadAll(); },
+  async bans(sv) { return must(await sb.rpc('server_bans', { p_server: sv })).map((b) => ({ id: b.user_id, login: b.handle, name: b.name || b.handle, avatar: b.avatar, reason: b.reason, ts: Date.parse(b.created_at) })); },
+  async unban(sv, user) { took('Only this server’s admins can lift bans.')(await sb.from('bans').delete().eq('server_id', sv).eq('user_id', user).select('user_id')); },
+
+  // ---- a new server from a template: its categories and channels in one go ----
+  async applyTemplate(sv, tpl) {
+    const cats = SupabaseStore.categories(sv), chans = SupabaseStore.channels(sv), catRows = [], chanRows = [];
+    for (const [i, c] of tpl.entries()) {
+      const have = cats.find((x) => x.name.toLowerCase() === c.name.toLowerCase()), id = have ? have.id : uuid();
+      if (have) { if (have.position !== i) must(await sb.from('categories').update({ position: i }).eq('id', id)); }
+      else catRows.push({ id, server_id: sv, name: c.name, position: i });
+      c.channels.forEach(([name, kind], j) => {
+        if (!chans.some((x) => x.name === name && x.category === id)) chanRows.push({ id: uuid(), server_id: sv, category_id: id, name, kind: kind || 'text', position: j + 1 });
+      });
+    }
+    if (catRows.length) must(await sb.from('categories').insert(catRows));
+    if (chanRows.length) must(await sb.from('channels').insert(chanRows));
+    await loadAll();
+  },
   async createInvite(sv, maxUses = null, hours = 168) { return must(await sb.rpc('create_invite', { p_server: sv, p_max_uses: maxUses, p_hours: hours })); },
   async joinServer(code) { const id = must(await sb.rpc('join_server', { p_code: String(code).trim() })); await loadAll(); return id; },
   async setMemberRole(sv, user, role) { must(await sb.rpc('set_member_role', { p_server: sv, p_user: user, p_role: role })); await loadAll(); },
@@ -297,6 +366,13 @@ export const SupabaseStore = {
   clear(id) {
     cache.msgs[id] = []; emit();
     push(sb.from('messages').delete().eq('channel_id', id).then(must).then(() => active && active.id === id && loadMessages(active)).then(emit));
+  },
+
+  deleteMessage(where, id) {
+    const bucket = where.dm ? cache.dms : cache.msgs, before = bucket[where.id] || [];
+    bucket[where.id] = before.filter((m) => m.id !== id); emit();
+    push(sb.from(where.dm ? 'dm_messages' : 'messages').delete().eq('id', id).select('id').then(took('You can only delete your own messages here.')),
+      () => { bucket[where.id] = before; });
   },
 
   // ---- direct messages ----
@@ -327,10 +403,17 @@ export const SupabaseStore = {
 
   // ---- you ----
   profile: (id) => cache.profiles[id] || null,
-  myProfile: () => (cache.me ? { ...toUser(cache.me), stickers: cache.me.stickers || [] } : {}),
+  myProfile: () => (cache.me ? { ...toUser(cache.me), banner: cache.me.banner || '', stickers: cache.me.stickers || [] } : {}),
+  // the whole profile (with the banner, which isn't loaded for everyone up front)
+  async profileFull(id) {
+    if (id === myId()) return cache.me ? { ...toUser(cache.me), banner: cache.me.banner || '' } : null;
+    if (!cache.full[id]) { const rows = must(await sb.from('profiles').select('*').eq('id', id)); if (!rows[0]) return null; cache.full[id] = rows[0]; }
+    return { ...toUser(cache.full[id]), banner: cache.full[id].banner || '' };
+  },
+  mutualServers: (uid) => cache.servers.filter((sv) => cache.members.some((m) => m.server_id === sv.id && m.user_id === uid)).length,
   setProfile(patch) {
     if (!cache.me) return;
-    const row = {}; for (const k of ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers']) if (k in patch) row[k] = patch[k] == null ? (k === 'stickers' ? [] : '') : patch[k];
+    const row = {}; for (const k of ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate']) if (k in patch) row[k] = patch[k] == null ? (k === 'stickers' ? [] : '') : patch[k];
     Object.assign(cache.me, row);
     if ('status' in row) for (const ch of rooms.values()) announce(ch);
     emit();

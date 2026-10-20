@@ -41,7 +41,11 @@ function load() {
   if (!data || !data.servers) { data = seed(); save(); }
   return data;
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch {} }
+let saveError = '';
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(data)); saveError = ''; }
+  catch { saveError = 'This browser is out of room for Fluentdat’s data. Try a smaller picture, or sign in.'; }
+}
 function emit() { for (const cb of listeners) try { cb(); } catch {} }
 addEventListener('storage', (e) => { if (e.key === KEY) { data = null; load(); emit(); } });
 
@@ -60,7 +64,8 @@ export const LocalStore = {
   addCategory(serverId, name) { const d = load(), id = 'cat_' + uid(); d.categories.push({ id, server: serverId, name: name.trim() || 'New Category' }); save(); emit(); return id; },
   addChannel(serverId, categoryId, name, kind = 'text') {
     const d = load(), id = 'c_' + uid();
-    d.channels.push({ id, server: serverId, category: categoryId || (d.categories.find((c) => c.server === serverId) || {}).id, name: name.trim().replace(/\s+/g, '-').toLowerCase() || 'channel', kind });
+    const nm = kind === 'voice' ? name.trim().replace(/\s+/g, ' ') : name.trim().replace(/\s+/g, '-').toLowerCase();
+    d.channels.push({ id, server: serverId, category: categoryId || (d.categories.find((c) => c.server === serverId) || {}).id, name: nm.slice(0, 60) || (kind === 'voice' ? 'Voice' : 'channel'), kind });
     d.messages[id] = []; save(); emit();
     return id;
   },
@@ -77,7 +82,29 @@ export const LocalStore = {
   },
 
   // messages
+  syncState: () => ({ loading: false, error: saveError, lastSync: 0, repo: '' }),
   messages: (channelId) => (load().messages[channelId] || []).slice(),
+  deleteMessage(where, id) {
+    const d = load();
+    if (where.dm) { const c = (d.dms || {})[where.id]; if (c) c.messages = c.messages.filter((m) => m.id !== id); }
+    else d.messages[where.id] = (d.messages[where.id] || []).filter((m) => m.id !== id);
+    save(); emit();
+  },
+  // a template: its categories in its order (ahead of any others), and its channels
+  applyTemplate(sv, tpl) {
+    const d = load(), mine = d.categories.filter((c) => c.server === sv), ordered = [];
+    for (const c of tpl) {
+      let cat = mine.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+      if (!cat) cat = { id: 'cat_' + uid(), server: sv, name: c.name };
+      ordered.push(cat);
+      for (const [name, kind] of c.channels) {
+        if (d.channels.some((x) => x.category === cat.id && x.name === name)) continue;
+        const id = 'c_' + uid(); d.channels.push({ id, server: sv, category: cat.id, name, kind: kind || 'text' }); d.messages[id] = [];
+      }
+    }
+    d.categories = [...d.categories.filter((c) => c.server !== sv), ...ordered, ...mine.filter((c) => !ordered.includes(c))];
+    save(); emit();
+  },
   send(channelId, msg) { const d = load(); (d.messages[channelId] = d.messages[channelId] || []).push({ id: uid(), ts: now(), ...msg }); save(); emit(); return true; },
   clear(channelId) { const d = load(); d.messages[channelId] = []; save(); emit(); },
 

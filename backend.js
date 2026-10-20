@@ -38,7 +38,29 @@ const fallback = {
   setMemberRole: async () => {},
   removeMember: async () => {},
   leaveServer: async () => {},
+  // (these need people to share with, so they come with signing in)
+  memberColor: () => '',
+  roles: () => [],
+  addRole: async () => { throw new Error(SIGN_IN + 'make roles.'); },
+  updateRole: () => {}, removeRole: () => {},
+  giveRole: async () => { throw new Error(SIGN_IN + 'give people roles.'); },
+  discover: async () => { throw new Error(SIGN_IN + 'browse public servers.'); },
+  joinPublic: async () => { throw new Error(SIGN_IN + 'join public servers.'); },
+  ban: async () => { throw new Error(SIGN_IN + 'ban people.'); },
+  bans: async () => [],
+  unban: async () => {},
+  profileFull: async () => null,
+  mutualServers: () => 0,
+  // a template's categories and channels, one at a time (stores that can, do it in one go)
+  applyTemplate: async (sv, tpl) => {
+    for (const c of tpl) {
+      const have = Store.categories(sv).find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+      const cat = have ? have.id : await Store.addCategory(sv, c.name);
+      for (const [name, kind] of c.channels) if (!Store.channels(sv).some((x) => x.name === name && x.category === cat)) await Store.addChannel(sv, cat, name, kind || 'text');
+    }
+  },
 };
+const SIGN_IN = 'Sign in with Discord, GitHub or email to ';
 // while a sign-in is being picked up
 const waiting = {
   servers: () => [], server: () => null, dmList: () => [], friends: () => [], stickers: () => [], account: () => null,

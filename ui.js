@@ -1,0 +1,201 @@
+// Fluentdat's building blocks: elements, icons, pictures, little messages, windows and menus. Nothing here knows
+// about servers or messages; app.js puts them together. (Windows replace the browser's prompt() and confirm():
+// apps built on Electron, like the Fluent browser, don't have prompt(), so anything that used it did nothing there.)
+export const $ = (s) => document.querySelector(s);
+export const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k)); return n; };
+
+// ---------- icons ----------
+export const ICON = {
+  menu: '<path d="M3 6h18M3 12h18M3 18h18"/>', hash: '<path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/>',
+  volume: '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
+  mic: '<path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="22"/>',
+  micOff: '<line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-1m14 0v1a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="22"/>',
+  cam: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
+  camOff: '<line x1="1" y1="1" x2="23" y2="23"/><path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34m-7.72-2.06a4 4 0 1 1-5.56-5.56"/>',
+  hangup: '<path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2A19.79 19.79 0 0 1 8.63 19.24M5 9a16 16 0 0 1-.7-2.81A2 2 0 0 1 6.08 4H9a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81"/><line x1="23" y1="1" x2="1" y2="23"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>',
+  send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  bot: '<rect x="4" y="9" width="16" height="11" rx="2.5"/><path d="M12 9V6"/><circle cx="12" cy="4.5" r="1.5"/><circle cx="9" cy="14" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.1" fill="currentColor" stroke="none"/><path d="M9.5 17.5h5"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+  trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>',
+  home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  personAdd: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
+  message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  id: '<rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="12" r="2.5"/><path d="M14 10h5M14 14h5"/>',
+  palette: '<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1 0 1.6-.8 1.6-1.6 0-.4-.2-.8-.5-1.1-.3-.3-.5-.7-.5-1.1 0-.9.7-1.6 1.6-1.6H16c3.3 0 6-2.7 6-6 0-4.9-4.5-9.6-10-9.6z"/><circle cx="7.5" cy="11" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="16.5" cy="11" r="1.3" fill="currentColor" stroke="none"/>',
+  dot: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>', chevD: '<path d="M6 9l6 6 6-6"/>', chevR: '<path d="M9 18l6-6-6-6"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
+  bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
+  keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
+  layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h6"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  crown: '<path d="M3 18h18M4 8l4 4 4-6 4 6 4-4-1.5 10h-13z"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M18 5l2 2"/>',
+  compass: '<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>',
+  plusCircle: '<circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>',
+  sticker: '<path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3z"/><path d="M15 3v6h6"/>',
+  headphones: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
+  headphonesOff: '<path d="M3 18v-6a9 9 0 0 1 14.4-7.2M20.4 8.6A9 9 0 0 1 21 12v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/><line x1="2" y1="2" x2="22" y2="22"/>',
+  more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
+  ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  tag: '<path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/>',
+  up: '<path d="m18 15-6-6-6 6"/>', down: '<path d="m6 9 6 6 6-6"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  game: '<rect x="2" y="6" width="20" height="12" rx="4"/><path d="M6 12h4M8 10v4"/><circle cx="15.5" cy="11" r="1" fill="currentColor" stroke="none"/><circle cx="17.5" cy="13" r="1" fill="currentColor" stroke="none"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  school: '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  sparkle: '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>',
+  flask: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/>',
+  film: '<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 8h5M2 16h5M17 8h5M17 16h5"/>',
+  brush: '<path d="M9.06 11.9 17.8 3.15a2.1 2.1 0 0 1 3 3l-8.76 8.75"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  bell2: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>',
+};
+// the Discord and GitHub marks (solid shapes, so drawn with fill rather than the outline style above)
+export const BRAND = {
+  discord: '<path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>',
+  github: '<path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>',
+};
+export const brand = (n, s = 20) => { const d = document.createElement('div'); d.innerHTML = `<svg class="brand" viewBox="0 0 24 24" width="${s}" height="${s}" fill="currentColor" aria-hidden="true">${BRAND[n]}</svg>`; return d.firstElementChild; };
+export const svgHTML = (n, s) => `<svg class="ic" viewBox="0 0 24 24"${s ? ` width="${s}" height="${s}"` : ''}>${ICON[n] || ''}</svg>`;
+export const icon = (n, s) => { const d = document.createElement('div'); d.innerHTML = svgHTML(n, s); return d.firstElementChild; };
+
+// ---------- images ----------
+export const readImage = (file) => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = fr.result; }; fr.onerror = rej; fr.readAsDataURL(file); });
+export function scaled(img, max) { const s = Math.min(1, max / Math.max(img.width, img.height)), w = Math.round(img.width * s), h = Math.round(img.height * s); const c = Object.assign(document.createElement('canvas'), { width: w, height: h }); c.getContext('2d').drawImage(img, 0, 0, w, h); return c.toDataURL('image/png'); }
+export const pickFile = (cb) => { const i = el('input', { type: 'file', accept: 'image/*' }); i.onchange = () => { if (i.files[0]) cb(i.files[0]); }; i.click(); };
+
+let toastT = 0;
+export function toast(text) { let t = $('#toast'); if (!t) { t = el('div', { id: 'toast' }); Object.assign(t.style, { position: 'fixed', bottom: '92px', left: '50%', transform: 'translateX(-50%)', background: 'var(--rail)', color: 'var(--text)', padding: '10px 16px', borderRadius: '10px', boxShadow: '0 10px 30px #0007', zIndex: 70, maxWidth: '90%', textAlign: 'center' }); document.body.append(t); } t.textContent = text; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3400); }
+
+// things that go to the server can fail (no permission, offline): say why instead of failing quietly. null = it failed
+export async function attempt(fn) { try { return await fn(); } catch (e) { toast(String((e && e.message) || e)); return null; } }
+export const copyText = (text, done) => navigator.clipboard?.writeText(text).then(() => toast(done || 'Copied.'), () => toast(text)) ?? toast(text);
+
+// ---------- pictures, small enough to keep in the database ----------
+// shrink a picked image to fit maxW × maxH, as WebP (or JPEG), lowering quality until it's under maxChars
+export async function shrink(file, maxW, maxH, maxChars = 380000) {
+  const img = await readImage(file);
+  let scale = Math.min(1, maxW / img.width, maxH / img.height), q = 0.85, out = '';
+  for (let tries = 0; tries < 8; tries++) {
+    const c = Object.assign(document.createElement('canvas'), { width: Math.max(1, Math.round(img.width * scale)), height: Math.max(1, Math.round(img.height * scale)) });
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    out = c.toDataURL('image/webp', q);
+    if (!out.startsWith('data:image/webp')) out = c.toDataURL('image/jpeg', q);
+    if (out.length <= maxChars) return out;
+    if (q > 0.5) q -= 0.15; else scale *= 0.75;
+  }
+  throw new Error('That picture is too big, even made smaller.');
+}
+
+// ---------- banners and nameplates: one of these gradients (g:0 … g:9), or a picture ----------
+export const GRADS = [
+  'linear-gradient(135deg,#7a3b41,#c17278)', 'linear-gradient(135deg,#8c1d5c,#e05aa8)', 'linear-gradient(135deg,#7d1418,#e04a4a)',
+  'linear-gradient(135deg,#8f420f,#ee8a35)', 'linear-gradient(135deg,#7c6a12,#e2c94a)', 'linear-gradient(135deg,#4b2370,#a663d8)',
+  'linear-gradient(135deg,#124e8c,#36b1e0)', 'linear-gradient(135deg,#1b6b60,#59d3bb)', 'linear-gradient(135deg,#25501a,#5f9e37)',
+  'linear-gradient(135deg,#141518,#4a4d55)',
+];
+const PICTURE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+// a value someone saved → a CSS background (anything that isn't one of ours is ignored)
+export function paint(v) {
+  if (!v || typeof v !== 'string') return '';
+  if (/^g:\d$/.test(v)) return GRADS[+v.slice(2)];
+  if (/^#[0-9a-f]{6}$/i.test(v)) return v;
+  if (PICTURE.test(v)) return `center / cover no-repeat url("${v}")`;
+  return '';
+}
+
+// ---------- windows ----------
+// a window in the middle of the screen. Esc, Cancel, or a click on the dimmed area closes it (calling onClose(null)).
+export function modal({ title, sub, body = [], actions = [], wide = false, cls = '', onClose } = {}) {
+  const box = el('div', { className: 'dialog' + (wide ? ' wide' : '') + (cls ? ' ' + cls : ''), role: 'dialog' });
+  const scrim = el('div', { className: 'scrim' }, box);
+  let closed = false, downOnScrim = false;
+  const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
+  function close(v) { if (closed) return; closed = true; scrim.remove(); document.removeEventListener('keydown', key, true); if (onClose) onClose(v); }
+  const fill = (parts) => box.replaceChildren(...parts.flat().filter(Boolean));
+  document.addEventListener('keydown', key, true);
+  scrim.addEventListener('mousedown', (e) => { downOnScrim = e.target === scrim; });
+  scrim.addEventListener('click', (e) => { if (e.target === scrim && downOnScrim) close(null); });
+  fill([title ? el('h3', {}, title) : null, sub ? el('p', { className: 'dlg-sub' }, sub) : null, ...body, actions.length ? el('div', { className: 'row' }, ...actions) : null]);
+  document.body.append(scrim);
+  return { box, scrim, close, fill };
+}
+// ask for a bit of text (resolves to the text, or null if cancelled)
+export function ask({ title, sub = '', label = '', value = '', placeholder = '', ok = 'Save', max = 100, prefix = '' } = {}) {
+  return new Promise((done) => {
+    const input = el('input', { type: 'text', value, placeholder, maxLength: max, autocomplete: 'off' });
+    const go = () => { const v = input.value.trim(); if (!v) { input.focus(); return; } m.close(v); };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    const m = modal({ title, sub, onClose: (v) => done(v == null ? null : v),
+      body: [el('div', { className: 'field' }, label ? el('label', {}, label) : null, prefix ? el('div', { className: 'with-prefix' }, el('span', {}, prefix), input) : input)],
+      actions: [el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close(null) }), el('button', { className: 'btn primary', textContent: ok, onclick: go })] });
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  });
+}
+// "are you sure?" — and for the drastic things, type the name to confirm (resolves to true or false)
+export function confirmBox({ title, text = '', ok = 'OK', danger = false, type = '' } = {}) {
+  return new Promise((done) => {
+    const input = type ? el('input', { type: 'text', autocomplete: 'off' }) : null;
+    const yes = el('button', { className: 'btn ' + (danger ? 'red' : 'primary'), textContent: ok });
+    const check = () => { if (input) yes.disabled = input.value.trim() !== type; };
+    yes.onclick = () => { if (input && input.value.trim() !== type) return; m.close(true); };
+    if (input) { input.oninput = check; input.addEventListener('keydown', (e) => { if (e.key === 'Enter') yes.click(); }); }
+    const m = modal({ title, onClose: (v) => done(v === true),
+      body: [text ? el('p', { className: 'dlg-text' }, text) : null, input ? el('div', { className: 'field' }, el('label', {}, 'Type “' + type + '” to confirm'), input) : null],
+      actions: [el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close(false) }), yes] });
+    check();
+    setTimeout(() => (input || yes).focus(), 0);
+  });
+}
+
+// ---------- right-click menus ----------
+// items: { label, icon, hint, color, danger, disabled, check (true/false shows a tick box), action, sub: () => items } or '-'
+let openMenu = null;
+export function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
+export function menu(items, x, y) {
+  closeMenu();
+  const m = el('div', { className: 'ctx', role: 'menu' });
+  const list = items.filter(Boolean);
+  list.forEach((it, i) => {
+    if (it === '-') { if (i > 0 && i < list.length - 1 && list[i - 1] !== '-') m.append(el('hr')); return; }
+    const right = it.check != null ? el('span', { className: 'tick' + (it.check ? ' on' : '') }, it.check ? icon('check', 13) : null)
+      : it.sub ? icon('chevR', 15) : it.icon ? icon(it.icon, 16) : null;
+    const b = el('button', { className: it.danger ? 'danger' : '', role: 'menuitem', disabled: !!it.disabled },
+      it.color ? el('span', { className: 'dotc', style: `background:${it.color}` }) : null,
+      el('span', { className: 'lbl' }, it.label, it.hint ? el('small', {}, it.hint) : null), right);
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (it.sub) { const r = b.getBoundingClientRect(); menu([{ label: '‹ ' + it.label, action: () => menu(items, x, y), keep: true }, '-', ...it.sub()], r.left, r.top); return; }
+      if (!it.keep) closeMenu();
+      if (it.action) it.action();
+    };
+    m.append(b);
+  });
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+  m.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+  openMenu = m;
+  return m;
+}
+document.addEventListener('mousedown', (e) => { if (openMenu && !openMenu.contains(e.target)) closeMenu(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openMenu) { e.stopPropagation(); closeMenu(); } }, true);
+addEventListener('resize', closeMenu);
+addEventListener('blur', closeMenu);
+document.addEventListener('scroll', (e) => { if (openMenu && !openMenu.contains(e.target)) closeMenu(); }, true);
