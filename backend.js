@@ -1,42 +1,79 @@
-// Where Fluentdat keeps things. Two of them, with the same shape, so the app never has to care which is in use:
-//   LocalStore   this browser only (store.js) — what you get before signing in
-//   GitHubStore  a private GitHub repo (github.js) — shared with your team once you sign in
+// Where Fluentdat keeps things. Three of them, with the same shape, so the app never has to care which is in use:
+//   LocalStore     this browser only (store.js) — what you get before signing in
+//   SupabaseStore  Supabase (supabase.js) — sign in with email, Discord or GitHub; messages arrive live
+//   GitHubStore    a private GitHub repo (github.js) — the older way: sign in by pasting a GitHub token
 // The app talks to `Store`, which forwards to whichever is live and tells the app when anything changes.
 import { LocalStore } from './store.js';
 import { GitHubStore } from './github.js';
+import { SupabaseStore } from './supabase.js';
 
 let impl = LocalStore;
+let resuming = SupabaseStore.pending();      // picking up a Supabase sign-in: show nothing local in the meantime
+let resumeError = '';
 const listeners = new Set();
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
-LocalStore.onChange(() => { if (impl === LocalStore) emit(); });
-GitHubStore.onChange(() => { if (impl === GitHubStore) emit(); });
+for (const s of [LocalStore, GitHubStore, SupabaseStore]) s.onChange(() => {
+  // signed out somewhere else (another tab), or the session ran out: back to this browser's own data
+  if (s === SupabaseStore && impl === SupabaseStore && !SupabaseStore.account()) { impl = LocalStore; emit(); return; }
+  if (impl === s) emit();
+});
 
-// things only the GitHub side has — harmless answers when you're offline in this browser
-const whenLocal = {
+// things not every storage has — harmless answers when the live one doesn't
+const fallback = {
   account: () => null,
   syncState: () => ({ loading: false, error: '', lastSync: 0, repo: '' }),
   setActive: () => {},
-  members: () => null,                      // (the app works it out from you + your friends)
+  members: () => null,                       // (the app works it out from you + your friends)
   profile: () => null,
   myProfile: () => ({}),
   setProfile: () => {},
   updateServer: () => {}, updateChannel: () => {}, updateCategory: () => {},
   removeCategory: () => {}, removeServer: () => {},
   syncNow: () => {},
+  reset: () => {},
+  role: () => 'owner',                       // (in your own browser, everything is yours)
+  canManage: () => true,
+  createInvite: async () => { throw new Error('Sign in with email, Discord or GitHub to make invites.'); },
+  joinServer: async () => { throw new Error('Sign in with email, Discord or GitHub to join a server.'); },
+  setMemberRole: async () => {},
+  removeMember: async () => {},
+  leaveServer: async () => {},
+};
+// while a sign-in is being picked up
+const waiting = {
+  servers: () => [], server: () => null, dmList: () => [], friends: () => [], stickers: () => [], account: () => null,
+  syncState: () => ({ loading: true, error: '', lastSync: 0, repo: '' }),
 };
 
 export const Store = new Proxy({}, {
   get(_t, prop) {
-    if (prop === 'onChange') return (cb) => { listeners.add(cb); return () => listeners.delete(cb); };
-    if (prop === 'signedIn') return impl === GitHubStore;
-    if (prop === 'signIn') return async (token) => { const r = await GitHubStore.signIn(token); impl = GitHubStore; emit(); return r; };
-    if (prop === 'signOut') return () => { GitHubStore.signOut(); impl = LocalStore; emit(); };
+    switch (prop) {
+      case 'onChange': return (cb) => { listeners.add(cb); return () => listeners.delete(cb); };
+      case 'kind': return impl === SupabaseStore ? 'supabase' : impl === GitHubStore ? 'github' : 'local';
+      case 'signedIn': return impl !== LocalStore;
+      case 'configured': return SupabaseStore.configured();
+      case 'resuming': return resuming;
+      case 'resumeError': return resumeError;
+      case 'signIn': return async (token) => { const r = await GitHubStore.signIn(token); impl = GitHubStore; emit(); return r; };
+      case 'signInEmail': return (email) => SupabaseStore.signInEmail(email);
+      case 'signInOAuth': return (provider) => SupabaseStore.signInOAuth(provider);
+      case 'verifyEmailCode': return async (email, code) => { await SupabaseStore.verifyEmailCode(email, code); impl = SupabaseStore; emit(); return SupabaseStore.account(); };
+      case 'signOut': return async () => {
+        if (impl === SupabaseStore) await SupabaseStore.signOut(); else GitHubStore.signOut();
+        impl = LocalStore; emit();
+      };
+    }
+    if (resuming && prop in waiting) return waiting[prop];
     const v = impl[prop];
-    if (v === undefined && impl === LocalStore && prop in whenLocal) return whenLocal[prop];
+    if (v === undefined && prop in fallback) return fallback[prop];
     return typeof v === 'function' ? v.bind(impl) : v;
   },
-  has: (_t, prop) => prop in impl || prop in whenLocal,
+  has: (_t, prop) => prop in impl || prop in fallback,
 });
 
-// already signed in from last time? pick the GitHub side straight away
+// still signed in from last time? (a GitHub token is known straight away; Supabase checks with the server)
 if (GitHubStore.resume()) impl = GitHubStore;
+export const ready = SupabaseStore.resume()
+  .then((ok) => { if (ok) impl = SupabaseStore; else resumeError = SupabaseStore.syncState().error || ''; return ok; })
+  .catch((e) => { resumeError = String((e && e.message) || e); return false; })
+  .finally(() => { resuming = false; emit(); });

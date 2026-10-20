@@ -1,8 +1,8 @@
 // Fluentdat — a Discord-style chat that runs in the browser (data in store.js). Servers hold categories of channels;
 // there are direct messages, a friends list, a member list, status (online/idle/dnd/invisible), a profile you can
 // customise, stickers you can make, and your own CSS themes you can edit. UI icons are inline SVG (not OS emoji).
-// It all saves locally for now; swapping store.js for a GitHub-backed one is what makes it multi-person.
-import { Store } from './backend.js';
+// Signed out it all stays in this browser; sign in (Discord, GitHub or email, via Supabase) and it's shared and live.
+import { Store, ready } from './backend.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k)); return n; };
@@ -59,7 +59,17 @@ const ICON = {
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
   layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h6"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  crown: '<path d="M3 18h18M4 8l4 4 4-6 4 6 4-4-1.5 10h-13z"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M18 5l2 2"/>',
 };
+// the Discord and GitHub marks (solid shapes, so drawn with fill rather than the outline style above)
+const BRAND = {
+  discord: '<path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>',
+  github: '<path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>',
+};
+const brand = (n, s = 20) => { const d = document.createElement('div'); d.innerHTML = `<svg class="brand" viewBox="0 0 24 24" width="${s}" height="${s}" fill="currentColor" aria-hidden="true">${BRAND[n]}</svg>`; return d.firstElementChild; };
 const svgHTML = (n, s) => `<svg class="ic" viewBox="0 0 24 24"${s ? ` width="${s}" height="${s}"` : ''}>${ICON[n] || ''}</svg>`;
 const icon = (n, s) => { const d = document.createElement('div'); d.innerHTML = svgHTML(n, s); return d.firstElementChild; };
 
@@ -134,7 +144,7 @@ function renderRail() {
       if (s.img) b.append(el('img', { src: s.img, alt: '' })); else if (ICON[s.icon]) b.append(icon(s.icon, 24)); else b.textContent = initials(s.name);
       return b;
     }),
-    (() => { const b = el('button', { className: 'srv add', title: 'Add a server', onclick: createServer }); b.append(icon('plus', 24)); return b; })());
+    (() => { const b = el('button', { className: 'srv add', title: 'Add a server', onclick: (e) => addMenu(e.currentTarget) }); b.append(icon('plus', 24)); return b; })());
 }
 
 // ---------- the sidebar ----------
@@ -153,27 +163,27 @@ function renderSide() {
   } else if (!serverId || !Store.server(serverId)) {
     head.className = 'side-head'; head.replaceChildren(Store.syncState().loading ? 'Loading…' : 'No servers');
     body.replaceChildren(el('div', { style: 'color:var(--muted);padding:14px 10px;font-size:.9rem' },
-      Store.syncState().loading ? 'Fetching your servers from GitHub…' : 'Make one with the + in the server rail.'));
+      Store.syncState().loading ? 'Fetching your servers…' : Store.kind === 'supabase' ? 'Make one, or join one with an invite: the + in the server rail.' : 'Make one with the + in the server rail.'));
   } else {
     const server = Store.server(serverId);
     head.className = 'side-head btn-like';
     head.replaceChildren(el('span', {}, server.name), el('span', { className: 'drop' }, icon('chevD', 18)));
     head.onclick = (e) => serverMenu(e.currentTarget);
     body.replaceChildren();
-    const cats = Store.categories(serverId), chans = Store.channels(serverId);
+    const cats = Store.categories(serverId), chans = Store.channels(serverId), can = Store.canManage(serverId);
     const groups = cats.length ? cats : [{ id: null, name: 'Channels' }];
     for (const cat of groups) {
       const mine = chans.filter((c) => (cat.id ? c.category === cat.id : true));
       const isCollapsed = collapsed.has(cat.id);
       const header = el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) collapsed.delete(cat.id); else collapsed.add(cat.id); renderSide(); } },
         el('span', { className: 'caret' }, icon('chevD')), el('span', { className: 'nm' }, cat.name),
-        el('span', { className: 'add', title: 'New channel', onclick: (e) => { e.stopPropagation(); newChannel(cat.id); } }, icon('plus')));
+        can ? el('span', { className: 'add', title: 'New channel', onclick: (e) => { e.stopPropagation(); newChannel(cat.id); } }, icon('plus')) : null);
       body.append(header);
       if (isCollapsed) continue;
       for (const c of mine) {
         const row = el('button', { className: 'chan' + (c.id === channelId && view === 'server' ? ' on' : ''), onclick: () => { channelId = c.id; Store.setActive('channel', c.id); closeCall(); renderAll(); $('#app').classList.remove('show-side'); } },
           icon(c.kind === 'voice' ? 'volume' : 'hash', 18), el('span', { className: 'nm' }, c.name));
-        if (chans.length > 1) { const x = el('span', { className: 'x', title: 'Delete channel', onclick: (e) => { e.stopPropagation(); if (confirm(`Delete #${c.name}?`)) { Store.removeChannel(c.id); if (channelId === c.id) channelId = firstChannel(serverId); renderAll(); } } }, icon('x')); row.append(x); }
+        if (can && chans.length > 1) { const x = el('span', { className: 'x', title: 'Delete channel', onclick: (e) => { e.stopPropagation(); if (confirm(`Delete #${c.name}?`)) { Store.removeChannel(c.id); if (channelId === c.id) channelId = firstChannel(serverId); renderAll(); } } }, icon('x')); row.append(x); }
         body.append(row);
       }
     }
@@ -217,11 +227,11 @@ function messageList(msgs) {
   let last = null, lastDay = null;
   for (const m of msgs) {
     if (!lastDay || !sameDay(lastDay, m.ts)) { wrap.append(el('div', { className: 'day' }, new Date(m.ts).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }))); lastDay = m.ts; last = null; }
-    const cont = prefs.group && last && last.user.name === m.user.name && !last.user.bot === !m.user.bot && (m.ts - last.ts) < 5 * 60000;
+    const cont = prefs.group && last && last.user.name === m.user.name && !last.user.bot === !m.user.bot && last.user.via === m.user.via && (m.ts - last.ts) < 5 * 60000;
     const body = el('div', { className: 'body' });
     if (!cont) {
       const nm = el('span', { className: 'nm', style: `--who:${m.user.color || 'var(--bright)'}`, onclick: (e) => showProfile(m.user, e.currentTarget) }, m.user.name);
-      const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot')); meta.append(el('span', { className: 'when' }, when(m.ts)));
+      const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : ''); meta.append(el('span', { className: 'when' }, when(m.ts)));
       body.append(meta);
     }
     if (m.sticker) { const st = typeof m.sticker === 'string' ? { kind: 'emoji', data: m.sticker } : m.sticker; body.append(st.kind === 'img' ? el('div', { className: 'sticker' }, el('img', { src: st.data, alt: 'sticker' })) : el('div', { className: 'sticker' }, st.data)); }
@@ -236,22 +246,27 @@ function messageList(msgs) {
 // ---------- the main content ----------
 function renderContent() {
   const content = $('#content'), composer = $('#composer');
-  if (view === 'home' && !dmId) { content.replaceChildren(friendsPage()); composer.hidden = true; return; }
+  if (view === 'home' && !dmId) { content.replaceChildren(friendsPage()); content.dataset.key = ''; composer.hidden = true; return; }
   const ch = view === 'home' ? null : Store.channel(channelId);
   if (view === 'server' && !ch) {
     content.replaceChildren(el('div', { className: 'empty-note' }, Store.syncState().loading ? 'Loading your servers…' : 'No channel here yet. Make one from the server menu.'));
     composer.hidden = true; return;
   }
+  Store.setActive(view === 'home' ? 'dm' : 'channel', view === 'home' ? dmId : channelId);   // (what to load and keep live)
   const msgs = view === 'home' ? Store.dm(dmId) : Store.messages(channelId);
-  content.replaceChildren(messageList(msgs));
+  // stay where you were reading, unless you were at the bottom already or this is a different conversation
+  const key = view + ':' + (view === 'home' ? dmId : channelId), same = content.dataset.key === key;
+  const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 80, was = content.scrollTop;
+  content.replaceChildren(messageList(msgs)); content.dataset.key = key;
   const name = view === 'home' ? (Store.dmUser(dmId) || {}).name : (ch.kind === 'voice' ? '' : '#') + ch.name;
   $('#input').placeholder = 'Message ' + name;
   composer.hidden = false;
-  content.scrollTop = content.scrollHeight;
+  content.scrollTop = !same || atBottom ? content.scrollHeight : was;
 }
 
 // ---------- members ----------
 function memberList() {
+  if (Store.kind === 'supabase') return (serverId && Store.members(serverId)) || [];
   const real = Store.members && Store.members();
   return real && real.length ? real : [asMember(), ...Store.friends()];
 }
@@ -262,7 +277,8 @@ function renderMembers() {
   const online = all.filter((m) => m.status && m.status !== 'offline' && m.status !== 'invisible');
   const offline = all.filter((m) => !online.includes(m));
   const member = (m) => {
-    const who = el('div', { style: 'min-width:0;flex:1' }, el('div', { className: 'nm', style: `--who:${m.color}` }, m.name));
+    const who = el('div', { style: 'min-width:0;flex:1' }, el('div', { className: 'nm', style: `--who:${m.color}` }, m.name,
+      m.role === 'owner' ? roleMark('crown', 'Server owner') : m.role === 'admin' ? roleMark('shield', 'Admin') : null));
     if (prefs.memberStatusText) who.append(el('div', { style: 'font-size:.74rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, m.about || (m.bot ? 'Bot' : (m.status || 'offline'))));
     return el('button', { className: 'mem' + (online.includes(m) ? '' : ' off'), onclick: (e) => showProfile(m, e.currentTarget) }, avatarEl(m), who);
   };
@@ -270,15 +286,18 @@ function renderMembers() {
   box.replaceChildren(...grp('Online', online), ...(prefs.memberOffline ? grp('Offline', offline) : []));
 }
 
+const roleMark = (ic, title) => { const s = el('span', { className: 'role-mark', title }); s.append(icon(ic, 13)); return s; };
 function renderAll() { ensureSelection(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner(); $('#app').classList.toggle('show-members', showMembers && view === 'server'); }
 function renderBanner() {
   const b = $('#banner'), st = Store.syncState(), acc = Store.account();
   b.replaceChildren();
-  if (acc) {
+  if (Store.resuming) b.append('Signing you in…');
+  else if (Store.kind === 'supabase') b.append(st.error ? `Trouble: ${st.error}` : `Live, signed in as @${acc.login}`);
+  else if (acc) {
     const when = st.lastSync ? 'synced ' + new Date(st.lastSync).toLocaleTimeString() : 'syncing…';
     b.append(st.error ? `Sync trouble: ${st.error}` : `Synced with GitHub as ${acc.login} — ${when}`);
-  } else b.append('Saving in this browser only. Sign in with GitHub to share with your team.');
-  b.onclick = () => openUserSettings(acc ? 'sync' : 'account');
+  } else b.append(Store.configured ? 'Saving in this browser only. Sign in with Discord, GitHub or email to chat with your team.' : 'Saving in this browser only. Sign in with GitHub to share with your team.');
+  b.onclick = () => (acc || Store.resuming ? openUserSettings('sync') : signInDialog());
 }
 
 // ---------- friends page ----------
@@ -288,7 +307,27 @@ function friendsPage() {
     el('button', { className: 'ftab' + (friendsTab === id ? ' on' : '') + (id === 'add' ? ' add' : ''), onclick: () => { friendsTab = id; renderContent(); } }, label)));
   wrap.append(tabs);
   const body = el('div', { className: 'fbody' });
-  if (friendsTab === 'add') {
+  if (friendsTab === 'add' && Store.kind === 'supabase') {
+    const inp = el('input', { placeholder: 'Their @handle, like @alex_robotics', autocapitalize: 'off', spellcheck: false });
+    const go = el('button', { className: 'btn primary' }, 'Add Friend');
+    const add = async () => {
+      const u = inp.value.trim(); if (!u) return;
+      go.disabled = true;
+      const f = await attempt(() => Store.addFriendByHandle(u));
+      go.disabled = false;
+      if (!f) return;
+      inp.value = ''; toast(`Added @${f.login}. They can message you now.`); friendsTab = 'all'; renderContent();
+    };
+    go.onclick = add;
+    inp.onkeydown = (e) => { if (e.key === 'Enter') add(); };
+    const mine = (Store.account() || {}).login;
+    body.append(el('h4', {}, 'Add Friend'),
+      el('div', { style: 'color:var(--muted);margin-bottom:4px' }, 'Type their exact @handle (there’s no list of everyone to browse). Adding someone lets them message you.'),
+      el('div', { className: 'add-form' }, inp, go),
+      mine ? el('div', { style: 'color:var(--muted);margin-top:18px;font-size:.9rem' }, 'Your handle is ', el('b', { style: 'color:var(--bright)' }, '@' + mine), '. ',
+        el('a', { href: '#', style: 'color:var(--accent)', onclick: (e) => { e.preventDefault(); copyText('@' + mine, 'Handle copied.'); } }, 'Copy it')) : null);
+    setTimeout(() => inp.focus(), 0);
+  } else if (friendsTab === 'add') {
     const inp = el('input', { placeholder: 'Enter a username to add' });
     const add = () => { const u = inp.value.trim(); if (!u) return; Store.addFriend({ id: 'u_' + u.toLowerCase(), name: u, color: COLORS[Math.floor(Math.random() * COLORS.length)], status: 'offline' }); inp.value = ''; toast(`Added ${u} locally. Real friend requests come with accounts.`); friendsTab = 'all'; renderContent(); };
     inp.onkeydown = (e) => { if (e.key === 'Enter') add(); };
@@ -299,7 +338,7 @@ function friendsPage() {
     if (!list.length) body.append(el('div', { className: 'empty-note' }, friendsTab === 'online' ? 'No friends online right now.' : 'No friends yet — add someone from the Add Friend tab.'));
     else { body.append(el('h4', {}, `${friendsTab === 'online' ? 'Online' : 'All Friends'} — ${list.length}`));
       for (const f of list) {
-        const msg = el('button', { title: 'Message', onclick: () => { const id = Store.ensureDM(f); view = 'home'; dmId = id; renderAll(); } }, icon('message', 18));
+        const msg = el('button', { title: 'Message', onclick: () => openDM(f) }, icon('message', 18));
         const rm = el('button', { title: 'Remove friend', onclick: () => { if (confirm(`Remove ${f.name}?`)) { Store.removeFriend(f.id); renderContent(); } } }, icon('x', 18));
         body.append(el('div', { className: 'frow' }, avatarEl(f, { size: 40 }), el('div', {}, el('div', { className: 'nm' }, f.name), el('div', { className: 'st2' }, f.bot ? 'Bot' : (f.status === 'offline' ? 'Offline' : 'Online'))), el('div', { className: 'acts' }, msg, rm)));
       }
@@ -315,17 +354,23 @@ const closePop = () => { if (pop) { pop.remove(); pop = null; } };
 function placePop(anchor, h) { const r = anchor.getBoundingClientRect(), w = pop.offsetWidth || 300; pop.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px'; pop.style.top = (r.bottom + (h || pop.offsetHeight) + 8 > innerHeight ? Math.max(12, r.top - (h || pop.offsetHeight) - 8) : r.bottom + 8) + 'px'; }
 function showProfile(user, anchor) {
   closePop();
-  const mine = user.me || user.name === me.name;
+  const acc = Store.account();
+  const mine = user.me || (acc && acc.id ? user.id === acc.id : acc && user.login ? user.login === acc.login : user.name === me.name);
   const actions = el('div', { className: 'card' });
   if (mine) actions.append(el('button', { onclick: () => { closePop(); openUserSettings('profile'); } }, icon('edit'), 'Edit Profile'));
-  else {
-    actions.append(el('button', { onclick: () => { const id = Store.ensureDM(normFriend(user)); view = 'home'; dmId = id; closePop(); renderAll(); } }, icon('message'), 'Message'));
-    if (!Store.friends().some((f) => f.id === (user.id || 'u_' + user.name.toLowerCase())) && !user.bot) actions.append(el('hr'), el('button', { onclick: () => { Store.addFriend(normFriend(user)); closePop(); toast(`Added ${user.name} locally.`); } }, icon('personAdd'), 'Add Friend'));
+  else if (!user.bot) {
+    actions.append(el('button', { onclick: () => { closePop(); openDM(normFriend(user)); } }, icon('message'), 'Message'));
+    if (!Store.friends().some((f) => f.id === (user.id || 'u_' + user.name.toLowerCase()))) actions.append(el('hr'), el('button', { onclick: () => {
+      Store.addFriend(normFriend(user)); closePop(); toast(Store.kind === 'supabase' ? `Added ${user.name} as a friend.` : `Added ${user.name} locally.`);
+    } }, icon('personAdd'), 'Add Friend'));
   }
+  if (!actions.children.length) actions.hidden = true;
   pop = el('div', { className: 'pop' },
     el('div', { className: 'banner-c', style: `background:${user.color || '#5b7fd6'}` }),
     el('div', { className: 'inner' }, avatarEl(user, { size: 74 }),
       el('div', { className: 'pn' }, user.name, user.bot ? el('span', { className: 'tag' }, 'bot') : null),
+      user.login && !user.bot ? el('div', { className: 'pr' }, '@' + user.login) : null,
+      user.bot && user.via ? el('div', { className: 'pr' }, 'Run by @' + user.via + ' (Flubot speaks for whoever types the command)') : null,
       user.pronouns ? el('div', { className: 'pr' }, user.pronouns) : null,
       user.about ? el('div', { className: 'ab' }, user.about) : null, actions));
   document.body.append(pop); placePop(anchor);
@@ -340,7 +385,9 @@ function showAccount(anchor) {
     row('edit', 'Edit Profile', null, () => { closePop(); openUserSettings('profile'); }),
     el('hr'), row('dot', 'Set Status', el('span', { className: 'chev' }, icon('chevR', 16)), (e) => { e.stopPropagation(); statusMenu(); }),
     el('hr'), row('palette', 'Themes', el('span', { className: 'chev' }, icon('chevR', 16)), () => { closePop(); openThemes(); }),
-    el('hr'), row('id', 'Copy User ID', null, () => { navigator.clipboard?.writeText(me.id).then(() => toast('User ID copied.'), () => toast(me.id)); }));
+    el('hr'), Store.kind === 'supabase'
+      ? row('id', 'Copy My @handle', null, () => copyText('@' + (Store.account() || {}).login, 'Handle copied.'))
+      : row('id', 'Copy User ID', null, () => copyText(me.id, 'User ID copied.')));
   pop = el('div', { className: 'pop' },
     el('div', { className: 'banner-c', style: `background:${me.color}` }),
     el('div', { className: 'inner' }, avatarEl(asMember(), { size: 74 }),
@@ -350,7 +397,7 @@ function showAccount(anchor) {
 }
 function statusMenu() {
   const inner = pop.querySelector('.inner'), card = inner.querySelector('.card');
-  card.replaceChildren(...STATUSES.map(([id, label]) => el('button', { onclick: () => { me.status = id; saveMe(); renderMe(); renderMembers(); closePop(); } }, el('span', { className: 'dot ' + id, style: 'position:static;border:none;width:12px;height:12px' }), el('span', {}, label), me.status === id ? el('span', { className: 'chev' }, icon('check', 16)) : null)));
+  card.replaceChildren(...STATUSES.map(([id, label]) => el('button', { onclick: () => { me.status = id; saveMe(); pushProfile(); renderMe(); renderMembers(); closePop(); } }, el('span', { className: 'dot ' + id, style: 'position:static;border:none;width:12px;height:12px' }), el('span', {}, label), me.status === id ? el('span', { className: 'chev' }, icon('check', 16)) : null)));
 }
 
 // ---------- sending, commands, bot ----------
@@ -372,9 +419,14 @@ function runCommand(line) {
     case 'shrug': return postMine({ text: (arg ? arg + ' ' : '') + '¯\\\\\\_(ツ)\\_/¯' });
     case 'roll': { const n = Math.max(2, parseInt(arg, 10) || 6); return botSay(`🎲 **${me.name}** rolled a **${1 + Math.floor(Math.random() * n)}** (1–${n}).`); }
     case 'flip': return botSay(`🪙 **${me.name}** got **${Math.random() < 0.5 ? 'Heads' : 'Tails'}**.`);
-    case 'nick': if (arg) { me.name = arg.slice(0, 24); saveMe(); renderAll(); botSay(`You're now **${me.name}**.`); } return;
+    case 'nick': if (arg) { me.name = arg.slice(0, 24); saveMe(); pushProfile(); renderAll(); botSay(`You're now **${me.name}**.`); } return;
     case 'theme': { const all = [...BUILTIN, ...loadThemes().map((t) => [t.id, t.name])], t = all.find((x) => x[1].toLowerCase() === arg.toLowerCase() || x[0] === arg.toLowerCase()); if (t) { applyTheme(t[0]); botSay(`Theme set to **${t[1]}**.`); } else botSay('Themes: ' + all.map((x) => '`' + x[1] + '`').join(', ') + '. Make your own in Themes.'); return; }
-    case 'clear': return Store.clear(channelId);
+    case 'clear':
+      if (Store.kind === 'supabase') {
+        if (!Store.canManage(serverId)) return toast('Only this server’s admins can clear a channel.');
+        if (!confirm(`Delete every message in #${(Store.channel(channelId) || {}).name} for everyone?`)) return;
+      }
+      return Store.clear(channelId);
     default: return botSay(`I don't know \`/${cmd}\`. Try \`/help\`.`);
   }
 }
@@ -443,7 +495,7 @@ function openSettings() {
     el('div', { className: 'field' }, el('label', {}, 'Pronouns'), pronouns),
     el('div', { className: 'field' }, el('label', {}, 'About me'), about),
     el('div', { className: 'row' }, el('button', { className: 'btn ghost', textContent: 'Themes…', onclick: () => { scrim.remove(); openThemes(); } }, ), el('span', { style: 'flex:1' }), el('button', { className: 'btn', textContent: 'Close', onclick: () => scrim.remove() }),
-      el('button', { className: 'btn primary', textContent: 'Save', onclick: () => { me = { ...me, name: name.value.trim().slice(0, 24) || 'You', color, avatar, pronouns: pronouns.value.trim(), about: about.value.trim() }; saveMe(); renderAll(); scrim.remove(); } }))));
+      el('button', { className: 'btn primary', textContent: 'Save', onclick: () => { me = { ...me, name: name.value.trim().slice(0, 24) || 'You', color, avatar, pronouns: pronouns.value.trim(), about: about.value.trim() }; saveMe(); pushProfile(); renderAll(); scrim.remove(); } }))));
   scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
   document.body.append(scrim); name.focus(); name.select();
 }
@@ -496,15 +548,76 @@ function editTheme(id) {
 function toHex(c) { c = String(c).trim(); if (/^#[0-9a-f]{6}$/i.test(c)) return c; if (/^#[0-9a-f]{3}$/i.test(c)) return '#' + c.slice(1).split('').map((x) => x + x).join(''); const m = c.match(/\d+/g); if (m && m.length >= 3) return '#' + m.slice(0, 3).map((n) => (+n).toString(16).padStart(2, '0')).join(''); return '#222222'; }
 
 // ---------- create server / channel ----------
-function createServer() { const n = prompt('Server name'); if (!n) return; view = 'server'; serverId = Store.addServer(n, ''); channelId = firstChannel(serverId); renderAll(); }
-function newChannel(categoryId) { const n = prompt('New channel name'); if (!n) return; channelId = Store.addChannel(serverId, categoryId, n); renderAll(); }
+// things that go to the server can fail (no permission, offline): say why instead of failing quietly. null = it failed
+async function attempt(fn) { try { return await fn(); } catch (e) { toast(String((e && e.message) || e)); return null; } }
+const copyText = (text, done) => navigator.clipboard?.writeText(text).then(() => toast(done || 'Copied.'), () => toast(text)) ?? toast(text);
+function go(where) { view = 'server'; serverId = where; channelId = firstChannel(where); renderAll(); }
+async function createServer() {
+  const n = prompt('Server name'); if (!n || !n.trim()) return;
+  const id = await attempt(() => Store.addServer(n.trim(), ''));
+  if (id) go(id);
+}
+async function newChannel(categoryId) {
+  const n = prompt('New channel name'); if (!n || !n.trim()) return;
+  const id = await attempt(() => Store.addChannel(serverId, categoryId, n));
+  if (id) { channelId = id; renderAll(); }
+}
+async function newCategory(sv) {
+  const n = prompt('New category name'); if (!n || !n.trim()) return;
+  await attempt(() => Store.addCategory(sv, n)); renderAll();
+}
+async function openDM(user) {
+  const id = await attempt(() => Store.ensureDM(user));
+  if (!id) return;
+  view = 'home'; dmId = id; renderAll();
+}
+// an invite: a whole link (…/Fluentdat/#invite=abc123) or just the code
+const inviteCode = (s) => { s = String(s || '').trim(); const m = s.match(/invite=([0-9a-z]+)/i); return (m ? m[1] : s.replace(/^.*[/#=]/, '')).toLowerCase().slice(0, 32); };
+const PENDING_INVITE = 'fluentdat.invite';
+async function joinServer(raw) {
+  if (raw == null) raw = prompt('Paste an invite link or code');
+  const code = inviteCode(raw); if (!code) return;
+  if (Store.kind !== 'supabase') {
+    if (!Store.configured) return toast('Invites need Fluentdat’s sign-in, which isn’t set up yet.');
+    try { localStorage.setItem(PENDING_INVITE, code); } catch {}
+    return signInDialog(null, 'Sign in to join the server');
+  }
+  const id = await attempt(() => Store.joinServer(code));
+  if (!id) return;
+  go(id); toast(`Welcome to ${(Store.server(id) || {}).name || 'the server'}!`);
+}
+// someone opened an invite link before (or while) signing in: join once signed in
+function joinPendingInvite() {
+  let code = null; try { code = localStorage.getItem(PENDING_INVITE); } catch {}
+  if (!code || Store.kind !== 'supabase') return;
+  try { localStorage.removeItem(PENDING_INVITE); } catch {}
+  joinServer(code);
+}
+async function leaveServer(id) {
+  const sv = Store.server(id);
+  if (!sv || !confirm(`Leave ${sv.name}? You’ll need a new invite to come back.`)) return;
+  if ((await attempt(() => Store.leaveServer(id))) === null) return;
+  serverId = null; channelId = null; renderAll(); toast(`You left ${sv.name}.`);
+}
+function addMenu(anchor) {
+  if (!Store.configured && Store.kind !== 'supabase') return createServer();
+  closePop();
+  pop = el('div', { className: 'pop', style: 'width:230px' }, el('div', { className: 'card', style: 'margin:0' },
+    el('button', { onclick: () => { closePop(); createServer(); } }, icon('plus'), 'Create a server'),
+    el('hr'),
+    el('button', { onclick: () => { closePop(); joinServer(); } }, icon('link'), 'Join with an invite')));
+  document.body.append(pop); placePop(anchor);
+}
 function serverMenu(anchor) {
   closePop();
-  pop = el('div', { className: 'pop', style: 'width:220px' }, el('div', { className: 'card', style: 'margin:0' },
-    el('button', { onclick: () => { closePop(); openServerSettings(serverId); } }, icon('gear'), 'Server Settings'),
-    el('hr'),
-    el('button', { onclick: () => { closePop(); const n = prompt('New channel name'); if (n) { channelId = Store.addChannel(serverId, Store.categories(serverId)[0]?.id, n); renderAll(); } } }, icon('plus'), 'Create Channel'),
-    el('hr'), el('button', { onclick: () => { closePop(); const n = prompt('New category name'); if (n) { Store.addCategory(serverId, n); renderAll(); } } }, icon('plus'), 'Create Category')));
+  const can = Store.canManage(serverId), live = Store.kind === 'supabase', owner = Store.role(serverId) === 'owner';
+  const items = [];
+  if (live && can) items.push(el('button', { onclick: () => { closePop(); openServerSettings(serverId, 'invite'); } }, icon('personAdd'), 'Invite People'), el('hr'));
+  items.push(el('button', { onclick: () => { closePop(); openServerSettings(serverId); } }, icon('gear'), 'Server Settings'));
+  if (can) items.push(el('hr'), el('button', { onclick: () => { closePop(); newChannel(Store.categories(serverId)[0]?.id); } }, icon('plus'), 'Create Channel'),
+    el('hr'), el('button', { onclick: () => { closePop(); newCategory(serverId); } }, icon('plus'), 'Create Category'));
+  if (live && !owner) items.push(el('hr'), el('button', { className: 'danger', onclick: () => { closePop(); leaveServer(serverId); } }, icon('logout'), 'Leave Server'));
+  pop = el('div', { className: 'pop', style: 'width:220px' }, el('div', { className: 'card', style: 'margin:0' }, ...items));
   document.body.append(pop); placePop(anchor);
 }
 
@@ -518,13 +631,20 @@ input.addEventListener('input', () => { input.style.height = 'auto'; input.style
 input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && prefs.sendOnEnter) { e.preventDefault(); send(); } });
 $('#send-btn').onclick = () => { send(); input.focus(); };
 $('#sticker-btn').onclick = (e) => { e.stopPropagation(); togglePicker(); };
-document.addEventListener('click', (e) => { if (picker && !picker.contains(e.target) && !$('#sticker-btn').contains(e.target)) closePicker(); if (pop && !pop.contains(e.target) && !e.target.closest('.msg .nm, .msg .avatar, #me-panel .avatar, .mem, .side-head')) closePop(); });
+document.addEventListener('click', (e) => { if (picker && !picker.contains(e.target) && !$('#sticker-btn').contains(e.target)) closePicker(); if (pop && !pop.contains(e.target) && !e.target.closest('.msg .nm, .msg .avatar, #me-panel .avatar, .mem, .side-head, .srv.add')) closePop(); });
 $('#c-mic').onclick = () => { if (!stream) return; micOn = !micOn; stream.getAudioTracks().forEach((t) => { t.enabled = micOn; }); syncCallButtons(); };
 $('#c-cam').onclick = () => { if (!stream) return; camOn = !camOn; stream.getVideoTracks().forEach((t) => { t.enabled = camOn; }); syncCallButtons(); };
 $('#c-leave').onclick = closeCall;
 addEventListener('resize', closePop);
 
-Store.onChange(() => { ensureSelection(); renderRail(); renderContent(); renderSide(); renderMembers(); if (picker) closePicker(); alertNew(); });
+let lastError = '';
+Store.onChange(() => {
+  if (Store.kind === 'supabase') adoptProfile();          // (your profile can change on another device)
+  renderAll(); alertNew();
+  const err = Store.syncState().error || '';
+  if (err && err !== lastError && Store.kind === 'supabase') toast(err);
+  lastError = err;
+});
 
 // a nudge when something new lands while you're looking elsewhere
 let lastSeen = 0;
@@ -577,6 +697,19 @@ applyPrefs();
 showMembers = prefs.membersDefault !== false;
 renderAll();
 
+// opened an invite link (…/Fluentdat/#invite=abc123)? keep it while you sign in (Discord takes you away and back)
+{
+  const m = location.hash.match(/invite=([0-9a-z]+)/i);
+  if (m) { try { localStorage.setItem(PENDING_INVITE, m[1].toLowerCase()); } catch {} history.replaceState(null, '', location.pathname + location.search); }
+}
+ready.then((ok) => {
+  if (ok) { adoptProfile(); renderAll(); joinPendingInvite(); return; }
+  if (Store.resumeError) toast('Sign-in trouble: ' + Store.resumeError);
+  let code = null; try { code = localStorage.getItem(PENDING_INVITE); } catch {}
+  if (code && Store.configured) signInDialog(null, 'Sign in to join the server you were invited to');
+  else if (code) { try { localStorage.removeItem(PENDING_INVITE); } catch {} toast('Invites need Fluentdat’s sign-in, which isn’t set up yet.'); }
+});
+
 // ===================== settings building blocks =====================
 function sw(on, onchange) { const b = el('button', { className: 'sw' + (on ? ' on' : ''), role: 'switch' }); b.onclick = () => { const next = !b.classList.contains('on'); b.classList.toggle('on', next); onchange(next); }; return b; }
 function row2(title, desc, control) { return el('div', { className: 'row2' }, el('div', { className: 'lbl' }, el('b', {}, title), desc ? el('span', {}, desc) : null), control || null); }
@@ -625,37 +758,104 @@ function overlay(navItems, firstSection, render) {
   return { shut, go: (s) => { section = s; draw(); } };
 }
 
-// ===================== signing in to GitHub =====================
-function signInDialog(after) {
-  const tok = el('input', { type: 'password', placeholder: 'github_pat_...', style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);font:inherit' });
-  const msg = el('div', { style: 'color:#e5534b;font-size:.85rem;min-height:1.2em;margin-top:8px' });
-  const go = el('button', { className: 'btn primary', textContent: 'Sign in' });
-  const scrim = el('div', { className: 'scrim' }, el('div', { className: 'dialog' },
-    el('h3', {}, 'Sign in with GitHub'),
-    el('div', { className: 'note-box' },
-      el('div', {}, 'Fluentdat keeps your team’s messages in the private ', el('b', {}, 'Fluentdat-Data'), ' repository. It needs a fine grained token so it can read and write there. The token stays in this browser only.'),
-      el('ol', {},
-        el('li', {}, 'On GitHub: Settings → Developer settings → Personal access tokens → ', el('b', {}, 'Fine-grained tokens'), ' → Generate new token'),
-        el('li', {}, 'Repository access: ', el('b', {}, 'Only select repositories'), ' → Fluentdat-Data'),
-        el('li', {}, 'Permissions → Repository permissions → ', el('b', {}, 'Contents: Read and write')),
-        el('li', {}, 'Generate it, copy the token, and paste it below'))),
-    el('div', { className: 'field', style: 'margin-top:16px' }, el('label', {}, 'Token'), tok), msg,
-    el('div', { className: 'row' }, el('button', { className: 'btn', textContent: 'Cancel', onclick: () => scrim.remove() }), go)));
-  go.onclick = async () => {
-    const t = tok.value.trim(); if (!t) return;
-    go.textContent = 'Checking…'; go.disabled = true; msg.textContent = '';
-    try { const r = await Store.signIn(t); adoptProfile(); scrim.remove(); toast(`Signed in as ${r.login}. Your team’s data is syncing.`); renderAll(); after && after(); }
-    catch (e) { msg.textContent = String(e.message || e); go.textContent = 'Sign in'; go.disabled = false; }
-  };
-  tok.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
-  scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
-  document.body.append(scrim); tok.focus();
+// ===================== signing in =====================
+// Discord, GitHub or an emailed link/code (Supabase), and the older paste-a-GitHub-token way for the data repository
+function signInDialog(after, title) {
+  const box = el('div', { className: 'dialog sg' });
+  const scrim = el('div', { className: 'scrim' }, box);
+  const msg = el('div', { className: 'sg-msg' });
+  const say = (e) => { msg.textContent = e ? String(e.message || e) : ''; };
+  const close = () => scrim.remove();
+  const done = (who) => { close(); adoptProfile(); renderAll(); toast(`Signed in as @${who}.`); after && after(); joinPendingInvite(); };
+  const cancel = el('button', { className: 'btn', textContent: 'Cancel', onclick: close });
+
+  function home() {
+    if (!Store.configured) return tokenForm(true);
+    say();
+    const email = el('input', { type: 'email', placeholder: 'you@example.com', autocomplete: 'email' });
+    const send = el('button', { className: 'btn primary', textContent: 'Email me a link' });
+    send.onclick = async () => {
+      const v = email.value.trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { say('Type your email address first.'); email.focus(); return; }
+      send.disabled = true; send.textContent = 'Sending…'; say();
+      try { await Store.signInEmail(v); codeStep(v); }
+      catch (e) { say(e); send.disabled = false; send.textContent = 'Email me a link'; }
+    };
+    email.onkeydown = (e) => { if (e.key === 'Enter') send.click(); };
+    const provider = (id, label) => el('button', { className: 'sg-btn ' + id, onclick: async (e) => {
+      const b = e.currentTarget; b.disabled = true; say();
+      try { await Store.signInOAuth(id); b.lastChild.textContent = 'Opening ' + label + '…'; }   // (the page now goes to them and comes back)
+      catch (err) { say(err); b.disabled = false; }
+    } }, brand(id), el('span', {}, 'Continue with ' + label));
+    box.replaceChildren(
+      el('h3', {}, title || 'Sign in to Fluentdat'),
+      el('p', { className: 'sg-sub' }, 'Chat with your team: servers, DMs and friends, live on every device.'),
+      el('div', { className: 'sg-btns' }, provider('discord', 'Discord'), provider('github', 'GitHub')),
+      el('div', { className: 'sg-or' }, el('span', {}, 'or with your email')),
+      el('div', { className: 'sg-row' }, email, send),
+      msg,
+      el('div', { className: 'row' }, el('button', { className: 'btn ghost', onclick: () => tokenForm(false) }, icon('key', 16), ' GitHub token instead'), el('span', { style: 'flex:1' }), cancel));
+  }
+
+  function codeStep(address) {
+    say();
+    const code = el('input', { inputMode: 'numeric', autocomplete: 'one-time-code', placeholder: 'Code from the email', maxLength: 10 });
+    const go = el('button', { className: 'btn primary', textContent: 'Sign in' });
+    go.onclick = async () => {
+      const v = code.value.replace(/\s+/g, '');
+      if (!/^\d{6,10}$/.test(v)) { say('The code is the 6 to 10 digits in the email.'); code.focus(); return; }
+      go.disabled = true; go.textContent = 'Checking…'; say();
+      try { const acc = await Store.verifyEmailCode(address, v); done(acc ? acc.login : address); }
+      catch (e) { say(e); go.disabled = false; go.textContent = 'Sign in'; }
+    };
+    code.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
+    box.replaceChildren(
+      el('h3', {}, 'Check your email'),
+      el('div', { className: 'sg-mail' }, icon('mail', 22), el('div', {}, 'We sent a sign-in link to ', el('b', {}, address), '. Open it in this browser and you’re in.')),
+      el('div', { className: 'field', style: 'margin-top:18px' }, el('label', {}, 'Reading it on your phone? Type the code from the email here'), el('div', { className: 'sg-row' }, code, go)),
+      msg,
+      el('div', { className: 'row' }, el('button', { className: 'btn ghost', textContent: 'Use a different way', onclick: home }), el('span', { style: 'flex:1' }), el('button', { className: 'btn', textContent: 'Close', onclick: close })));
+    code.focus();
+  }
+
+  function tokenForm(only) {
+    say();
+    const tok = el('input', { type: 'password', placeholder: 'github_pat_...', style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);font:inherit' });
+    const go = el('button', { className: 'btn primary', textContent: 'Sign in' });
+    go.onclick = async () => {
+      const t = tok.value.trim(); if (!t) return;
+      go.textContent = 'Checking…'; go.disabled = true; say();
+      try { const r = await Store.signIn(t); close(); adoptProfile(); toast(`Signed in as ${r.login}. Your team’s data is syncing.`); renderAll(); after && after(); }
+      catch (e) { say(e); go.textContent = 'Sign in'; go.disabled = false; }
+    };
+    tok.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
+    box.replaceChildren(
+      el('h3', {}, only ? 'Sign in with GitHub' : 'Sign in with a GitHub token'),
+      el('div', { className: 'note-box' },
+        el('div', {}, 'This is the older way: Fluentdat keeps your team’s messages in the private ', el('b', {}, 'Fluentdat-Data'), ' repository, and needs a fine grained token to read and write there. The token stays in this browser only.'),
+        el('ol', {},
+          el('li', {}, 'On GitHub: Settings → Developer settings → Personal access tokens → ', el('b', {}, 'Fine-grained tokens'), ' → Generate new token'),
+          el('li', {}, 'Repository access: ', el('b', {}, 'Only select repositories'), ' → Fluentdat-Data'),
+          el('li', {}, 'Permissions → Repository permissions → ', el('b', {}, 'Contents: Read and write')),
+          el('li', {}, 'Generate it, copy the token, and paste it below'))),
+      el('div', { className: 'field', style: 'margin-top:16px' }, el('label', {}, 'Token'), tok), msg,
+      el('div', { className: 'row' }, only ? null : el('button', { className: 'btn ghost', textContent: 'Back', onclick: home }), el('span', { style: 'flex:1' }), cancel));
+    tok.focus();
+  }
+
+  scrim.onclick = (e) => { if (e.target === scrim) close(); };
+  document.body.append(scrim);
+  home();
 }
 // on signing in: take the profile that's already on GitHub, or put this browser's up there
 function adoptProfile() {
   if (!Store.signedIn) return;
   const p = Store.myProfile();
-  if (p && p.name) { me = { ...me, ...p }; saveMe(); }
+  if (p && p.name) {
+    const next = { ...me, name: p.name, color: p.color || me.color, avatar: p.avatar || '', pronouns: p.pronouns || '', about: p.about || '', status: p.status || me.status };
+    if (p.id) next.id = p.id;
+    if (JSON.stringify(next) !== JSON.stringify(me)) { me = next; saveMe(); }
+  }
   else Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status });
 }
 const pushProfile = () => { if (Store.signedIn) Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status }); };
@@ -678,8 +878,8 @@ function openUserSettings(section = 'account') {
     { id: 'keys', label: 'Keyboard Shortcuts', icon: 'keyboard' },
     { hr: true },
     { id: 'about', label: 'About', icon: 'info' },
-    { id: 'signout', label: Store.signedIn ? 'Sign Out' : 'Reset Local Data', cls: 'danger', icon: 'logout', action: (shut) => {
-        if (Store.signedIn) { if (confirm('Sign out? Your team data stays on GitHub; this browser goes back to local only.')) { Store.signOut(); shut(); toast('Signed out.'); } }
+    { id: 'signout', label: Store.signedIn ? 'Sign Out' : 'Reset Local Data', cls: 'danger', icon: 'logout', action: async (shut) => {
+        if (Store.signedIn) { if (confirm(Store.kind === 'supabase' ? 'Sign out of Fluentdat in this browser?' : 'Sign out? Your team data stays on GitHub; this browser goes back to local only.')) { await Store.signOut(); shut(); toast('Signed out.'); } }
         else if (confirm('Clear everything stored in this browser (servers, messages, stickers)?')) { Store.reset(); shut(); toast('Local data cleared.'); }
       } },
   ];
@@ -698,20 +898,28 @@ function openUserSettings(section = 'account') {
 }
 
 function accountPane(redraw) {
-  const acc = Store.account();
+  const acc = Store.account(), live = Store.kind === 'supabase';
+  const via = live ? { discord: 'Discord', github: 'GitHub', email: 'email' }[acc.provider] || acc.provider : '';
   const out = [el('h2', {}, 'My Account'), el('p', { className: 'sub' }, 'Who you are in Fluentdat, and where your data lives.')];
   out.push(el('div', { style: 'display:flex;align-items:center;gap:16px;padding:18px;background:var(--side);border-radius:12px;margin-bottom:12px' },
     avatarEl(asMember(), { size: 64 }),
     el('div', { style: 'flex:1;min-width:0' },
       el('div', { style: 'font-weight:700;color:var(--bright);font-size:1.15rem' }, me.name),
-      el('div', { style: 'color:var(--muted);font-size:.86rem' }, acc ? '@' + acc.login + ' on GitHub' : 'Signed out — this browser only'),
+      el('div', { style: 'color:var(--muted);font-size:.86rem' }, live ? `@${acc.login} · signed in with ${via}` : acc ? '@' + acc.login + ' on GitHub' : 'Signed out — this browser only'),
       me.about ? el('div', { style: 'margin-top:6px;font-size:.88rem' }, me.about) : null),
     el('button', { className: 'btn', onclick: () => openUserSettings.ref.go('profile') }, 'Edit Profile')));
   out.push(el('h3', {}, 'Account'));
-  out.push(row2('GitHub account', acc ? 'Signed in. Messages, profiles and DMs sync with your team.' : 'Sign in to share servers, messages and DMs with your team.',
-    acc ? el('button', { className: 'btn', onclick: () => { if (confirm('Sign out of GitHub?')) { Store.signOut(); redraw(); renderAll(); } } }, 'Sign Out')
-      : el('button', { className: 'btn primary', onclick: () => signInDialog(redraw) }, 'Sign in with GitHub')));
-  out.push(row2('User ID', 'Handy when someone needs to add you.', el('button', { className: 'btn', onclick: () => { const v = acc ? acc.login : me.id; navigator.clipboard?.writeText(v).then(() => toast('Copied ' + v), () => toast(v)); } }, 'Copy')));
+  const signOut = el('button', { className: 'btn', onclick: async () => { if (confirm(live ? 'Sign out of Fluentdat in this browser?' : 'Sign out of GitHub?')) { await Store.signOut(); redraw(); renderAll(); } } }, 'Sign Out');
+  if (live) {
+    out.push(row2('Signed in', `With ${via}. Your servers, DMs and friends follow you to any device you sign in on.`, signOut));
+    out.push(row2('Your @handle', 'Friends add you with this. Share it with people you want to hear from.', el('button', { className: 'btn', onclick: () => copyText('@' + acc.login, 'Copied @' + acc.login) }, 'Copy @' + acc.login)));
+    if (acc.email) out.push(row2('Email', 'Only you can see this.', el('span', { className: 'chip' }, acc.email)));
+  } else {
+    out.push(row2(acc ? 'GitHub account' : 'Sign in', acc ? 'Signed in with a token. Messages, profiles and DMs sync through the data repository.'
+      : Store.configured ? 'With Discord, GitHub or email: chat live with your team, and pick up where you left off on any device.' : 'Sign in to share servers, messages and DMs with your team.',
+      acc ? signOut : el('button', { className: 'btn primary', onclick: () => signInDialog(redraw) }, 'Sign In')));
+    out.push(row2('User ID', 'Handy when someone needs to add you.', el('button', { className: 'btn', onclick: () => { const v = acc ? acc.login : me.id; copyText(v, 'Copied ' + v); } }, 'Copy')));
+  }
   out.push(row2('Status', 'How you show up to everyone else.', sel(me.status, STATUSES, (v) => { me.status = v; saveMe(); pushProfile(); renderAll(); })));
   return out;
 }
@@ -741,16 +949,22 @@ function profilePane(redraw) {
 function syncPane(redraw) {
   const st = Store.syncState(), acc = Store.account();
   const out = [el('h2', {}, 'Data & Sync'), el('p', { className: 'sub' }, 'Where Fluentdat keeps your servers, messages and profile.')];
-  out.push(row2('Storing in', acc ? st.repo + ' (private repository)' : 'This browser only (nothing leaves your device)',
-    el('span', { className: 'chip ' + (acc ? 'good' : '') }, acc ? 'GitHub' : 'Local')));
-  if (acc) {
+  if (Store.kind === 'supabase') {
+    out.push(row2('Storing in', 'Fluentdat’s database (Supabase), shared with the people in your servers', el('span', { className: 'chip good' }, 'Live')));
+    out.push(row2('Last loaded', st.lastSync ? new Date(st.lastSync).toLocaleTimeString() : 'not yet', el('button', { className: 'btn', onclick: () => { Store.syncNow(); toast('Reloading…'); setTimeout(redraw, 900); } }, 'Reload')));
+    if (st.error) out.push(el('div', { className: 'note-box', style: 'border:1px solid #e5534b;color:#e5534b;margin-top:10px' }, st.error));
+    out.push(el('h3', {}, 'How it works'));
+    out.push(el('div', { className: 'note-box' }, 'New messages arrive the moment they’re sent. The database itself decides who can read what, so it holds even if someone edits the app: only a server’s members can read its channels, only the two people in a DM can read it, and nobody can post as somebody else.'));
+  } else if (acc) {
+    out.push(row2('Storing in', st.repo + ' (private repository)', el('span', { className: 'chip good' }, 'GitHub')));
     out.push(row2('Last synced', st.lastSync ? new Date(st.lastSync).toLocaleTimeString() : 'not yet', el('button', { className: 'btn', onclick: () => { Store.syncNow(); toast('Syncing…'); setTimeout(redraw, 900); } }, 'Sync Now')));
     if (st.error) out.push(el('div', { className: 'note-box', style: 'border:1px solid #e5534b;color:#e5534b;margin-top:10px' }, st.error));
     out.push(el('h3', {}, 'How it works'));
     out.push(el('div', { className: 'note-box' }, 'Every message is a commit in the private repository, written with your own token. Fluentdat checks for new messages every few seconds, so things land a second or two apart rather than instantly. Anyone you want in the team needs to be a collaborator on that repository and sign in with their own token.'));
   } else {
-    out.push(el('div', { className: 'note-box', style: 'margin-top:10px' }, 'Right now everything is kept in this browser. Clearing site data would wipe it, and nobody else can see it. Sign in with GitHub to share with your team and keep a backup.'));
-    out.push(el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: () => signInDialog(redraw) }, 'Sign in with GitHub')));
+    out.push(row2('Storing in', 'This browser only (nothing leaves your device)', el('span', { className: 'chip' }, 'Local')));
+    out.push(el('div', { className: 'note-box', style: 'margin-top:10px' }, 'Right now everything is kept in this browser. Clearing site data would wipe it, and nobody else can see it. Sign in to share with your team and keep it safe.'));
+    out.push(el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: () => signInDialog(redraw) }, 'Sign In')));
   }
   out.push(el('h3', {}, 'Your data'));
   out.push(row2('Export', 'Download everything this browser has as a JSON file.', el('button', { className: 'btn', onclick: () => {
@@ -797,16 +1011,20 @@ function notificationsPane(redraw) {
 function privacyPane() {
   return [el('h2', {}, 'Privacy & Safety'), el('p', { className: 'sub' }, 'What Fluentdat stores, and who can reach you.'),
     el('h3', {}, 'Direct messages'),
-    row2('Who can DM me', 'Applies to new conversations started from your profile.', sel(prefs.dmFrom, [['anyone', 'Anyone'], ['friends', 'Friends only'], ['none', 'No one']], (v) => { prefs.dmFrom = v; savePrefs(); })),
+    Store.kind === 'supabase'
+      ? row2('Who can DM me', 'People you share a server with, and people you’ve added as a friend. Nobody else can start a conversation with you.', el('span', { className: 'chip good' }, 'Enforced'))
+      : row2('Who can DM me', 'Applies to new conversations started from your profile.', sel(prefs.dmFrom, [['anyone', 'Anyone'], ['friends', 'Friends only'], ['none', 'No one']], (v) => { prefs.dmFrom = v; savePrefs(); })),
     el('h3', {}, 'What Fluentdat knows'),
     el('div', { className: 'note-box' },
-      el('div', {}, 'There is no Fluentdat server and no analytics. Nothing is tracked, and nothing is sent anywhere except:'),
+      el('div', {}, 'There are no ads and no analytics. Nothing is tracked, and nothing is sent anywhere except:'),
       el('ol', {},
         el('li', {}, 'Signed out: everything stays in this browser.'),
-        el('li', {}, 'Signed in: your messages and profile go to your own private GitHub repository, using your own token.'),
-        el('li', {}, 'Your token is kept in this browser only and is never put in a message or committed.'))),
+        el('li', {}, 'Signed in with Discord, GitHub or email: your servers, messages and profile are kept in Fluentdat’s Supabase database. Fluentdat gets your email address and your Discord or GitHub name and picture, never your password.'),
+        el('li', {}, 'Signed in with a GitHub token: messages go to the private data repository, written with your own token, which stays in this browser.'))),
     el('h3', {}, 'Be aware'),
-    el('div', { className: 'note-box' }, 'Anyone who can read the data repository can read every message in it, and git keeps history, so a deleted message still exists in earlier commits. Treat it like a shared notebook, not a secure vault.')];
+    el('div', { className: 'note-box' }, Store.kind === 'github'
+      ? 'Anyone who can read the data repository can read every message in it, and git keeps history, so a deleted message still exists in earlier commits. Treat it like a shared notebook, not a secure vault.'
+      : 'Everyone in a server can read all of its channels, including messages from before they joined, and its admins can delete anyone’s messages there. A DM is between the two of you. Fluentdat isn’t end-to-end encrypted, so don’t share passwords or anything secret in it.')];
 }
 
 function accessibilityPane() {
@@ -826,36 +1044,51 @@ function keysPane() {
 function aboutPane() {
   return [el('h2', {}, 'About Fluentdat'), el('p', { className: 'sub' }, 'A chat app built from scratch, running entirely in your browser.'),
     el('div', { className: 'note-box' },
-      el('div', {}, el('b', {}, 'Fluentdat'), ' — servers, channels, DMs, friends, stickers and themes, with no backend server of its own. The app is a static site; your data is either in this browser or in your own private GitHub repository.'),
-      el('ol', {}, el('li', {}, 'Built by TrixWotel'), el('li', {}, 'Map of the stack: static HTML, CSS and JavaScript modules — no framework, no build step'), el('li', {}, 'Data layer swaps between local storage and GitHub without the UI knowing'))),
+      el('div', {}, el('b', {}, 'Fluentdat'), ' — servers, channels, DMs, friends, stickers and themes. The app is a static site; your data is in this browser, in Fluentdat’s Supabase database when you sign in, or in a private GitHub repository the older way.'),
+      el('ol', {}, el('li', {}, 'Built by TrixWotel'), el('li', {}, 'Map of the stack: static HTML, CSS and JavaScript modules — no framework, no build step'), el('li', {}, 'Data layer swaps between this browser, Supabase and GitHub without the UI knowing'))),
     el('h3', {}, 'Storage in use'),
-    row2('Backend', Store.backend, el('span', { className: 'chip ' + (Store.signedIn ? 'good' : '') }, Store.signedIn ? 'GitHub' : 'Local'))];
+    row2('Backend', Store.backend, el('span', { className: 'chip ' + (Store.signedIn ? 'good' : '') }, { supabase: 'Supabase', github: 'GitHub', local: 'Local' }[Store.kind]))];
 }
 
 // ===================== server settings =====================
 function openServerSettings(svId, section = 'overview') {
   const sv = Store.server(svId); if (!sv) return;
+  // (members see the overview and who's here; admins manage channels and invites; only the owner deletes the server)
+  const can = Store.canManage(svId), owner = Store.role(svId) === 'owner', live = Store.kind === 'supabase';
   const nav = [
     { head: () => (Store.server(svId) || sv).name },
     { id: 'overview', label: 'Overview', icon: 'gear' },
-    { id: 'channels', label: 'Channels', icon: 'hash' },
-    { id: 'categories', label: 'Categories', icon: 'menu' },
+    can && { id: 'channels', label: 'Channels', icon: 'hash' },
+    can && { id: 'categories', label: 'Categories', icon: 'menu' },
     { id: 'members', label: 'Members', icon: 'users' },
-    { id: 'invite', label: 'Invite People', icon: 'personAdd' },
+    can && { id: 'invite', label: 'Invite People', icon: 'personAdd' },
     { hr: true },
-    { id: 'danger', label: 'Delete Server', cls: 'danger', icon: 'trash' },
-  ];
+    owner ? { id: 'danger', label: 'Delete Server', cls: 'danger', icon: 'trash' }
+      : live && { id: 'leave', label: 'Leave Server', cls: 'danger', icon: 'logout', action: (shut) => { shut(); leaveServer(svId); } },
+  ].filter(Boolean);
+  if (!nav.some((n) => n.id === section)) section = 'overview';
   overlay(nav, section, (sec, redraw, shut) => {
-    if (sec === 'overview') return svOverview(sv, redraw);
     if (sec === 'channels') return svChannels(sv, redraw);
     if (sec === 'categories') return svCategories(sv, redraw);
-    if (sec === 'members') return svMembers(sv);
+    if (sec === 'members') return svMembers(sv, redraw);
     if (sec === 'invite') return svInvite(sv);
-    return svDanger(sv, shut);
+    if (sec === 'danger') return svDanger(sv, shut);
+    return svOverview(sv, redraw, can);
   });
 }
 
-function svOverview(sv, redraw) {
+function svOverview(sv, redraw, can) {
+  if (!can) {
+    const icon0 = el('div', { className: 'srv', style: 'width:72px;height:72px;border-radius:22px' });
+    if (sv.img) icon0.append(el('img', { src: sv.img, alt: '' })); else if (ICON[sv.icon]) icon0.append(icon(sv.icon, 32)); else icon0.textContent = initials(sv.name);
+    const owner = (Store.members(sv.id) || []).find((m) => m.role === 'owner');
+    return [el('h2', {}, sv.name), el('p', { className: 'sub' }, 'Only this server’s admins can change its name, icon and channels.'),
+      el('div', { className: 'avatar-edit', style: 'padding:12px 0' }, icon0),
+      row2('Your role', 'Admins can make channels and invites. The owner decides who’s an admin.', el('span', { className: 'chip role ' + (Store.role(sv.id) || 'member') }, { owner: 'Owner', admin: 'Admin' }[Store.role(sv.id)] || 'Member')),
+      owner ? row2('Owner', '', el('span', { className: 'chip' }, owner.name)) : null,
+      row2('Channels', String(Store.channels(sv.id).length), null),
+      row2('Members', String((Store.members(sv.id) || []).length), null)];
+  }
   const name = el('input', { type: 'text', value: sv.name, maxLength: 40 });
   const preview = el('div', { className: 'srv', style: 'width:72px;height:72px;border-radius:22px' });
   const drawIcon = () => { preview.replaceChildren(); if (sv.img) preview.append(el('img', { src: sv.img, alt: '' })); else if (ICON[sv.icon]) preview.append(icon(sv.icon, 32)); else preview.textContent = initials(name.value); };
@@ -888,7 +1121,7 @@ function svChannels(sv, redraw) {
   return [el('h2', {}, 'Channels'), el('p', { className: 'sub' }, 'Rename channels, move them between categories, or switch text and voice.'),
     list,
     el('div', { className: 'row', style: 'justify-content:flex-start' },
-      el('button', { className: 'btn primary', onclick: () => { const n = prompt('New channel name'); if (n && n.trim()) { Store.addChannel(sv.id, cats[0] && cats[0].id, n); renderAll(); redraw(); } } }, 'Create Channel'))];
+      el('button', { className: 'btn primary', onclick: async () => { const n = prompt('New channel name'); if (n && n.trim()) { await attempt(() => Store.addChannel(sv.id, cats[0] && cats[0].id, n)); renderAll(); redraw(); } } }, 'Create Channel'))];
 }
 
 function svCategories(sv, redraw) {
@@ -902,10 +1135,11 @@ function svCategories(sv, redraw) {
   return [el('h2', {}, 'Categories'), el('p', { className: 'sub' }, 'Groups that channels sit under in the sidebar.'),
     list,
     el('div', { className: 'row', style: 'justify-content:flex-start' },
-      el('button', { className: 'btn primary', onclick: () => { const n = prompt('New category name'); if (n && n.trim()) { Store.addCategory(sv.id, n); renderAll(); redraw(); } } }, 'Create Category'))];
+      el('button', { className: 'btn primary', onclick: async () => { const n = prompt('New category name'); if (n && n.trim()) { await attempt(() => Store.addCategory(sv.id, n)); renderAll(); redraw(); } } }, 'Create Category'))];
 }
 
-function svMembers(sv) {
+function svMembers(sv, redraw) {
+  if (Store.kind === 'supabase') return svPeople(sv, redraw);
   const list = el('div', { className: 'sx-list' });
   for (const m of memberList()) {
     list.append(el('div', { className: 'it' }, avatarEl(m, { size: 32 }),
@@ -915,7 +1149,42 @@ function svMembers(sv) {
   return [el('h2', {}, 'Members'), el('p', { className: 'sub' }, Store.signedIn ? 'Everyone with a profile in the shared data repository.' : 'You and your friends in this browser. Sign in to see your real team.'), list];
 }
 
+// the people in a shared server, with their roles: the owner makes and unmakes admins; admins can remove members
+function svPeople(sv, redraw) {
+  const myRole = Store.role(sv.id), owner = myRole === 'owner', can = Store.canManage(sv.id);
+  const rank = { owner: 0, admin: 1, member: 2 };
+  const people = (Store.members(sv.id) || []).slice().sort((a, b) => (rank[a.role] - rank[b.role]) || String(a.name).localeCompare(b.name));
+  const list = el('div', { className: 'sx-list' });
+  for (const m of people) {
+    const acts = [];
+    if (!m.me && m.role !== 'owner') {
+      if (owner) acts.push(el('button', { className: 'btn', onclick: async () => {
+        const to = m.role === 'admin' ? 'member' : 'admin';
+        if ((await attempt(() => Store.setMemberRole(sv.id, m.id, to))) === null) return;
+        toast(to === 'admin' ? `${m.name} is now an admin.` : `${m.name} is no longer an admin.`); redraw(); renderMembers();
+      } }, m.role === 'admin' ? 'Remove admin' : 'Make admin'));
+      if (owner || (can && m.role === 'member')) acts.push(iconBtn('x', 'Remove from the server', async () => {
+        if (!confirm(`Remove ${m.name} from ${sv.name}? They can only come back with a new invite.`)) return;
+        if ((await attempt(() => Store.removeMember(sv.id, m.id))) === null) return;
+        toast(`${m.name} was removed.`); redraw(); renderMembers();
+      }, 'del'));
+    }
+    list.append(el('div', { className: 'it' }, avatarEl(m, { size: 32 }),
+      el('div', { className: 'who2' },
+        el('div', { className: 'n' }, m.name, m.me ? el('span', { className: 'chip', style: 'margin-left:8px' }, 'you') : null),
+        el('div', { className: 'h' }, el('span', { className: 'chip role ' + m.role }, m.role === 'owner' ? 'Owner' : m.role === 'admin' ? 'Admin' : 'Member'), m.login ? '@' + m.login : '')),
+      ...acts));
+  }
+  return [el('h2', {}, 'Members'), el('p', { className: 'sub' }, `${people.length} ${people.length === 1 ? 'person' : 'people'} in ${sv.name}. ` +
+      (owner ? 'You own it: you choose the admins.' : can ? 'You’re an admin: you can remove members and make invites.' : 'Ask an admin if someone should be invited or removed.')), list,
+    el('h3', {}, 'Roles'),
+    el('div', { className: 'note-box' }, el('ol', {},
+      el('li', {}, el('b', {}, 'Owner'), ': made the server. Picks admins, and is the only one who can delete it.'),
+      el('li', {}, el('b', {}, 'Admins'), ': make and change channels, make invites, remove members, and delete anyone’s messages.'),
+      el('li', {}, el('b', {}, 'Members'), ': read and post in every channel.')))];
+}
 function svInvite(sv) {
+  if (Store.kind === 'supabase') return svInviteLink(sv);
   return [el('h2', {}, 'Invite People'), el('p', { className: 'sub' }, 'How someone else joins ' + sv.name + '.'),
     Store.signedIn
       ? el('div', { className: 'note-box' },
@@ -930,14 +1199,41 @@ function svInvite(sv) {
     el('div', { className: 'note-box' }, 'Anyone you add can read everything in the repository, including old messages kept in the git history, and can write as themselves. Only add people you trust with all of it.')];
 }
 
+// a real invite: a link (or code) someone opens to join, with an expiry and a limit on how many people can use it
+function svInviteLink(sv) {
+  const hours = sel('168', [['1', '1 hour'], ['24', '1 day'], ['168', '7 days'], ['0', 'Never']], () => {});
+  const uses = sel('0', [['0', 'No limit'], ['1', '1 person'], ['5', '5 people'], ['10', '10 people'], ['25', '25 people']], () => {});
+  const out = el('div', {});
+  const make = el('button', { className: 'btn primary' }, 'Create Invite Link');
+  make.onclick = async () => {
+    make.disabled = true;
+    const h = +hours.value || null, n = +uses.value || null;
+    const code = await attempt(() => Store.createInvite(sv.id, n, h));
+    make.disabled = false;
+    if (!code) return;
+    const link = location.origin + location.pathname + '#invite=' + code;
+    const field = el('input', { type: 'text', value: link, readOnly: true, onclick: () => field.select() });
+    out.replaceChildren(el('div', { className: 'invite-box' }, field, el('button', { className: 'btn primary', onclick: () => copyText(link, 'Invite link copied.') }, 'Copy')),
+      el('div', { className: 'invite-note' }, `Code ${code} · ${h ? 'works for ' + hours.selectedOptions[0].textContent.replace(/^1 /, 'one ') : 'never expires'}${n ? ' · for ' + uses.selectedOptions[0].textContent : ''}. They can paste the code into “Join with an invite” too.`));
+    field.select();
+  };
+  return [el('h2', {}, 'Invite People'), el('p', { className: 'sub' }, `Send someone a link. They sign in (Discord, GitHub or email) and land in ${sv.name}.`),
+    row2('Expire after', 'After this the link stops working. People who already joined stay.', hours),
+    row2('Max uses', 'How many people can join with this one link.', uses),
+    el('div', { className: 'row', style: 'justify-content:flex-start' }, make), out,
+    el('h3', {}, 'Who gets in'),
+    el('div', { className: 'note-box' }, 'Anyone holding a working link can join, so send it straight to the people you mean and keep it out of public places. Joining shows them every channel, including older messages. You can remove someone any time in Members.')];
+}
 function svDanger(sv, shut) {
   return [el('h2', {}, 'Delete Server'), el('p', { className: 'sub' }, 'This removes the server, its categories, channels and messages.'),
-    el('div', { className: 'note-box', style: 'border:1px solid #e5534b' }, 'There is no undo in the app. If you are signed in, the old contents stay in the git history of the data repository, but Fluentdat will not show them again.'),
+    el('div', { className: 'note-box', style: 'border:1px solid #e5534b' }, Store.kind === 'supabase'
+      ? 'There is no undo. It goes for everyone in it: the channels and every message are deleted from the database.'
+      : 'There is no undo in the app. If you are signed in, the old contents stay in the git history of the data repository, but Fluentdat will not show them again.'),
     el('div', { className: 'row', style: 'justify-content:flex-start' },
       el('button', { className: 'btn danger', onclick: () => {
-        if (Store.servers().length < 2) return toast('This is your only server — make another one first.');
+        if (Store.kind !== 'supabase' && Store.servers().length < 2) return toast('This is your only server — make another one first.');
         if (prompt(`Type the server name to delete it: ${sv.name}`) !== sv.name) return toast('Name did not match, nothing deleted.');
-        Store.removeServer(sv.id); serverId = Store.servers()[0].id; channelId = firstChannel(serverId); shut(); toast('Server deleted.');
+        Store.removeServer(sv.id); serverId = (Store.servers()[0] || {}).id || null; channelId = firstChannel(serverId); shut(); toast('Server deleted.');
       } }, 'Delete ' + sv.name))];
 }
 

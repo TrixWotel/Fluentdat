@@ -257,6 +257,40 @@
     .note-box code { background: #0003; padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, Menlo, monospace; }
     .note-box ol { margin: 8px 0 0; padding-left: 20px; } .note-box li { margin: 4px 0; }
 
+    /* ---- signing in (Discord, GitHub, email) ---- */
+    .dialog.sg { max-width: 420px; }
+    .sg .sg-sub { color: var(--muted); margin: -8px 0 18px; font-size: .9rem; }
+    .sg-btns { display: grid; gap: 10px; }
+    .sg-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 12px 16px; border-radius: 10px; font-weight: 600; font-size: .95rem; transition: filter .15s; }
+    .sg-btn:hover { filter: brightness(1.1); } .sg-btn:disabled { opacity: .7; cursor: default; }
+    .sg-btn.discord { background: #5865f2; color: #fff; }
+    .sg-btn.github { background: #24292f; color: #fff; border: 1px solid #ffffff1f; }
+    svg.brand { display: block; flex: none; }
+    .sg-or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: .8rem; margin: 18px 0 12px; }
+    .sg-or::before, .sg-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+    .sg-row { display: flex; gap: 8px; }
+    .sg-row input { flex: 1; min-width: 0; background: var(--input); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; color: var(--text); font: inherit; }
+    .sg-row .btn { flex: none; }
+    @media (max-width: 420px) { .sg-row { flex-wrap: wrap; } .sg-row input { flex-basis: 100%; } .sg-row .btn { flex: 1; } }
+    .sg-msg { color: #e5534b; font-size: .85rem; min-height: 1.2em; margin-top: 8px; }
+    .sg-mail { display: flex; gap: 12px; align-items: flex-start; background: var(--input); border-radius: 10px; padding: 14px; color: var(--text); line-height: 1.5; }
+    .sg-mail svg.ic { color: var(--accent); margin-top: 2px; }
+    .dialog .row .btn.ghost { display: inline-flex; align-items: center; gap: 6px; } .dialog .row .btn.ghost svg.ic { width: 16px; height: 16px; }
+
+    /* ---- roles, invites ---- */
+    .role-mark { display: inline-flex; vertical-align: -2px; margin-left: 5px; color: var(--muted); } .role-mark svg.ic { width: 13px; height: 13px; }
+    .chip.role.owner { background: #d6b23b22; color: #d6b23b; } .chip.role.admin { background: #5b7fd622; color: #7f9cf0; }
+    .sx-list .it .who2 { flex: 1; min-width: 0; }
+    .who2 .n { color: var(--bright); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .who2 .h { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--muted); font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .who2 .chip { padding: 1px 8px; font-size: .72rem; }
+    .sx-list .it .btn { padding: 6px 12px; color: var(--text); background: var(--input); display: inline-flex; font-size: .85rem; border-radius: 8px; }
+    .sx-list .it .btn:hover { background: var(--hover); }
+    .invite-box { display: flex; gap: 8px; margin-top: 16px; }
+    .invite-box input { flex: 1; min-width: 0; background: var(--input); border: 1px solid var(--accent); border-radius: 9px; padding: 10px 12px; color: var(--bright); font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: .86rem; }
+    .invite-note { color: var(--muted); font-size: .84rem; margin-top: 8px; }
+    .pop .card button.danger, .pop .card button.danger svg.ic { color: #e5534b; }
+
     /* ---- layout you can change (Settings → Layout). Every switch below really moves something. ---- */
     :root { --rail-w: 72px; --side-w: 240px; --members-w: 232px; --avatar: 36px; --r: 10px; --msg-max: none; }
     .app { grid-template-columns: var(--rail-w) var(--side-w) 1fr 0; }
