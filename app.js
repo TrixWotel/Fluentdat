@@ -7,6 +7,23 @@ import { Store } from './backend.js';
 const $ = (s) => document.querySelector(s);
 const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k)); return n; };
 
+const DEFAULT_PREFS = {
+  density: 'cozy', fontSize: 15, reduceMotion: false, highContrast: false, notify: false, sendOnEnter: true, dmFrom: 'anyone',
+  // layout — all of these really move something (Settings → Layout)
+  rail: 'on', railSize: 'm', iconShape: 'squircle', sideW: 'medium', chanIcons: 'on', cats: 'on', sideHead: 'on', userPanel: 'on',
+  topbar: 'on', callBtns: 'on', banner: 'on',
+  avatars: 'on', avatarSize: 'm', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
+  membersDefault: true, memberW: 'medium', memberOffline: true, memberStatusText: false,
+  composerSticker: 'on', composerSend: 'on', radius: 'soft', uiFont: 'system',
+};
+const LAYOUT_PRESETS = {
+  Default: {},
+  Compact: { density: 'compact', fontSize: 14, avatarSize: 's', railSize: 's', sideW: 'narrow', dividers: 'off', memberW: 'narrow', radius: 'sharp' },
+  Spacious: { density: 'cozy', fontSize: 16, avatarSize: 'l', sideW: 'wide', msgWidth: 'readable', radius: 'round', memberW: 'wide' },
+  Minimal: { rail: 'off', sideHead: 'off', userPanel: 'off', callBtns: 'off', avatars: 'off', timestamps: 'off', dividers: 'off', composerSticker: 'off', banner: 'off', membersDefault: false, hover: 'off' },
+};
+let prefs = loadPrefs();
+
 // ---------- icons ----------
 const ICON = {
   menu: '<path d="M3 6h18M3 12h18M3 18h18"/>', hash: '<path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/>',
@@ -41,6 +58,7 @@ const ICON = {
   keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
+  layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h6"/>',
 };
 const svgHTML = (n, s) => `<svg class="ic" viewBox="0 0 24 24"${s ? ` width="${s}" height="${s}"` : ''}>${ICON[n] || ''}</svg>`;
 const icon = (n, s) => { const d = document.createElement('div'); d.innerHTML = svgHTML(n, s); return d.firstElementChild; };
@@ -187,14 +205,19 @@ function membersBtn() { const b = el('button', { className: 'act' + (showMembers
 
 // ---------- messages ----------
 const fmt = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|\W)\*(.+?)\*(?=\W|$)/g, '$1<i>$2</i>').replace(/`(.+?)`/g, '<code>$1</code>');
-const when = (ts) => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function when(ts) {
+  const d = new Date(ts);
+  if (prefs.timestamps === '24') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (prefs.timestamps === 'rel') { const s = Math.round((Date.now() - ts) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.floor(s / 60) + 'm ago' : s < 86400 ? Math.floor(s / 3600) + 'h ago' : Math.floor(s / 86400) + 'd ago'; }
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 function messageList(msgs) {
   const wrap = el('div', { className: 'msgs' });
   let last = null, lastDay = null;
   for (const m of msgs) {
     if (!lastDay || !sameDay(lastDay, m.ts)) { wrap.append(el('div', { className: 'day' }, new Date(m.ts).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }))); lastDay = m.ts; last = null; }
-    const cont = last && last.user.name === m.user.name && !last.user.bot === !m.user.bot && (m.ts - last.ts) < 5 * 60000;
+    const cont = prefs.group && last && last.user.name === m.user.name && !last.user.bot === !m.user.bot && (m.ts - last.ts) < 5 * 60000;
     const body = el('div', { className: 'body' });
     if (!cont) {
       const nm = el('span', { className: 'nm', style: `--who:${m.user.color || 'var(--bright)'}`, onclick: (e) => showProfile(m.user, e.currentTarget) }, m.user.name);
@@ -238,8 +261,13 @@ function renderMembers() {
   const all = memberList();
   const online = all.filter((m) => m.status && m.status !== 'offline' && m.status !== 'invisible');
   const offline = all.filter((m) => !online.includes(m));
-  const grp = (title, list) => list.length ? [el('div', { className: 'mem-cat' }, `${title} — ${list.length}`), ...list.map((m) => el('button', { className: 'mem' + (online.includes(m) ? '' : ' off'), onclick: (e) => showProfile(m, e.currentTarget) }, avatarEl(m, { size: 32 }), el('span', { className: 'nm', style: `--who:${m.color}` }, m.name)))] : [];
-  box.replaceChildren(...grp('Online', online), ...grp('Offline', offline));
+  const member = (m) => {
+    const who = el('div', { style: 'min-width:0;flex:1' }, el('div', { className: 'nm', style: `--who:${m.color}` }, m.name));
+    if (prefs.memberStatusText) who.append(el('div', { style: 'font-size:.74rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, m.about || (m.bot ? 'Bot' : (m.status || 'offline'))));
+    return el('button', { className: 'mem' + (online.includes(m) ? '' : ' off'), onclick: (e) => showProfile(m, e.currentTarget) }, avatarEl(m), who);
+  };
+  const grp = (title, list) => list.length ? [el('div', { className: 'mem-cat' }, `${title} — ${list.length}`), ...list.map(member)] : [];
+  box.replaceChildren(...grp('Online', online), ...(prefs.memberOffline ? grp('Offline', offline) : []));
 }
 
 function renderAll() { ensureSelection(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner(); $('#app').classList.toggle('show-members', showMembers && view === 'server'); }
@@ -526,18 +554,28 @@ Store.init();
 renderAll();
 
 // ===================== preferences =====================
-const DEFAULT_PREFS = { density: 'cozy', fontSize: 15, reduceMotion: false, highContrast: false, notify: false, sendOnEnter: true, dmFrom: 'anyone' };
 function loadPrefs() { try { return { ...DEFAULT_PREFS, ...(JSON.parse(localStorage.getItem('fluentdat.prefs')) || {}) }; } catch { return { ...DEFAULT_PREFS }; } }
-let prefs = loadPrefs();
 function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
 function applyPrefs() {
-  const d = document.documentElement;
-  d.dataset.density = prefs.density;
-  d.dataset.motion = prefs.reduceMotion ? 'off' : 'on';
-  d.dataset.contrast = prefs.highContrast ? 'high' : 'normal';
+  const d = document.documentElement, S = (k, v) => d.setAttribute('data-' + k, v);
+  S('density', prefs.density);
+  S('motion', prefs.reduceMotion ? 'off' : 'on');
+  S('contrast', prefs.highContrast ? 'high' : 'normal');
+  for (const [attr, val] of [['rail', prefs.rail], ['railsize', prefs.railSize], ['iconshape', prefs.iconShape], ['sidew', prefs.sideW],
+    ['chanicons', prefs.chanIcons], ['cats', prefs.cats], ['sidehead', prefs.sideHead], ['userpanel', prefs.userPanel],
+    ['topbar', prefs.topbar], ['callbtns', prefs.callBtns], ['banner', prefs.banner], ['avatars', prefs.avatars],
+    ['avatarshape', prefs.avatarShape], ['dividers', prefs.dividers], ['memberw', prefs.memberW], ['hover', prefs.hover],
+    ['composer-sticker', prefs.composerSticker], ['composer-send', prefs.composerSend], ['radius', prefs.radius], ['uifont', prefs.uiFont]]) S(attr, val);
+  S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
+  d.style.setProperty('--avatar', { s: '28px', m: '36px', l: '44px' }[prefs.avatarSize] || '36px');
+  d.style.setProperty('--msg-max', prefs.msgWidth === 'readable' ? '860px' : 'none');
   document.body.style.fontSize = Math.max(12, Math.min(20, prefs.fontSize)) + 'px';
 }
+// change one thing and redraw the parts that are drawn by hand
+function setPref(key, value) { prefs[key] = value; savePrefs(); renderAll(); }
 applyPrefs();
+showMembers = prefs.membersDefault !== false;
+renderAll();
 
 // ===================== settings building blocks =====================
 function sw(on, onchange) { const b = el('button', { className: 'sw' + (on ? ' on' : ''), role: 'switch' }); b.onclick = () => { const next = !b.classList.contains('on'); b.classList.toggle('on', next); onchange(next); }; return b; }
@@ -546,7 +584,7 @@ function sel(value, options, onchange) { const s = el('select'); for (const [v, 
 function iconBtn(name, title, onclick, cls) { const b = el('button', { title, className: cls || '', onclick }); b.append(icon(name, 17)); return b; }
 
 function overlay(navItems, firstSection, render) {
-  let section = firstSection;
+  let section = firstSection, navQuery = '';
   const nav = el('div', { className: 'sx-nav' }), body = el('div', { className: 'sx-body' });
   const box = el('div', { className: 'sx' }, nav, body);
   const close = el('button', { className: 'sx-close', title: 'Close (Esc)', onclick: () => shut() }); close.append(icon('x', 20));
@@ -559,6 +597,12 @@ function overlay(navItems, firstSection, render) {
     for (const item of navItems) {
       if (item.head) { nav.append(el('h4', {}, typeof item.head === 'function' ? item.head() : item.head)); continue; }
       if (item.hr) { nav.append(el('hr')); continue; }
+      if (item.search) {
+        const q = el('input', { type: 'text', placeholder: 'Search settings', value: navQuery,
+          style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);font:inherit;margin-bottom:6px' });
+        q.oninput = () => { navQuery = q.value.toLowerCase(); for (const b of nav.querySelectorAll('button')) b.hidden = !!navQuery && !b.textContent.toLowerCase().includes(navQuery); q.focus(); };
+        nav.append(q); continue;
+      }
       const b = el('button', { className: (item.id === section ? 'on ' : '') + (item.cls || ''), onclick: () => { if (item.action) return item.action(shut); section = item.id; draw(); } });
       if (item.icon) b.append(icon(item.icon, 17));
       b.append(el('span', {}, item.label));
@@ -609,12 +653,14 @@ const pushProfile = () => { if (Store.signedIn) Store.setProfile({ name: me.name
 // ===================== user settings =====================
 function openUserSettings(section = 'account') {
   const nav = [
+    { search: true },
     { head: 'User Settings' },
     { id: 'account', label: 'My Account', icon: 'user' },
     { id: 'profile', label: 'Profile', icon: 'edit' },
     { id: 'sync', label: 'Data & Sync', icon: 'cloud' },
     { hr: true }, { head: 'App Settings' },
     { id: 'appearance', label: 'Appearance', icon: 'palette' },
+    { id: 'layout', label: 'Layout', icon: 'layout' },
     { id: 'notifications', label: 'Notifications', icon: 'bell' },
     { id: 'privacy', label: 'Privacy & Safety', icon: 'shield' },
     { id: 'accessibility', label: 'Accessibility', icon: 'eye' },
@@ -631,6 +677,7 @@ function openUserSettings(section = 'account') {
     if (sec === 'profile') return profilePane(redraw);
     if (sec === 'sync') return syncPane(redraw);
     if (sec === 'appearance') return appearancePane(redraw);
+    if (sec === 'layout') return layoutPane(redraw);
     if (sec === 'notifications') return notificationsPane(redraw);
     if (sec === 'privacy') return privacyPane(redraw);
     if (sec === 'accessibility') return accessibilityPane(redraw);
@@ -881,4 +928,65 @@ function svDanger(sv, shut) {
         if (prompt(`Type the server name to delete it: ${sv.name}`) !== sv.name) return toast('Name did not match, nothing deleted.');
         Store.removeServer(sv.id); serverId = Store.servers()[0].id; channelId = firstChannel(serverId); shut(); toast('Server deleted.');
       } }, 'Delete ' + sv.name))];
+}
+
+// ===================== layout settings =====================
+function layoutPane(redraw) {
+  const P = (k, v) => () => { setPref(k, v); redraw(); };
+  const pick = (key, options) => sel(prefs[key], options, (v) => { setPref(key, v); });
+  const flip = (key) => sw(prefs[key] === 'on' || prefs[key] === true, (on) => { setPref(key, typeof prefs[key] === 'boolean' ? on : (on ? 'on' : 'off')); });
+  const onoff = [['on', 'Shown'], ['off', 'Hidden']];
+  return [
+    el('h2', {}, 'Layout'), el('p', { className: 'sub' }, 'Rearrange Fluentdat. Everything here changes the app as soon as you touch it.'),
+
+    el('h3', {}, 'Presets'),
+    el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;padding:4px 0 12px' }, ...Object.keys(LAYOUT_PRESETS).map((name) =>
+      el('button', { className: 'btn', onclick: () => { prefs = { ...prefs, ...DEFAULT_PREFS, ...LAYOUT_PRESETS[name] }; savePrefs(); showMembers = prefs.membersDefault !== false; renderAll(); redraw(); toast(name + ' layout applied.'); } }, name))),
+
+    el('h3', {}, 'Server rail'),
+    row2('Server rail', 'The strip of server icons down the left.', pick('rail', onoff)),
+    row2('Icon size', 'How big those server icons are.', pick('railSize', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large']])),
+    row2('Icon shape', 'Squircle is the Discord look.', pick('iconShape', [['squircle', 'Squircle'], ['round', 'Circle'], ['square', 'Rounded square']])),
+
+    el('h3', {}, 'Channel sidebar'),
+    row2('Width', 'The channel list column.', pick('sideW', [['narrow', 'Narrow'], ['medium', 'Medium'], ['wide', 'Wide']])),
+    row2('Server header', 'The server name and dropdown at the top.', pick('sideHead', onoff)),
+    row2('Category headings', 'The TEXT CHANNELS / VOICE CHANNELS groupings.', pick('cats', onoff)),
+    row2('Channel icons', 'The # and speaker marks beside each channel.', pick('chanIcons', onoff)),
+    row2('User panel', 'You, your status and the settings cog at the bottom.', pick('userPanel', onoff)),
+
+    el('h3', {}, 'Top bar'),
+    row2('Top bar', 'The channel name strip above the messages.', pick('topbar', onoff)),
+    row2('Call buttons', 'Voice and video buttons in the top bar.', pick('callBtns', onoff)),
+    row2('Status banner', 'The sync line across the very top.', pick('banner', onoff)),
+
+    el('h3', {}, 'Messages'),
+    row2('Spacing', 'Cozy gives each message room, compact fits more in.', pick('density', [['cozy', 'Cozy'], ['compact', 'Compact']])),
+    row2('Avatars', 'Profile pictures beside messages.', pick('avatars', onoff)),
+    row2('Avatar size', 'Also changes the member list and DM list.', pick('avatarSize', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large']])),
+    row2('Avatar shape', '', pick('avatarShape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']])),
+    row2('Timestamps', 'Beside the name on each message.', pick('timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']])),
+    row2('Group messages', 'Several messages in a row from one person share a heading.', sw(prefs.group, (on) => setPref('group', on))),
+    row2('Date dividers', 'The “Monday, October 19” lines.', pick('dividers', onoff)),
+    row2('Reading width', 'Readable keeps long lines from stretching across a wide screen.', pick('msgWidth', [['full', 'Use the full width'], ['readable', 'Readable column']])),
+    row2('Highlight on hover', 'The subtle background as your pointer passes a message.', pick('hover', onoff)),
+
+    el('h3', {}, 'Member list'),
+    row2('Show by default', 'Whether the member list is open when you arrive.', sw(prefs.membersDefault, (on) => { prefs.membersDefault = on; savePrefs(); showMembers = on; renderAll(); })),
+    row2('Width', '', pick('memberW', [['narrow', 'Narrow'], ['medium', 'Medium'], ['wide', 'Wide']])),
+    row2('Include offline', 'Show the people who aren’t around right now.', sw(prefs.memberOffline, (on) => setPref('memberOffline', on))),
+    row2('Second line', 'Show each person’s about text under their name.', sw(prefs.memberStatusText, (on) => setPref('memberStatusText', on))),
+
+    el('h3', {}, 'Message box'),
+    row2('Sticker button', '', pick('composerSticker', onoff)),
+    row2('Send button', 'Turning this off leaves just Enter to send.', pick('composerSend', onoff)),
+
+    el('h3', {}, 'Shape & type'),
+    row2('Corners', 'How rounded buttons, channels and messages are.', pick('radius', [['sharp', 'Sharp'], ['soft', 'Soft'], ['round', 'Round']])),
+    row2('Interface font', 'The font used everywhere in the app.', pick('uiFont', [['system', 'System'], ['rounded', 'Rounded'], ['serif', 'Serif'], ['mono', 'Monospaced']])),
+    row2('Text size', 'Scales the whole interface.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })()),
+
+    el('h3', {}, 'Start over'),
+    row2('Reset layout', 'Put every option on this page back to the default.', el('button', { className: 'btn danger', onclick: () => { if (!confirm('Reset the layout to defaults?')) return; prefs = { ...prefs, ...DEFAULT_PREFS }; savePrefs(); showMembers = true; renderAll(); redraw(); toast('Layout reset.'); } }, 'Reset')),
+  ];
 }

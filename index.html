@@ -248,6 +248,49 @@
     .note-box code { background: #0003; padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, Menlo, monospace; }
     .note-box ol { margin: 8px 0 0; padding-left: 20px; } .note-box li { margin: 4px 0; }
 
+    /* ---- layout you can change (Settings → Layout). Every switch below really moves something. ---- */
+    :root { --rail-w: 72px; --side-w: 240px; --members-w: 232px; --avatar: 36px; --r: 10px; --msg-max: none; }
+    .app { grid-template-columns: var(--rail-w) var(--side-w) 1fr 0; }
+    .app.show-members { grid-template-columns: var(--rail-w) var(--side-w) 1fr var(--members-w); }
+    .members { width: auto; }
+    .msgs { max-width: var(--msg-max); }
+    .avatar { width: var(--avatar); height: var(--avatar); }
+    .mem .avatar, .dm-row .avatar { width: calc(var(--avatar) - 4px); height: calc(var(--avatar) - 4px); }
+
+    :root[data-rail="off"] .rail { display: none; }
+    :root[data-rail="off"] .app { grid-template-columns: 0 var(--side-w) 1fr 0; }
+    :root[data-rail="off"] .app.show-members { grid-template-columns: 0 var(--side-w) 1fr var(--members-w); }
+    :root[data-railsize="s"] { --rail-w: 60px; } :root[data-railsize="s"] .srv { width: 38px; height: 38px; }
+    :root[data-railsize="l"] { --rail-w: 86px; } :root[data-railsize="l"] .srv { width: 58px; height: 58px; }
+    :root[data-iconshape="round"] .srv, :root[data-iconshape="round"] .srv:hover, :root[data-iconshape="round"] .srv.on { border-radius: 50%; }
+    :root[data-iconshape="square"] .srv, :root[data-iconshape="square"] .srv:hover, :root[data-iconshape="square"] .srv.on { border-radius: 8px; }
+    :root[data-avatarshape="square"] .avatar, :root[data-avatarshape="square"] .avatar .fill { border-radius: 28%; }
+    :root[data-avatarshape="squircle"] .avatar, :root[data-avatarshape="squircle"] .avatar .fill { border-radius: 36%; }
+
+    :root[data-sidew="narrow"] { --side-w: 190px; } :root[data-sidew="wide"] { --side-w: 300px; }
+    :root[data-memberw="narrow"] { --members-w: 180px; } :root[data-memberw="wide"] { --members-w: 300px; }
+    :root[data-chanicons="off"] .chan > svg.ic { display: none; }
+    :root[data-cats="off"] .cat { display: none; }
+    :root[data-userpanel="off"] .me { display: none; }
+    :root[data-sidehead="off"] .side-head { display: none; }
+
+    :root[data-topbar="off"] .top { display: none; }
+    :root[data-callbtns="off"] #top .act[title="Join voice"], :root[data-callbtns="off"] #top .act[title="Start video"] { display: none; }
+    :root[data-avatars="off"] .msg .avatar { display: none; }
+    :root[data-avatars="off"] .msg { gap: 0; }
+    :root[data-timestamps="off"] .msg .when { display: none; }
+    :root[data-dividers="off"] .day { display: none; }
+    :root[data-banner="off"] .banner { display: none; }
+    :root[data-composer-sticker="off"] #sticker-btn { display: none; }
+    :root[data-composer-send="off"] #send-btn { display: none; }
+    :root[data-hover="off"] .msg:hover { background: none; }
+
+    :root[data-radius="sharp"] { --r: 2px; } :root[data-radius="round"] { --r: 18px; }
+    :root[data-radius] .chan, :root[data-radius] .dm-row, :root[data-radius] .nav-btn, :root[data-radius] .btn, :root[data-radius] .box, :root[data-radius] .msg, :root[data-radius] .mem { border-radius: var(--r); }
+    :root[data-uifont="serif"] body { font-family: "New York", Georgia, serif; }
+    :root[data-uifont="mono"] body { font-family: ui-monospace, Menlo, "SF Mono", monospace; }
+    :root[data-uifont="rounded"] body { font-family: ui-rounded, "SF Pro Rounded", "Nunito", -apple-system, sans-serif; }
+
     /* preferences that actually change things */
     :root[data-density="compact"] .msg { padding-top: 1px; padding-bottom: 1px; }
     :root[data-density="compact"] .msg .avatar { width: 26px; height: 26px; font-size: .68rem; }
