@@ -1284,7 +1284,7 @@ function signInDialog(after, title) {
     const btns = el('div', { className: 'sg-btns' }, provider('discord', 'Discord'), provider('github', 'GitHub'));
     const or = el('div', { className: 'sg-or' }, el('span', {}, 'or with your email')), byEmail = el('div', { className: 'sg-row' }, email, send);
     // only offer what the project has switched on (a button for one that's off would lead to an error page)
-    Store.providers().then((on) => {
+    (Store.providers ? Store.providers() : Promise.resolve({ discord: true, github: true, email: true })).then((on) => {
       for (const b of [...btns.children]) if (!on[b.classList.contains('discord') ? 'discord' : 'github']) b.remove();
       if (!btns.children.length) { btns.remove(); or.remove(); }
       if (!on.email) { or.remove(); byEmail.remove(); }
