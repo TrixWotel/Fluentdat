@@ -2,7 +2,7 @@
 // there are direct messages, a friends list, a member list, status (online/idle/dnd/invisible), a profile you can
 // customise, stickers you can make, and your own CSS themes you can edit. UI icons are inline SVG (not OS emoji).
 // It all saves locally for now; swapping store.js for a GitHub-backed one is what makes it multi-person.
-import { Store } from './store.js';
+import { Store } from './backend.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k)); return n; };
@@ -33,6 +33,14 @@ const ICON = {
   id: '<rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="12" r="2.5"/><path d="M14 10h5M14 14h5"/>',
   palette: '<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1 0 1.6-.8 1.6-1.6 0-.4-.2-.8-.5-1.1-.3-.3-.5-.7-.5-1.1 0-.9.7-1.6 1.6-1.6H16c3.3 0 6-2.7 6-6 0-4.9-4.5-9.6-10-9.6z"/><circle cx="7.5" cy="11" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="16.5" cy="11" r="1.3" fill="currentColor" stroke="none"/>',
   dot: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>', chevD: '<path d="M6 9l6 6 6-6"/>', chevR: '<path d="M9 18l6-6-6-6"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
+  bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
+  keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
 };
 const svgHTML = (n, s) => `<svg class="ic" viewBox="0 0 24 24"${s ? ` width="${s}" height="${s}"` : ''}>${ICON[n] || ''}</svg>`;
 const icon = (n, s) => { const d = document.createElement('div'); d.innerHTML = svgHTML(n, s); return d.firstElementChild; };
@@ -86,10 +94,17 @@ applyTheme(currentTheme());
 const cssVar = (v) => getComputedStyle(document.documentElement).getPropertyValue('--' + v).trim() || '#000000';
 
 // ---------- state ----------
-let view = 'server', serverId = Store.servers()[0].id, channelId = firstChannel(serverId), dmId = null, friendsTab = 'online', showMembers = true;
+let view = 'server', serverId = (Store.servers()[0] || {}).id || null, channelId = null, dmId = null, friendsTab = 'online', showMembers = true;
+// keep the chosen server/channel pointing at something real (data can arrive or vanish while you're looking)
+function ensureSelection() {
+  const svs = Store.servers();
+  if (!serverId || !svs.some((s) => s.id === serverId)) serverId = svs[0] ? svs[0].id : null;
+  const chans = serverId ? Store.channels(serverId) : [];
+  if (!channelId || !chans.some((c) => c.id === channelId)) channelId = firstChannel(serverId);
+}
 const collapsed = new Set();
-function firstChannel(sv) { const c = Store.channels(sv).find((x) => x.kind === 'text') || Store.channels(sv)[0]; return c ? c.id : null; }
-$('#backend-name').textContent = Store.backend;
+function firstChannel(sv) { if (!sv) return null; const c = Store.channels(sv).find((x) => x.kind === 'text') || Store.channels(sv)[0]; return c ? c.id : null; }
+
 
 // ---------- the server rail ----------
 function renderRail() {
@@ -112,11 +127,15 @@ function renderSide() {
     const friends = el('button', { className: 'nav-btn' + (!dmId ? ' on' : ''), onclick: () => { dmId = null; renderAll(); } }, icon('users'), 'Friends');
     const list = el('div', {}, el('div', { className: 'cat' }, el('span', { className: 'nm' }, 'Direct Messages')));
     for (const d of Store.dmList()) {
-      const row = el('button', { className: 'dm-row' + (dmId === d.id ? ' on' : ''), onclick: () => { dmId = d.id; renderAll(); } },
+      const row = el('button', { className: 'dm-row' + (dmId === d.id ? ' on' : ''), onclick: () => { dmId = d.id; Store.setActive('dm', d.id); renderAll(); } },
         avatarEl(d.user, { size: 32 }), el('div', { className: 'who' }, el('div', { className: 'nm2' }, d.user.name)));
       list.append(row);
     }
     body.replaceChildren(friends, list);
+  } else if (!serverId || !Store.server(serverId)) {
+    head.className = 'side-head'; head.replaceChildren(Store.syncState().loading ? 'Loading…' : 'No servers');
+    body.replaceChildren(el('div', { style: 'color:var(--muted);padding:14px 10px;font-size:.9rem' },
+      Store.syncState().loading ? 'Fetching your servers from GitHub…' : 'Make one with the + in the server rail.'));
   } else {
     const server = Store.server(serverId);
     head.className = 'side-head btn-like';
@@ -134,7 +153,7 @@ function renderSide() {
       body.append(header);
       if (isCollapsed) continue;
       for (const c of mine) {
-        const row = el('button', { className: 'chan' + (c.id === channelId && view === 'server' ? ' on' : ''), onclick: () => { channelId = c.id; closeCall(); renderAll(); $('#app').classList.remove('show-side'); } },
+        const row = el('button', { className: 'chan' + (c.id === channelId && view === 'server' ? ' on' : ''), onclick: () => { channelId = c.id; Store.setActive('channel', c.id); closeCall(); renderAll(); $('#app').classList.remove('show-side'); } },
           icon(c.kind === 'voice' ? 'volume' : 'hash', 18), el('span', { className: 'nm' }, c.name));
         if (chans.length > 1) { const x = el('span', { className: 'x', title: 'Delete channel', onclick: (e) => { e.stopPropagation(); if (confirm(`Delete #${c.name}?`)) { Store.removeChannel(c.id); if (channelId === c.id) channelId = firstChannel(serverId); renderAll(); } } }, icon('x')); row.append(x); }
         body.append(row);
@@ -145,7 +164,7 @@ function renderSide() {
 
 // ---------- the user panel ----------
 function renderMe() {
-  const gear = el('button', { className: 'gear', title: 'Settings', onclick: openSettings }); gear.append(icon('gear'));
+  const gear = el('button', { className: 'gear', title: 'Settings', onclick: () => openUserSettings('account') }); gear.append(icon('gear'));
   const av = avatarEl(asMember()); av.onclick = (e) => { e.stopPropagation(); showAccount(e.currentTarget); };
   const stName = (STATUSES.find((s) => s[0] === me.status) || [, 'Online'])[1];
   $('#me-panel').replaceChildren(av, el('div', { className: 'who' }, el('div', { className: 'nm' }, me.name), el('div', { className: 'st' }, me.pronouns || stName)), gear);
@@ -157,7 +176,9 @@ function renderTop() {
   const parts = [menu];
   if (view === 'home' && !dmId) { parts.push(el('span', { className: 'hash' }, icon('users')), el('span', {}, 'Friends')); }
   else if (view === 'home') { const u = Store.dmUser(dmId) || { name: '?' }; parts.push(avatarEl(u, { size: 24 }), el('span', {}, u.name), spacer(), callBtns()); }
-  else { const c = Store.channel(channelId); parts.push(el('span', { className: 'hash' }, icon(c.kind === 'voice' ? 'volume' : 'hash')), el('span', {}, c.name), spacer(), callBtns(), membersBtn()); }
+  else { const c = Store.channel(channelId);
+    if (!c) parts.push(el('span', {}, Store.syncState().loading ? 'Loading…' : 'Fluentdat'));
+    else parts.push(el('span', { className: 'hash' }, icon(c.kind === 'voice' ? 'volume' : 'hash')), el('span', {}, c.name), spacer(), callBtns(), membersBtn()); }
   top.replaceChildren(...parts.flat().filter(Boolean));
 }
 const spacer = () => el('span', { className: 'spacer' });
@@ -193,26 +214,44 @@ function messageList(msgs) {
 function renderContent() {
   const content = $('#content'), composer = $('#composer');
   if (view === 'home' && !dmId) { content.replaceChildren(friendsPage()); composer.hidden = true; return; }
+  const ch = view === 'home' ? null : Store.channel(channelId);
+  if (view === 'server' && !ch) {
+    content.replaceChildren(el('div', { className: 'empty-note' }, Store.syncState().loading ? 'Loading your servers…' : 'No channel here yet. Make one from the server menu.'));
+    composer.hidden = true; return;
+  }
   const msgs = view === 'home' ? Store.dm(dmId) : Store.messages(channelId);
   content.replaceChildren(messageList(msgs));
-  const name = view === 'home' ? (Store.dmUser(dmId) || {}).name : (Store.channel(channelId).kind === 'voice' ? '' : '#') + Store.channel(channelId).name;
+  const name = view === 'home' ? (Store.dmUser(dmId) || {}).name : (ch.kind === 'voice' ? '' : '#') + ch.name;
   $('#input').placeholder = 'Message ' + name;
   composer.hidden = false;
   content.scrollTop = content.scrollHeight;
 }
 
 // ---------- members ----------
+function memberList() {
+  const real = Store.members && Store.members();
+  return real && real.length ? real : [asMember(), ...Store.friends()];
+}
 function renderMembers() {
   const box = $('#members');
   if (view !== 'server' || !showMembers) { box.replaceChildren(); return; }
-  const all = [asMember(), ...Store.friends()];
+  const all = memberList();
   const online = all.filter((m) => m.status && m.status !== 'offline' && m.status !== 'invisible');
   const offline = all.filter((m) => !online.includes(m));
   const grp = (title, list) => list.length ? [el('div', { className: 'mem-cat' }, `${title} — ${list.length}`), ...list.map((m) => el('button', { className: 'mem' + (online.includes(m) ? '' : ' off'), onclick: (e) => showProfile(m, e.currentTarget) }, avatarEl(m, { size: 32 }), el('span', { className: 'nm', style: `--who:${m.color}` }, m.name)))] : [];
   box.replaceChildren(...grp('Online', online), ...grp('Offline', offline));
 }
 
-function renderAll() { renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); $('#app').classList.toggle('show-members', showMembers && view === 'server'); }
+function renderAll() { ensureSelection(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner(); $('#app').classList.toggle('show-members', showMembers && view === 'server'); }
+function renderBanner() {
+  const b = $('#banner'), st = Store.syncState(), acc = Store.account();
+  b.replaceChildren();
+  if (acc) {
+    const when = st.lastSync ? 'synced ' + new Date(st.lastSync).toLocaleTimeString() : 'syncing…';
+    b.append(st.error ? `Sync trouble: ${st.error}` : `Synced with GitHub as ${acc.login} — ${when}`);
+  } else b.append('Saving in this browser only. Sign in with GitHub to share with your team.');
+  b.onclick = () => openUserSettings(acc ? 'sync' : 'account');
+}
 
 // ---------- friends page ----------
 function friendsPage() {
@@ -250,7 +289,7 @@ function showProfile(user, anchor) {
   closePop();
   const mine = user.me || user.name === me.name;
   const actions = el('div', { className: 'card' });
-  if (mine) actions.append(el('button', { onclick: () => { closePop(); openSettings(); } }, icon('edit'), 'Edit Profile'));
+  if (mine) actions.append(el('button', { onclick: () => { closePop(); openUserSettings('profile'); } }, icon('edit'), 'Edit Profile'));
   else {
     actions.append(el('button', { onclick: () => { const id = Store.ensureDM(normFriend(user)); view = 'home'; dmId = id; closePop(); renderAll(); } }, icon('message'), 'Message'));
     if (!Store.friends().some((f) => f.id === (user.id || 'u_' + user.name.toLowerCase())) && !user.bot) actions.append(el('hr'), el('button', { onclick: () => { Store.addFriend(normFriend(user)); closePop(); toast(`Added ${user.name} locally.`); } }, icon('personAdd'), 'Add Friend'));
@@ -270,7 +309,7 @@ function showAccount(anchor) {
   closePop();
   const row = (ic, label, extra, onclick) => el('button', { onclick }, icon(ic), el('span', {}, label), extra || null);
   const card = el('div', { className: 'card' },
-    row('edit', 'Edit Profile', null, () => { closePop(); openSettings(); }),
+    row('edit', 'Edit Profile', null, () => { closePop(); openUserSettings('profile'); }),
     el('hr'), row('dot', 'Set Status', el('span', { className: 'chev' }, icon('chevR', 16)), (e) => { e.stopPropagation(); statusMenu(); }),
     el('hr'), row('palette', 'Themes', el('span', { className: 'chev' }, icon('chevR', 16)), () => { closePop(); openThemes(); }),
     el('hr'), row('id', 'Copy User ID', null, () => { navigator.clipboard?.writeText(me.id).then(() => toast('User ID copied.'), () => toast(me.id)); }));
@@ -434,6 +473,8 @@ function newChannel(categoryId) { const n = prompt('New channel name'); if (!n) 
 function serverMenu(anchor) {
   closePop();
   pop = el('div', { className: 'pop', style: 'width:220px' }, el('div', { className: 'card', style: 'margin:0' },
+    el('button', { onclick: () => { closePop(); openServerSettings(serverId); } }, icon('gear'), 'Server Settings'),
+    el('hr'),
     el('button', { onclick: () => { closePop(); const n = prompt('New channel name'); if (n) { channelId = Store.addChannel(serverId, Store.categories(serverId)[0]?.id, n); renderAll(); } } }, icon('plus'), 'Create Channel'),
     el('hr'), el('button', { onclick: () => { closePop(); const n = prompt('New category name'); if (n) { Store.addCategory(serverId, n); renderAll(); } } }, icon('plus'), 'Create Category')));
   document.body.append(pop); placePop(anchor);
@@ -446,7 +487,7 @@ function toast(text) { let t = $('#toast'); if (!t) { t = el('div', { id: 'toast
 $('#sticker-btn').append(icon('smile')); $('#send-btn').append(icon('send'));
 const input = $('#input');
 input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(innerHeight * 0.4, input.scrollHeight) + 'px'; });
-input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && prefs.sendOnEnter) { e.preventDefault(); send(); } });
 $('#send-btn').onclick = () => { send(); input.focus(); };
 $('#sticker-btn').onclick = (e) => { e.stopPropagation(); togglePicker(); };
 document.addEventListener('click', (e) => { if (picker && !picker.contains(e.target) && !$('#sticker-btn').contains(e.target)) closePicker(); if (pop && !pop.contains(e.target) && !e.target.closest('.msg .nm, .msg .avatar, #me-panel .avatar, .mem, .side-head')) closePop(); });
@@ -455,6 +496,389 @@ $('#c-cam').onclick = () => { if (!stream) return; camOn = !camOn; stream.getVid
 $('#c-leave').onclick = closeCall;
 addEventListener('resize', closePop);
 
-Store.onChange(() => { renderRail(); renderContent(); renderSide(); renderMembers(); if (picker) closePicker(); });
+Store.onChange(() => { ensureSelection(); renderRail(); renderContent(); renderSide(); renderMembers(); if (picker) closePicker(); alertNew(); });
+
+// a nudge when something new lands while you're looking elsewhere
+let lastSeen = 0;
+function alertNew() {
+  const msgs = view === 'home' && dmId ? Store.dm(dmId) : (view === 'server' && channelId ? Store.messages(channelId) : []);
+  const latest = msgs.length ? msgs[msgs.length - 1] : null;
+  if (!latest || latest.ts <= lastSeen) { if (latest) lastSeen = Math.max(lastSeen, latest.ts); return; }
+  const mine = latest.user && (latest.user.login ? latest.user.login === (Store.account() || {}).login : latest.user.name === me.name);
+  lastSeen = latest.ts;
+  if (mine || !document.hidden) return;
+  if (prefs.notify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    try { new Notification(latest.user.name + ' in Fluentdat', { body: (latest.text || 'sent a sticker').slice(0, 120) }); } catch {}
+  }
+  if (prefs.sound) blip();
+}
+function blip() {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    const ctx = new C(), o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = 660; g.gain.value = 0.04;
+    o.connect(g); g.connect(ctx.destination); o.start();
+    o.stop(ctx.currentTime + 0.09);
+    setTimeout(() => ctx.close(), 300);
+  } catch {}
+}
 Store.init();
 renderAll();
+
+// ===================== preferences =====================
+const DEFAULT_PREFS = { density: 'cozy', fontSize: 15, reduceMotion: false, highContrast: false, notify: false, sendOnEnter: true, dmFrom: 'anyone' };
+function loadPrefs() { try { return { ...DEFAULT_PREFS, ...(JSON.parse(localStorage.getItem('fluentdat.prefs')) || {}) }; } catch { return { ...DEFAULT_PREFS }; } }
+let prefs = loadPrefs();
+function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
+function applyPrefs() {
+  const d = document.documentElement;
+  d.dataset.density = prefs.density;
+  d.dataset.motion = prefs.reduceMotion ? 'off' : 'on';
+  d.dataset.contrast = prefs.highContrast ? 'high' : 'normal';
+  document.body.style.fontSize = Math.max(12, Math.min(20, prefs.fontSize)) + 'px';
+}
+applyPrefs();
+
+// ===================== settings building blocks =====================
+function sw(on, onchange) { const b = el('button', { className: 'sw' + (on ? ' on' : ''), role: 'switch' }); b.onclick = () => { const next = !b.classList.contains('on'); b.classList.toggle('on', next); onchange(next); }; return b; }
+function row2(title, desc, control) { return el('div', { className: 'row2' }, el('div', { className: 'lbl' }, el('b', {}, title), desc ? el('span', {}, desc) : null), control || null); }
+function sel(value, options, onchange) { const s = el('select'); for (const [v, label] of options) s.append(el('option', { value: v, textContent: label, selected: v === String(value) })); s.onchange = () => onchange(s.value); return s; }
+function iconBtn(name, title, onclick, cls) { const b = el('button', { title, className: cls || '', onclick }); b.append(icon(name, 17)); return b; }
+
+function overlay(navItems, firstSection, render) {
+  let section = firstSection;
+  const nav = el('div', { className: 'sx-nav' }), body = el('div', { className: 'sx-body' });
+  const box = el('div', { className: 'sx' }, nav, body);
+  const close = el('button', { className: 'sx-close', title: 'Close (Esc)', onclick: () => shut() }); close.append(icon('x', 20));
+  box.append(close);
+  function shut() { box.remove(); document.removeEventListener('keydown', esc); renderAll(); }
+  const esc = (e) => { if (e.key === 'Escape') shut(); };
+  document.addEventListener('keydown', esc);
+  function draw() {
+    nav.replaceChildren();
+    for (const item of navItems) {
+      if (item.head) { nav.append(el('h4', {}, typeof item.head === 'function' ? item.head() : item.head)); continue; }
+      if (item.hr) { nav.append(el('hr')); continue; }
+      const b = el('button', { className: (item.id === section ? 'on ' : '') + (item.cls || ''), onclick: () => { if (item.action) return item.action(shut); section = item.id; draw(); } });
+      if (item.icon) b.append(icon(item.icon, 17));
+      b.append(el('span', {}, item.label));
+      nav.append(b);
+    }
+    body.replaceChildren(el('div', { className: 'sx-inner' }, ...[render(section, draw, shut)].flat().filter(Boolean)));
+  }
+  draw();
+  document.body.append(box);
+  return { shut, go: (s) => { section = s; draw(); } };
+}
+
+// ===================== signing in to GitHub =====================
+function signInDialog(after) {
+  const tok = el('input', { type: 'password', placeholder: 'github_pat_...', style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);font:inherit' });
+  const msg = el('div', { style: 'color:#e5534b;font-size:.85rem;min-height:1.2em;margin-top:8px' });
+  const go = el('button', { className: 'btn primary', textContent: 'Sign in' });
+  const scrim = el('div', { className: 'scrim' }, el('div', { className: 'dialog' },
+    el('h3', {}, 'Sign in with GitHub'),
+    el('div', { className: 'note-box' },
+      el('div', {}, 'Fluentdat keeps your team’s messages in the private ', el('b', {}, 'Fluentdat-Data'), ' repository. It needs a fine grained token so it can read and write there. The token stays in this browser only.'),
+      el('ol', {},
+        el('li', {}, 'On GitHub: Settings → Developer settings → Personal access tokens → ', el('b', {}, 'Fine-grained tokens'), ' → Generate new token'),
+        el('li', {}, 'Repository access: ', el('b', {}, 'Only select repositories'), ' → Fluentdat-Data'),
+        el('li', {}, 'Permissions → Repository permissions → ', el('b', {}, 'Contents: Read and write')),
+        el('li', {}, 'Generate it, copy the token, and paste it below'))),
+    el('div', { className: 'field', style: 'margin-top:16px' }, el('label', {}, 'Token'), tok), msg,
+    el('div', { className: 'row' }, el('button', { className: 'btn', textContent: 'Cancel', onclick: () => scrim.remove() }), go)));
+  go.onclick = async () => {
+    const t = tok.value.trim(); if (!t) return;
+    go.textContent = 'Checking…'; go.disabled = true; msg.textContent = '';
+    try { const r = await Store.signIn(t); adoptProfile(); scrim.remove(); toast(`Signed in as ${r.login}. Your team’s data is syncing.`); renderAll(); after && after(); }
+    catch (e) { msg.textContent = String(e.message || e); go.textContent = 'Sign in'; go.disabled = false; }
+  };
+  tok.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
+  scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
+  document.body.append(scrim); tok.focus();
+}
+// on signing in: take the profile that's already on GitHub, or put this browser's up there
+function adoptProfile() {
+  if (!Store.signedIn) return;
+  const p = Store.myProfile();
+  if (p && p.name) { me = { ...me, ...p }; saveMe(); }
+  else Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status });
+}
+const pushProfile = () => { if (Store.signedIn) Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status }); };
+
+// ===================== user settings =====================
+function openUserSettings(section = 'account') {
+  const nav = [
+    { head: 'User Settings' },
+    { id: 'account', label: 'My Account', icon: 'user' },
+    { id: 'profile', label: 'Profile', icon: 'edit' },
+    { id: 'sync', label: 'Data & Sync', icon: 'cloud' },
+    { hr: true }, { head: 'App Settings' },
+    { id: 'appearance', label: 'Appearance', icon: 'palette' },
+    { id: 'notifications', label: 'Notifications', icon: 'bell' },
+    { id: 'privacy', label: 'Privacy & Safety', icon: 'shield' },
+    { id: 'accessibility', label: 'Accessibility', icon: 'eye' },
+    { id: 'keys', label: 'Keyboard Shortcuts', icon: 'keyboard' },
+    { hr: true },
+    { id: 'about', label: 'About', icon: 'info' },
+    { id: 'signout', label: Store.signedIn ? 'Sign Out' : 'Reset Local Data', cls: 'danger', icon: 'logout', action: (shut) => {
+        if (Store.signedIn) { if (confirm('Sign out? Your team data stays on GitHub; this browser goes back to local only.')) { Store.signOut(); shut(); toast('Signed out.'); } }
+        else if (confirm('Clear everything stored in this browser (servers, messages, stickers)?')) { Store.reset(); shut(); toast('Local data cleared.'); }
+      } },
+  ];
+  openUserSettings.ref = overlay(nav, section, (sec, redraw, shut) => {
+    if (sec === 'account') return accountPane(redraw);
+    if (sec === 'profile') return profilePane(redraw);
+    if (sec === 'sync') return syncPane(redraw);
+    if (sec === 'appearance') return appearancePane(redraw);
+    if (sec === 'notifications') return notificationsPane(redraw);
+    if (sec === 'privacy') return privacyPane(redraw);
+    if (sec === 'accessibility') return accessibilityPane(redraw);
+    if (sec === 'keys') return keysPane();
+    return aboutPane();
+  });
+}
+
+function accountPane(redraw) {
+  const acc = Store.account();
+  const out = [el('h2', {}, 'My Account'), el('p', { className: 'sub' }, 'Who you are in Fluentdat, and where your data lives.')];
+  out.push(el('div', { style: 'display:flex;align-items:center;gap:16px;padding:18px;background:var(--side);border-radius:12px;margin-bottom:12px' },
+    avatarEl(asMember(), { size: 64 }),
+    el('div', { style: 'flex:1;min-width:0' },
+      el('div', { style: 'font-weight:700;color:var(--bright);font-size:1.15rem' }, me.name),
+      el('div', { style: 'color:var(--muted);font-size:.86rem' }, acc ? '@' + acc.login + ' on GitHub' : 'Signed out — this browser only'),
+      me.about ? el('div', { style: 'margin-top:6px;font-size:.88rem' }, me.about) : null),
+    el('button', { className: 'btn', onclick: () => openUserSettings.ref.go('profile') }, 'Edit Profile')));
+  out.push(el('h3', {}, 'Account'));
+  out.push(row2('GitHub account', acc ? 'Signed in. Messages, profiles and DMs sync with your team.' : 'Sign in to share servers, messages and DMs with your team.',
+    acc ? el('button', { className: 'btn', onclick: () => { if (confirm('Sign out of GitHub?')) { Store.signOut(); redraw(); renderAll(); } } }, 'Sign Out')
+      : el('button', { className: 'btn primary', onclick: () => signInDialog(redraw) }, 'Sign in with GitHub')));
+  out.push(row2('User ID', 'Handy when someone needs to add you.', el('button', { className: 'btn', onclick: () => { const v = acc ? acc.login : me.id; navigator.clipboard?.writeText(v).then(() => toast('Copied ' + v), () => toast(v)); } }, 'Copy')));
+  out.push(row2('Status', 'How you show up to everyone else.', sel(me.status, STATUSES, (v) => { me.status = v; saveMe(); pushProfile(); renderAll(); })));
+  return out;
+}
+
+function profilePane(redraw) {
+  const name = el('input', { type: 'text', value: me.name, maxLength: 24 });
+  const pron = el('input', { type: 'text', value: me.pronouns || '', maxLength: 24, placeholder: 'she/her, they/them…' });
+  const about = el('textarea', { value: me.about || '', maxLength: 300, placeholder: 'A little about you', style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);font:inherit;min-height:80px;resize:vertical' });
+  const preview = avatarEl({ name: me.name, color: me.color, avatar: me.avatar }, { size: 72 });
+  let color = me.color, avatar = me.avatar || '';
+  const setAv = (d) => { avatar = d; const f = preview.querySelector('.fill'); f.style.background = color; f.replaceChildren(d ? el('img', { src: d, alt: '' }) : document.createTextNode(initials(name.value))); };
+  const swatches = el('div', { className: 'swatches' }, ...COLORS.map((c) => { const b = el('button', { className: c === color ? 'on' : '', style: `background:${c}` }); b.onclick = () => { color = c; [...swatches.children].forEach((x) => x.classList.remove('on')); b.classList.add('on'); preview.querySelector('.fill').style.background = c; }; return b; }));
+  const save = () => { me = { ...me, name: name.value.trim().slice(0, 24) || 'You', color, avatar, pronouns: pron.value.trim(), about: about.value.trim() }; saveMe(); pushProfile(); renderAll(); toast('Profile saved.'); };
+  return [el('h2', {}, 'Profile'), el('p', { className: 'sub' }, Store.signedIn ? 'This is what your teammates see.' : 'Saved in this browser. Sign in to share it with your team.'),
+    el('h3', {}, 'Avatar'),
+    el('div', { className: 'avatar-edit', style: 'padding:12px 0' }, preview, el('div', {},
+      el('button', { className: 'btn', onclick: () => pickFile(async (f) => { try { setAv(scaled(await readImage(f), 128)); } catch { toast('Couldn’t read that image.'); } }) }, 'Upload…'), ' ',
+      el('button', { className: 'btn ghost', onclick: () => setAv('') }, 'Use colour'),
+      el('div', { style: 'margin-top:10px' }, swatches))),
+    el('h3', {}, 'Details'),
+    row2('Display name', 'Shown on every message you send.', name),
+    row2('Pronouns', 'Appears under your name on your profile card.', pron),
+    el('div', { style: 'padding:14px 0' }, el('div', { style: 'font-weight:600;color:var(--bright);margin-bottom:6px' }, 'About me'), about),
+    el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: save }, 'Save Profile'))];
+}
+
+function syncPane(redraw) {
+  const st = Store.syncState(), acc = Store.account();
+  const out = [el('h2', {}, 'Data & Sync'), el('p', { className: 'sub' }, 'Where Fluentdat keeps your servers, messages and profile.')];
+  out.push(row2('Storing in', acc ? st.repo + ' (private repository)' : 'This browser only (nothing leaves your device)',
+    el('span', { className: 'chip ' + (acc ? 'good' : '') }, acc ? 'GitHub' : 'Local')));
+  if (acc) {
+    out.push(row2('Last synced', st.lastSync ? new Date(st.lastSync).toLocaleTimeString() : 'not yet', el('button', { className: 'btn', onclick: () => { Store.syncNow(); toast('Syncing…'); setTimeout(redraw, 900); } }, 'Sync Now')));
+    if (st.error) out.push(el('div', { className: 'note-box', style: 'border:1px solid #e5534b;color:#e5534b;margin-top:10px' }, st.error));
+    out.push(el('h3', {}, 'How it works'));
+    out.push(el('div', { className: 'note-box' }, 'Every message is a commit in the private repository, written with your own token. Fluentdat checks for new messages every few seconds, so things land a second or two apart rather than instantly. Anyone you want in the team needs to be a collaborator on that repository and sign in with their own token.'));
+  } else {
+    out.push(el('div', { className: 'note-box', style: 'margin-top:10px' }, 'Right now everything is kept in this browser. Clearing site data would wipe it, and nobody else can see it. Sign in with GitHub to share with your team and keep a backup.'));
+    out.push(el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: () => signInDialog(redraw) }, 'Sign in with GitHub')));
+  }
+  out.push(el('h3', {}, 'Your data'));
+  out.push(row2('Export', 'Download everything this browser has as a JSON file.', el('button', { className: 'btn', onclick: () => {
+    const blob = new Blob([Store.dump()], { type: 'application/json' });
+    const a = el('a', { href: URL.createObjectURL(blob), download: 'fluentdat-data.json' }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } }, 'Export JSON')));
+  out.push(row2('Clear local data', 'Servers, messages and stickers stored in this browser.', el('button', { className: 'btn danger', onclick: () => { if (confirm('Clear everything stored in this browser?')) { Store.reset && Store.reset(); toast('Local data cleared.'); renderAll(); } } }, 'Clear')));
+  return out;
+}
+
+function appearancePane(redraw) {
+  const cur = currentTheme();
+  const themeRow = el('div', { className: 'themes', style: 'flex-wrap:wrap' },
+    ...BUILTIN.map(([id, label]) => el('button', { className: cur === id ? 'on' : '', onclick: () => { applyTheme(id); renderAll(); redraw(); } }, label)),
+    ...loadThemes().map((t) => el('button', { className: cur === t.id ? 'on' : '', onclick: () => { applyTheme(t.id); renderAll(); redraw(); } }, el('span', { className: 'swatch-dot', style: `background:${t.vars.accent || '#5b7fd6'}` }), t.name)));
+  return [el('h2', {}, 'Appearance'), el('p', { className: 'sub' }, 'Themes you can edit, and how messages are laid out.'),
+    el('h3', {}, 'Theme'), el('div', { style: 'padding:10px 0' }, themeRow),
+    el('div', { className: 'row', style: 'justify-content:flex-start' },
+      el('button', { className: 'btn primary', onclick: () => editTheme(null) }, 'Make a Theme'),
+      el('button', { className: 'btn', onclick: () => openThemes() }, 'Manage Themes…')),
+    el('h3', {}, 'Messages'),
+    row2('Display', 'Cozy gives each message room. Compact fits more on screen.', sel(prefs.density, [['cozy', 'Cozy'], ['compact', 'Compact']], (v) => { prefs.density = v; savePrefs(); })),
+    row2('Text size', 'Everything in the app scales with this.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })())];
+}
+
+function notificationsPane(redraw) {
+  const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
+  return [el('h2', {}, 'Notifications'), el('p', { className: 'sub' }, 'Get a nudge when a new message arrives while Fluentdat is in the background.'),
+    el('h3', {}, 'Desktop notifications'),
+    row2('Notify me about new messages', perm === 'denied' ? 'Blocked by the browser — allow notifications for this site in your browser settings.' : 'Only when the tab isn’t focused.',
+      sw(prefs.notify && perm === 'granted', async (on) => {
+        if (!on) { prefs.notify = false; savePrefs(); return; }
+        if (typeof Notification === 'undefined') { toast('This browser has no notifications.'); return redraw(); }
+        const p = await Notification.requestPermission();
+        prefs.notify = p === 'granted'; savePrefs();
+        if (p !== 'granted') toast('The browser didn’t allow notifications.');
+        redraw();
+      })),
+    row2('Permission', 'What the browser currently allows.', el('span', { className: 'chip ' + (perm === 'granted' ? 'good' : perm === 'denied' ? 'bad' : '') }, perm)),
+    el('h3', {}, 'Sounds'),
+    row2('Message sound', 'A short blip for new messages. (Off by default so nothing surprises you.)', sw(!!prefs.sound, (on) => { prefs.sound = on; savePrefs(); }))];
+}
+
+function privacyPane() {
+  return [el('h2', {}, 'Privacy & Safety'), el('p', { className: 'sub' }, 'What Fluentdat stores, and who can reach you.'),
+    el('h3', {}, 'Direct messages'),
+    row2('Who can DM me', 'Applies to new conversations started from your profile.', sel(prefs.dmFrom, [['anyone', 'Anyone'], ['friends', 'Friends only'], ['none', 'No one']], (v) => { prefs.dmFrom = v; savePrefs(); })),
+    el('h3', {}, 'What Fluentdat knows'),
+    el('div', { className: 'note-box' },
+      el('div', {}, 'There is no Fluentdat server and no analytics. Nothing is tracked, and nothing is sent anywhere except:'),
+      el('ol', {},
+        el('li', {}, 'Signed out: everything stays in this browser.'),
+        el('li', {}, 'Signed in: your messages and profile go to your own private GitHub repository, using your own token.'),
+        el('li', {}, 'Your token is kept in this browser only and is never put in a message or committed.'))),
+    el('h3', {}, 'Be aware'),
+    el('div', { className: 'note-box' }, 'Anyone who can read the data repository can read every message in it, and git keeps history, so a deleted message still exists in earlier commits. Treat it like a shared notebook, not a secure vault.')];
+}
+
+function accessibilityPane() {
+  return [el('h2', {}, 'Accessibility'), el('p', { className: 'sub' }, 'Make Fluentdat easier to read and use.'),
+    row2('Reduce motion', 'Turns off animations and transitions throughout the app.', sw(prefs.reduceMotion, (on) => { prefs.reduceMotion = on; savePrefs(); })),
+    row2('Higher contrast', 'Stronger text and outlines around channels.', sw(prefs.highContrast, (on) => { prefs.highContrast = on; savePrefs(); })),
+    row2('Text size', 'The same control as in Appearance.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })()),
+    row2('Enter sends the message', 'Off means Enter makes a new line, and you send with the button.', sw(prefs.sendOnEnter, (on) => { prefs.sendOnEnter = on; savePrefs(); }))];
+}
+
+function keysPane() {
+  const keys = [['Enter', 'Send the message'], ['Shift + Enter', 'New line'], ['Esc', 'Close settings or a dialog'], ['/help', 'List the chat commands'], ['/roll, /flip', 'Dice and coin'], ['/me <action>', 'Write an action'], ['/nick <name>', 'Change your display name'], ['/theme <name>', 'Switch theme'], ['/clear', 'Empty the channel'], ['!ping', 'Flubot replies']];
+  return [el('h2', {}, 'Keyboard Shortcuts'), el('p', { className: 'sub' }, 'And the commands you can type into any channel.'),
+    el('div', { className: 'sx-list' }, ...keys.map(([k, what]) => el('div', { className: 'it' }, el('code', { style: 'background:var(--input);padding:3px 8px;border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:.85rem' }, k), el('span', { className: 'nm3', style: 'color:var(--muted)' }, what))))];
+}
+
+function aboutPane() {
+  return [el('h2', {}, 'About Fluentdat'), el('p', { className: 'sub' }, 'A chat app built from scratch, running entirely in your browser.'),
+    el('div', { className: 'note-box' },
+      el('div', {}, el('b', {}, 'Fluentdat'), ' — servers, channels, DMs, friends, stickers and themes, with no backend server of its own. The app is a static site; your data is either in this browser or in your own private GitHub repository.'),
+      el('ol', {}, el('li', {}, 'Built by TrixWotel'), el('li', {}, 'Map of the stack: static HTML, CSS and JavaScript modules — no framework, no build step'), el('li', {}, 'Data layer swaps between local storage and GitHub without the UI knowing'))),
+    el('h3', {}, 'Storage in use'),
+    row2('Backend', Store.backend, el('span', { className: 'chip ' + (Store.signedIn ? 'good' : '') }, Store.signedIn ? 'GitHub' : 'Local'))];
+}
+
+// ===================== server settings =====================
+function openServerSettings(svId, section = 'overview') {
+  const sv = Store.server(svId); if (!sv) return;
+  const nav = [
+    { head: () => (Store.server(svId) || sv).name },
+    { id: 'overview', label: 'Overview', icon: 'gear' },
+    { id: 'channels', label: 'Channels', icon: 'hash' },
+    { id: 'categories', label: 'Categories', icon: 'menu' },
+    { id: 'members', label: 'Members', icon: 'users' },
+    { id: 'invite', label: 'Invite People', icon: 'personAdd' },
+    { hr: true },
+    { id: 'danger', label: 'Delete Server', cls: 'danger', icon: 'trash' },
+  ];
+  overlay(nav, section, (sec, redraw, shut) => {
+    if (sec === 'overview') return svOverview(sv, redraw);
+    if (sec === 'channels') return svChannels(sv, redraw);
+    if (sec === 'categories') return svCategories(sv, redraw);
+    if (sec === 'members') return svMembers(sv);
+    if (sec === 'invite') return svInvite(sv);
+    return svDanger(sv, shut);
+  });
+}
+
+function svOverview(sv, redraw) {
+  const name = el('input', { type: 'text', value: sv.name, maxLength: 40 });
+  const preview = el('div', { className: 'srv', style: 'width:72px;height:72px;border-radius:22px' });
+  const drawIcon = () => { preview.replaceChildren(); if (sv.img) preview.append(el('img', { src: sv.img, alt: '' })); else if (ICON[sv.icon]) preview.append(icon(sv.icon, 32)); else preview.textContent = initials(name.value); };
+  drawIcon();
+  return [el('h2', {}, 'Server Overview'), el('p', { className: 'sub' }, 'The name and icon everyone sees in the server list.'),
+    el('h3', {}, 'Server icon'),
+    el('div', { className: 'avatar-edit', style: 'padding:12px 0' }, preview, el('div', {},
+      el('button', { className: 'btn', onclick: () => pickFile(async (f) => { try { Store.updateServer(sv.id, { img: scaled(await readImage(f), 128), icon: '' }); sv.img = Store.server(sv.id).img; drawIcon(); renderRail(); toast('Icon updated.'); } catch { toast('Couldn’t read that image.'); } }) }, 'Upload…'), ' ',
+      el('button', { className: 'btn ghost', onclick: () => { Store.updateServer(sv.id, { img: '', icon: 'bot' }); sv.img = ''; sv.icon = 'bot'; drawIcon(); renderRail(); } }, 'Use the robot'), ' ',
+      el('button', { className: 'btn ghost', onclick: () => { Store.updateServer(sv.id, { img: '', icon: '' }); sv.img = ''; sv.icon = ''; drawIcon(); renderRail(); } }, 'Use initials'))),
+    el('h3', {}, 'Name'),
+    row2('Server name', 'Shown at the top of the channel list.', name),
+    el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: () => { const v = name.value.trim(); if (!v) return; Store.updateServer(sv.id, { name: v }); sv.name = v; renderAll(); toast('Server updated.'); redraw(); } }, 'Save')),
+    el('h3', {}, 'Details'),
+    row2('Channels', String(Store.channels(sv.id).length), null),
+    row2('Categories', String(Store.categories(sv.id).length), null)];
+}
+
+function svChannels(sv, redraw) {
+  const cats = Store.categories(sv.id);
+  const list = el('div', { className: 'sx-list' });
+  for (const c of Store.channels(sv.id)) {
+    const row = el('div', { className: 'it' }, icon(c.kind === 'voice' ? 'volume' : 'hash', 17), el('span', { className: 'nm3' }, c.name),
+      sel(c.category || '', cats.map((x) => [x.id, x.name]), (v) => { Store.updateChannel(c.id, { category: v }); renderAll(); }),
+      sel(c.kind, [['text', 'Text'], ['voice', 'Voice']], (v) => { Store.updateChannel(c.id, { kind: v }); renderAll(); }),
+      iconBtn('edit', 'Rename', () => { const n = prompt('New channel name', c.name); if (n && n.trim()) { Store.updateChannel(c.id, { name: n.trim().replace(/\s+/g, '-').toLowerCase() }); renderAll(); redraw(); } }),
+      iconBtn('trash', 'Delete channel', () => { if (confirm(`Delete #${c.name} and its messages?`)) { Store.removeChannel(c.id); if (channelId === c.id) channelId = firstChannel(sv.id); renderAll(); redraw(); } }, 'del'));
+    list.append(row);
+  }
+  return [el('h2', {}, 'Channels'), el('p', { className: 'sub' }, 'Rename channels, move them between categories, or switch text and voice.'),
+    list,
+    el('div', { className: 'row', style: 'justify-content:flex-start' },
+      el('button', { className: 'btn primary', onclick: () => { const n = prompt('New channel name'); if (n && n.trim()) { Store.addChannel(sv.id, cats[0] && cats[0].id, n); renderAll(); redraw(); } } }, 'Create Channel'))];
+}
+
+function svCategories(sv, redraw) {
+  const list = el('div', { className: 'sx-list' });
+  for (const c of Store.categories(sv.id)) {
+    const n = Store.channels(sv.id).filter((x) => x.category === c.id).length;
+    list.append(el('div', { className: 'it' }, icon('menu', 17), el('span', { className: 'nm3' }, c.name), el('span', { style: 'color:var(--muted);font-size:.85rem' }, `${n} channel${n === 1 ? '' : 's'}`),
+      iconBtn('edit', 'Rename', () => { const v = prompt('New category name', c.name); if (v && v.trim()) { Store.updateCategory(c.id, { name: v.trim() }); renderAll(); redraw(); } }),
+      iconBtn('trash', 'Delete category and its channels', () => { if (confirm(`Delete “${c.name}” and its ${n} channel(s)?`)) { Store.removeCategory(c.id); channelId = firstChannel(sv.id); renderAll(); redraw(); } }, 'del')));
+  }
+  return [el('h2', {}, 'Categories'), el('p', { className: 'sub' }, 'Groups that channels sit under in the sidebar.'),
+    list,
+    el('div', { className: 'row', style: 'justify-content:flex-start' },
+      el('button', { className: 'btn primary', onclick: () => { const n = prompt('New category name'); if (n && n.trim()) { Store.addCategory(sv.id, n); renderAll(); redraw(); } } }, 'Create Category'))];
+}
+
+function svMembers(sv) {
+  const list = el('div', { className: 'sx-list' });
+  for (const m of memberList()) {
+    list.append(el('div', { className: 'it' }, avatarEl(m, { size: 32 }),
+      el('span', { className: 'nm3' }, m.name, m.me ? el('span', { className: 'chip', style: 'margin-left:8px' }, 'you') : null),
+      el('span', { style: 'color:var(--muted);font-size:.84rem' }, m.bot ? 'Bot' : (m.status && m.status !== 'offline' && m.status !== 'invisible' ? 'Online' : 'Offline'))));
+  }
+  return [el('h2', {}, 'Members'), el('p', { className: 'sub' }, Store.signedIn ? 'Everyone with a profile in the shared data repository.' : 'You and your friends in this browser. Sign in to see your real team.'), list];
+}
+
+function svInvite(sv) {
+  return [el('h2', {}, 'Invite People'), el('p', { className: 'sub' }, 'How someone else joins ' + sv.name + '.'),
+    Store.signedIn
+      ? el('div', { className: 'note-box' },
+        el('div', {}, 'Fluentdat has no invite links, because there is no server handing them out. Someone joins by being let into the data repository:'),
+        el('ol', {},
+          el('li', {}, 'On GitHub open ', el('b', {}, Store.syncState().repo), ' → Settings → Collaborators'),
+          el('li', {}, 'Add their GitHub username and let them accept the invite'),
+          el('li', {}, 'They open Fluentdat, make their own fine grained token for that repository with ', el('b', {}, 'Contents: Read and write'), ', and sign in'),
+          el('li', {}, 'Their messages and profile then show up here')))
+      : el('div', { className: 'note-box' }, 'You are not signed in, so this server only exists in your browser and nobody else can join it. Sign in with GitHub from User Settings first, then invite people to the data repository.'),
+    el('h3', {}, 'A caution'),
+    el('div', { className: 'note-box' }, 'Anyone you add can read everything in the repository, including old messages kept in the git history, and can write as themselves. Only add people you trust with all of it.')];
+}
+
+function svDanger(sv, shut) {
+  return [el('h2', {}, 'Delete Server'), el('p', { className: 'sub' }, 'This removes the server, its categories, channels and messages.'),
+    el('div', { className: 'note-box', style: 'border:1px solid #e5534b' }, 'There is no undo in the app. If you are signed in, the old contents stay in the git history of the data repository, but Fluentdat will not show them again.'),
+    el('div', { className: 'row', style: 'justify-content:flex-start' },
+      el('button', { className: 'btn danger', onclick: () => {
+        if (Store.servers().length < 2) return toast('This is your only server — make another one first.');
+        if (prompt(`Type the server name to delete it: ${sv.name}`) !== sv.name) return toast('Name did not match, nothing deleted.');
+        Store.removeServer(sv.id); serverId = Store.servers()[0].id; channelId = firstChannel(serverId); shut(); toast('Server deleted.');
+      } }, 'Delete ' + sv.name))];
+}

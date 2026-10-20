@@ -45,7 +45,7 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch
 function emit() { for (const cb of listeners) try { cb(); } catch {} }
 addEventListener('storage', (e) => { if (e.key === KEY) { data = null; load(); emit(); } });
 
-export const Store = {
+export const LocalStore = {
   backend: 'this browser',
   init: () => load(),
   onChange(cb) { listeners.add(cb); return () => listeners.delete(cb); },
@@ -65,6 +65,16 @@ export const Store = {
     return id;
   },
   removeChannel(id) { const d = load(); d.channels = d.channels.filter((c) => c.id !== id); delete d.messages[id]; save(); emit(); },
+  updateServer(id, patch) { const d = load(), s = d.servers.find((x) => x.id === id); if (s) Object.assign(s, patch); save(); emit(); },
+  updateChannel(id, patch) { const d = load(), c = d.channels.find((x) => x.id === id); if (c) Object.assign(c, patch); save(); emit(); },
+  updateCategory(id, patch) { const d = load(), c = d.categories.find((x) => x.id === id); if (c) Object.assign(c, patch); save(); emit(); },
+  removeCategory(id) { const d = load(); d.categories = d.categories.filter((c) => c.id !== id); for (const c of d.channels.filter((x) => x.category === id)) delete d.messages[c.id]; d.channels = d.channels.filter((c) => c.category !== id); save(); emit(); },
+  removeServer(id) {
+    const d = load();
+    for (const c of d.channels.filter((x) => x.server === id)) delete d.messages[c.id];
+    d.servers = d.servers.filter((s) => s.id !== id); d.categories = d.categories.filter((c) => c.server !== id); d.channels = d.channels.filter((c) => c.server !== id);
+    save(); emit();
+  },
 
   // messages
   messages: (channelId) => (load().messages[channelId] || []).slice(),
