@@ -65,6 +65,8 @@ export const ICON = {
   film: '<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 8h5M2 16h5M17 8h5M17 16h5"/>',
   brush: '<path d="M9.06 11.9 17.8 3.15a2.1 2.1 0 0 1 3 3l-8.76 8.75"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
   bell2: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>',
+  // Fluentdat's logo: the ring (open at the top right, round ends), the dot, and the spark
+  logo: '<path d="M20.1 11.03A8.16 8.16 0 1 1 12.97 3.9" stroke-width="1.92"/><path d="M17.76 5.1v2.28M16.62 6.24h2.28" stroke-width="1.2"/><circle cx="12" cy="12" r="3.36" fill="currentColor" stroke="none"/>',
 };
 // the Discord and GitHub marks (solid shapes, so drawn with fill rather than the outline style above)
 export const BRAND = {

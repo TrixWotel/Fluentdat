@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Fluentdat</title>
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="icon" href="icons/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#1a1d23">
   <meta name="description" content="A chat app I am building, Discord style, on GitHub Pages.">
   <style>
     :root, :root[data-theme="dark"] {
@@ -259,6 +263,10 @@
 
     /* ---- signing in (Discord, GitHub, email) ---- */
     .dialog.sg { max-width: 420px; }
+    .sg-logo { display: block; width: 58px; height: 58px; margin: 2px auto 14px; border-radius: 15px; box-shadow: 0 6px 18px #0006; }
+    .dialog.sg .sg-logo + h3 { text-align: center; } .dialog.sg .sg-logo ~ .sg-sub { text-align: center; }
+    .about-head { display: flex; align-items: center; gap: 16px; } .about-head img { width: 64px; height: 64px; border-radius: 16px; flex: none; }
+    .about-head .sub { margin-bottom: 0; }
     .sg .sg-sub { color: var(--muted); margin: -8px 0 18px; font-size: .9rem; }
     .sg-btns { display: grid; gap: 10px; }
     .sg-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 12px 16px; border-radius: 10px; font-weight: 600; font-size: .95rem; transition: filter .15s; }
@@ -688,14 +696,14 @@
     <aside class="members" id="members"></aside>
   </div>
   <script type="importmap">{ "imports": {
-    "./app.js": "./app.js?v=2d884f56",
-    "./ui.js": "./ui.js?v=2d884f56",
-    "./backend.js": "./backend.js?v=2d884f56",
-    "./store.js": "./store.js?v=2d884f56",
-    "./github.js": "./github.js?v=2d884f56",
-    "./supabase.js": "./supabase.js?v=2d884f56",
-    "./config.js": "./config.js?v=2d884f56"
+    "./app.js": "./app.js?v=485b7c20",
+    "./ui.js": "./ui.js?v=485b7c20",
+    "./backend.js": "./backend.js?v=485b7c20",
+    "./store.js": "./store.js?v=485b7c20",
+    "./github.js": "./github.js?v=485b7c20",
+    "./supabase.js": "./supabase.js?v=485b7c20",
+    "./config.js": "./config.js?v=485b7c20"
   } }</script>
-  <script type="module" src="app.js?v=2d884f56"></script>
+  <script type="module" src="app.js?v=485b7c20"></script>
 </body>
 </html>

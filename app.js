@@ -88,7 +88,7 @@ const setBanner = (node, value, color) => { node.style.background = paint(value)
 // ---------- buttons you can show, hide and move (Settings → Layout → Buttons) ----------
 // [id, what it is, icon, fixed] — a fixed one can be moved but not hidden (you always need a way into settings)
 const BUTTONS = {
-  rail: ['Server rail', [['home', 'Direct Messages', 'home'], ['servers', 'Your servers', 'bot', 1], ['add', 'Add a Server', 'plus'], ['discover', 'Discover', 'compass']]],
+  rail: ['Server rail', [['home', 'Direct Messages', 'logo'], ['servers', 'Your servers', 'bot', 1], ['add', 'Add a Server', 'plus'], ['discover', 'Discover', 'compass']]],
   header: ['Server header', [['invite', 'Invite People', 'personAdd'], ['serverMenu', 'Server menu arrow', 'chevD']]],
   channels: ['Channel list', [['newChannel', 'New channel (+)', 'plus'], ['chanInvite', 'Invite, on hover', 'personAdd'], ['delChannel', 'Delete channel (×)', 'x']]],
   dms: ['Direct messages', [['findDM', 'Find or start a conversation', 'search'], ['friendsNav', 'Friends', 'users'], ['newDM', 'New DM (+)', 'plus']]],
@@ -160,7 +160,7 @@ function renderRail() {
   const railBtn = (ic, title, on, onclick, cls) => { const b = el('button', { className: 'srv ' + cls + (on ? ' on' : ''), title, onclick }); b.append(icon(ic, 24)); return b; };
   for (const id of ordered('rail')) {
     if (!shown(id)) continue;
-    if (id === 'home') parts.push(railBtn('home', 'Direct Messages', view === 'home', open(() => { view = 'home'; }), 'home'));
+    if (id === 'home') parts.push(railBtn('logo', 'Direct Messages', view === 'home', open(() => { view = 'home'; }), 'home'));
     else if (id === 'add') parts.push(railBtn('plus', 'Add a Server', false, () => addServerFlow(), 'add'));
     else if (id === 'discover') parts.push(railBtn('compass', 'Discover', view === 'discover', open(() => { view = 'discover'; }), 'add discover'));
     else if (id === 'servers') {
@@ -1290,6 +1290,7 @@ function signInDialog(after, title) {
       if (!on.email) { or.remove(); byEmail.remove(); }
     });
     box.replaceChildren(
+      el('img', { className: 'sg-logo', src: 'icons/logo.svg', alt: '' }),
       el('h3', {}, title || 'Sign in to Fluentdat'),
       el('p', { className: 'sg-sub' }, 'Chat with your team: servers, DMs and friends, live on every device.'),
       btns, or, byEmail,
@@ -1575,7 +1576,7 @@ function keysPane() {
 }
 
 function aboutPane() {
-  return [el('h2', {}, 'About Fluentdat'), el('p', { className: 'sub' }, 'A chat app built from scratch, running entirely in your browser.'),
+  return [el('div', { className: 'about-head' }, el('img', { src: 'icons/logo.svg', alt: '' }), el('div', {}, el('h2', {}, 'About Fluentdat'), el('p', { className: 'sub' }, 'A chat app built from scratch, running entirely in your browser.'))),
     el('div', { className: 'note-box' },
       el('div', {}, el('b', {}, 'Fluentdat'), ' — servers, channels, DMs, friends, stickers and themes. The app is a static site; your data is in this browser, in Fluentdat’s Supabase database when you sign in, or in a private GitHub repository the older way.'),
       el('ol', {}, el('li', {}, 'Built by TrixWotel'), el('li', {}, 'Map of the stack: static HTML, CSS and JavaScript modules — no framework, no build step'), el('li', {}, 'Data layer swaps between this browser, Supabase and GitHub without the UI knowing'))),

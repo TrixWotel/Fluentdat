@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- just the mark, black on clear (for light backgrounds) -->
+  <g fill="none" stroke="#000" stroke-linecap="round">
+    <path d="M83.76 45.97A34 34 0 1 1 54.03 16.24" stroke-width="8"/>
+    <path d="M74 22v8M70 26h8" stroke-width="4"/>
+  </g>
+  <circle cx="50" cy="50" r="14" fill="#000"/>
+</svg>
