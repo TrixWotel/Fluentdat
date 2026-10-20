@@ -9,24 +9,43 @@ import { $, el, ICON, BRAND, brand, svgHTML, icon, readImage, scaled, pickFile, 
 const DEFAULT_PREFS = {
   density: 'cozy', fontSize: 15, reduceMotion: false, highContrast: false, notify: false, sendOnEnter: true, dmFrom: 'anyone',
   // layout — all of these really move something (Settings → Layout)
-  rail: 'on', railSize: 'm', iconShape: 'squircle', sideW: 'medium', chanIcons: 'on', cats: 'on', sideHead: 'on', userPanel: 'on',
+  rail: 'on', iconShape: 'squircle', chanIcons: 'on', cats: 'on', sideHead: 'on', userPanel: 'on',
   topbar: 'on', banner: 'on',
-  avatars: 'on', avatarSize: 'm', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
-  membersDefault: true, memberW: 'medium', memberOffline: true, memberStatusText: false,
+  avatars: 'on', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
+  membersDefault: true, memberOffline: true, memberStatusText: false,
+  // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
+  railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 136, statusH: 30,
+  avatarPx: 36, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20,
+  // where things sit: the columns left to right, the sidebar and main area top to bottom, and the status bar
+  cols: ['rail', 'side', 'main', 'members'], sideOrder: ['head', 'body', 'panel'], mainOrder: ['top', 'content', 'composer'], statusPos: 'top',
   radius: 'soft', uiFont: 'system',
   // buttons (Settings → Layout → Buttons): which are hidden, the order of each bar, their size, and whether they're labelled
-  hidden: {}, order: {}, btnSize: 'm', btnLabels: 'off',
+  hidden: {}, order: {}, btnLabels: 'off',
   // pictures and Discord-style extras
-  serverBanner: 'on', bannerH: 'm', plates: 'on', memberGroups: 'on', startHeaders: 'on', dmPanel: true,
+  serverBanner: 'on', plates: 'on', memberGroups: 'on', startHeaders: 'on', dmPanel: true,
   micMuted: false, deafened: false,
 };
 const LAYOUT_PRESETS = {
   Default: {},
-  Compact: { density: 'compact', fontSize: 14, avatarSize: 's', railSize: 's', sideW: 'narrow', dividers: 'off', memberW: 'narrow', radius: 'sharp' },
-  Spacious: { density: 'cozy', fontSize: 16, avatarSize: 'l', sideW: 'wide', msgWidth: 'readable', radius: 'round', memberW: 'wide' },
+  Compact: { density: 'compact', fontSize: 14, avatarPx: 28, memberAv: 26, railW: 60, sideW: 190, membersW: 180, topH: 44, panelH: 46, chanH: 28,
+    composerH: 40, icTop: 18, icComposer: 18, icPanel: 18, dividers: 'off', radius: 'sharp' },
+  Spacious: { density: 'cozy', fontSize: 16, avatarPx: 44, memberAv: 38, railW: 84, sideW: 300, membersW: 300, topH: 58, panelH: 62, chanH: 40,
+    composerH: 56, icTop: 22, icComposer: 22, icPanel: 22, msgWidth: 'readable', radius: 'round' },
   Minimal: { rail: 'off', sideHead: 'off', userPanel: 'off', avatars: 'off', timestamps: 'off', dividers: 'off', banner: 'off', membersDefault: false, hover: 'off',
     serverBanner: 'off', plates: 'off', startHeaders: 'off', dmPanel: false, hidden: { call: true, video: true, search: true, emoji: true, sticker: true, upload: true, mic: true, deafen: true, chanInvite: true, findDM: true } },
 };
+// every size you can set in Layout: [what it is, smallest, largest] in pixels
+const SIZES = {
+  railW: ['Server rail width', 48, 120], sideW: ['Sidebar width', 160, 420], membersW: ['Member list width', 160, 420],
+  topH: ['Top bar height', 36, 90], composerH: ['Message box height', 40, 160], panelH: ['User panel height', 40, 100],
+  bannerH: ['Server banner height', 60, 260], statusH: ['Status bar height', 20, 56], avatarPx: ['Message avatars', 20, 64],
+  memberAv: ['Member list avatars', 20, 56], chanH: ['Channel rows', 24, 48], icTop: ['Top bar icons', 14, 32],
+  icComposer: ['Message box icons', 14, 32], icPanel: ['User panel icons', 14, 32], fontSize: ['Text size', 12, 20],
+};
+const COLS = ['rail', 'side', 'main', 'members'];
+// an order someone saved, cleaned up: only known parts, each once, and any missing ones added at the end
+const validOrder = (o, all) => { const mine = (Array.isArray(o) ? o : []).filter((x, i, arr) => all.includes(x) && arr.indexOf(x) === i); return [...mine, ...all.filter((x) => !mine.includes(x))]; };
+const sizeOf = (k, v) => { const [, lo, hi] = SIZES[k]; const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : DEFAULT_PREFS[k]; };
 let prefs = loadPrefs();
 
 
@@ -181,9 +200,9 @@ function renderSide() {
   head.className = 'side-head btn-like' + (bg ? ' has-banner' : '');
   if (bg) head.style.setProperty('--banner', bg);
   const inviting = live ? can : true;                     // (signed out, Invite explains how it works)
-  const row = el('div', { className: 'sh-row' }, el('span', { className: 'sh-name' }, server.name),
-    shown('invite') && inviting ? el('button', { className: 'sh-btn', title: 'Invite People', onclick: (e) => { e.stopPropagation(); openServerSettings(serverId, 'invite'); } }, icon('personAdd', 18)) : null,
-    shown('serverMenu') ? el('span', { className: 'drop' }, icon('chevD', 18)) : null);
+  const row = el('div', { className: 'sh-row' }, el('span', { className: 'sh-name' }, server.name), ...ordered('header').map((id) =>
+    id === 'invite' ? (shown('invite') && inviting ? el('button', { className: 'sh-btn', title: 'Invite People', onclick: (e) => { e.stopPropagation(); openServerSettings(serverId, 'invite'); } }, icon('personAdd', 18)) : null)
+      : shown('serverMenu') ? el('span', { className: 'drop' }, icon('chevD', 18)) : null));
   head.replaceChildren(row);
   head.onclick = () => serverMenu(row);
   body.replaceChildren();
@@ -201,8 +220,10 @@ function renderSide() {
         onclick: () => { channelId = c.id; closeCall(); renderAll(); $('#app').classList.remove('show-side'); },
         oncontextmenu: (e) => { e.preventDefault(); channelCtx(c, e.clientX, e.clientY); } },
         icon(c.kind === 'voice' ? 'volume' : 'hash', 18), el('span', { className: 'nm' }, c.name));
-      if (shown('chanInvite') && inviting) rowc.append(el('span', { className: 'x ci', title: 'Invite People', onclick: (e) => { e.stopPropagation(); openServerSettings(serverId, 'invite'); } }, icon('personAdd')));
-      if (shown('delChannel') && can && chans.length > 1) rowc.append(el('span', { className: 'x', title: 'Delete Channel', onclick: (e) => { e.stopPropagation(); deleteChannel(c); } }, icon('x')));
+      for (const id of ordered('channels')) {
+        if (id === 'chanInvite' && shown(id) && inviting) rowc.append(el('span', { className: 'x ci', title: 'Invite People', onclick: (e) => { e.stopPropagation(); openServerSettings(serverId, 'invite'); } }, icon('personAdd')));
+        if (id === 'delChannel' && shown(id) && can && chans.length > 1) rowc.append(el('span', { className: 'x', title: 'Delete Channel', onclick: (e) => { e.stopPropagation(); deleteChannel(c); } }, icon('x')));
+      }
       body.append(rowc);
     }
   }
@@ -444,6 +465,7 @@ function renderAll() {
   const dmPanelOn = view === 'home' && !!dmId && prefs.dmPanel && !!Store.dmUser(dmId);
   $('#app').classList.toggle('show-members', (showMembers && view === 'server') || dmPanelOn);
   $('#app').classList.toggle('dm-mode', dmPanelOn);
+  applyLayout();
 }
 function renderBanner() {
   const b = $('#banner'), st = Store.syncState(), acc = Store.account();
@@ -1109,7 +1131,15 @@ function loadPrefs() {
   if (saved.callBtns === 'off') p.hidden.call = p.hidden.video = true;
   if (saved.composerSticker === 'off') p.hidden.sticker = true;
   if (saved.composerSend === 'off') p.hidden.send = true;
-  delete p.callBtns; delete p.composerSticker; delete p.composerSend;
+  const was = (v, map, fallback) => (typeof v === 'number' ? v : map[v] || fallback);
+  if (typeof saved.railW !== 'number') p.railW = { s: 60, m: 72, l: 86 }[saved.railSize] || 72;
+  p.sideW = was(saved.sideW, { narrow: 190, medium: 240, wide: 300 }, 240);
+  if (typeof saved.membersW !== 'number') p.membersW = { narrow: 180, medium: 232, wide: 300 }[saved.memberW] || 232;
+  if (typeof saved.avatarPx !== 'number') p.avatarPx = { s: 28, m: 36, l: 44 }[saved.avatarSize] || 36;
+  p.bannerH = was(saved.bannerH, { s: 96, m: 136, l: 180 }, 136);
+  if (typeof saved.icTop !== 'number' && saved.btnSize) p.icTop = p.icComposer = p.icPanel = { s: 16, m: 20, l: 25 }[saved.btnSize] || 20;
+  for (const k of ['callBtns', 'composerSticker', 'composerSend', 'railSize', 'memberW', 'avatarSize', 'btnSize']) delete p[k];
+  for (const k of Object.keys(SIZES)) p[k] = sizeOf(k, p[k]);
   return p;
 }
 // what a layout preset or reset leaves alone (they're not about layout)
@@ -1117,21 +1147,44 @@ const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened'
 const keepOf = () => Object.fromEntries(KEEP.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
 function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
 function applyPrefs() {
-  const d = document.documentElement, S = (k, v) => d.setAttribute('data-' + k, v);
+  const d = document.documentElement, S = (k, v) => d.setAttribute('data-' + k, v), V = (k, v) => d.style.setProperty(k, v + 'px');
   S('density', prefs.density);
   S('motion', prefs.reduceMotion ? 'off' : 'on');
   S('contrast', prefs.highContrast ? 'high' : 'normal');
-  for (const [attr, val] of [['rail', prefs.rail], ['railsize', prefs.railSize], ['iconshape', prefs.iconShape], ['sidew', prefs.sideW],
+  for (const [attr, val] of [['rail', prefs.rail], ['iconshape', prefs.iconShape],
     ['chanicons', prefs.chanIcons], ['cats', prefs.cats], ['sidehead', prefs.sideHead], ['userpanel', prefs.userPanel],
     ['topbar', prefs.topbar], ['banner', prefs.banner], ['avatars', prefs.avatars],
-    ['avatarshape', prefs.avatarShape], ['dividers', prefs.dividers], ['memberw', prefs.memberW], ['hover', prefs.hover],
-    ['radius', prefs.radius], ['uifont', prefs.uiFont], ['btnsize', prefs.btnSize], ['btnlabels', prefs.btnLabels]]) S(attr, val);
-  d.style.setProperty('--banner-h', { s: '96px', m: '136px', l: '180px' }[prefs.bannerH] || '136px');
+    ['avatarshape', prefs.avatarShape], ['dividers', prefs.dividers], ['hover', prefs.hover],
+    ['radius', prefs.radius], ['uifont', prefs.uiFont], ['btnlabels', prefs.btnLabels]]) S(attr, val);
   S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
-  d.style.setProperty('--avatar', { s: '28px', m: '36px', l: '44px' }[prefs.avatarSize] || '36px');
+  V('--rail-w', prefs.railW); V('--side-w', prefs.sideW); V('--members-w', prefs.membersW); V('--top-h', prefs.topH);
+  V('--composer-h', prefs.composerH); V('--panel-h', prefs.panelH); V('--banner-h', prefs.bannerH); V('--status-h', prefs.statusH);
+  V('--avatar', prefs.avatarPx); V('--mem-av', prefs.memberAv); V('--chan-h', prefs.chanH);
+  V('--ic-top', prefs.icTop); V('--ic-composer', prefs.icComposer); V('--ic-panel', prefs.icPanel);
+  V('--srv', Math.max(28, Math.min(80, prefs.railW - 26)));
   d.style.setProperty('--msg-max', prefs.msgWidth === 'readable' ? '860px' : 'none');
-  document.body.style.fontSize = Math.max(12, Math.min(20, prefs.fontSize)) + 'px';
+  document.body.style.fontSize = sizeOf('fontSize', prefs.fontSize) + 'px';
+  applyLayout();
 }
+// where each part sits. Columns are placed explicitly (so a hidden one keeps its empty, zero-width spot), the
+// sidebar's and main area's parts by flex order, and the status bar above or below everything
+function applyLayout() {
+  const app = $('#app'); if (!app) return;
+  const cols = validOrder(prefs.cols, COLS);
+  const membersOn = app.classList.contains('show-members') && innerWidth > 820;
+  const width = { rail: prefs.rail === 'off' ? 0 : prefs.railW, side: prefs.sideW, members: membersOn ? (app.classList.contains('dm-mode') ? Math.max(prefs.membersW, 280) : prefs.membersW) : 0 };
+  app.style.setProperty('--cols', cols.map((c) => (c === 'main' ? 'minmax(0, 1fr)' : width[c] + 'px')).join(' '));
+  const node = { rail: $('#rail'), side: $('.side'), main: $('.main'), members: $('#members') };
+  cols.forEach((c, i) => { node[c].style.gridColumn = String(i + 1); node[c].style.gridRow = '1'; });
+  node.members.classList.toggle('collapsed', !membersOn);
+  validOrder(prefs.sideOrder, ['head', 'body', 'panel']).forEach((p, i) => { ({ head: $('#side-head'), body: $('#side-body'), panel: $('#me-panel') })[p].style.order = i; });
+  const mo = validOrder(prefs.mainOrder, ['top', 'content', 'composer']);
+  mo.forEach((p, i) => { ({ top: $('#top'), content: $('#content'), composer: $('#composer') })[p].style.order = i * 2; });
+  $('#call').style.order = mo.indexOf('content') * 2 - 1;
+  $('#banner').style.order = prefs.statusPos === 'bottom' ? 2 : 0;
+  app.style.order = 1;
+}
+addEventListener('resize', () => applyLayout());
 // change one thing and redraw the parts that are drawn by hand
 function setPref(key, value) { prefs[key] = value; savePrefs(); renderAll(); }
 applyPrefs();
@@ -1803,74 +1856,27 @@ function svDanger(sv, shut) {
 
 // ===================== layout settings =====================
 function layoutPane(redraw) {
-  const P = (k, v) => () => { setPref(k, v); redraw(); };
   const pick = (key, options) => sel(prefs[key], options, (v) => { setPref(key, v); });
-  const flip = (key) => sw(prefs[key] === 'on' || prefs[key] === true, (on) => { setPref(key, typeof prefs[key] === 'boolean' ? on : (on ? 'on' : 'off')); });
-  const onoff = [['on', 'Shown'], ['off', 'Hidden']];
   return [
-    el('h2', {}, 'Layout'), el('p', { className: 'sub' }, 'Rearrange Fluentdat. Everything here changes the app as soon as you touch it.'),
-
-    el('h3', {}, 'Presets'),
-    el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;padding:4px 0 12px' }, ...Object.keys(LAYOUT_PRESETS).map((name) =>
-      el('button', { className: 'btn', onclick: () => { prefs = { ...prefs, ...DEFAULT_PREFS, ...LAYOUT_PRESETS[name], ...keepOf() }; savePrefs(); showMembers = prefs.membersDefault !== false; renderAll(); redraw(); toast(name + ' layout applied.'); } }, name))),
-
-    el('h3', {}, 'Server rail'),
-    row2('Server rail', 'The strip of server icons down the left.', pick('rail', onoff)),
-    row2('Icon size', 'How big those server icons are.', pick('railSize', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large']])),
-    row2('Icon shape', 'Squircle is the Discord look.', pick('iconShape', [['squircle', 'Squircle'], ['round', 'Circle'], ['square', 'Rounded square']])),
-
-    el('h3', {}, 'Channel sidebar'),
-    row2('Width', 'The channel list column.', pick('sideW', [['narrow', 'Narrow'], ['medium', 'Medium'], ['wide', 'Wide']])),
-    row2('Server header', 'The server name and dropdown at the top.', pick('sideHead', onoff)),
-    row2('Category headings', 'The TEXT CHANNELS / VOICE CHANNELS groupings.', pick('cats', onoff)),
-    row2('Channel icons', 'The # and speaker marks beside each channel.', pick('chanIcons', onoff)),
-    row2('User panel', 'You, your status and the settings cog at the bottom.', pick('userPanel', onoff)),
-
-    el('h3', {}, 'Top bar'),
-    row2('Top bar', 'The channel name strip above the messages.', pick('topbar', onoff)),
-    row2('Status banner', 'The sync line across the very top.', pick('banner', onoff)),
-
-    el('h3', {}, 'Messages'),
-    row2('Spacing', 'Cozy gives each message room, compact fits more in.', pick('density', [['cozy', 'Cozy'], ['compact', 'Compact']])),
-    row2('Avatars', 'Profile pictures beside messages.', pick('avatars', onoff)),
-    row2('Avatar size', 'Also changes the member list and DM list.', pick('avatarSize', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large']])),
-    row2('Avatar shape', '', pick('avatarShape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']])),
-    row2('Timestamps', 'Beside the name on each message.', pick('timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']])),
-    row2('Group messages', 'Several messages in a row from one person share a heading.', sw(prefs.group, (on) => setPref('group', on))),
-    row2('Date dividers', 'The “Monday, October 19” lines.', pick('dividers', onoff)),
-    row2('Reading width', 'Readable keeps long lines from stretching across a wide screen.', pick('msgWidth', [['full', 'Use the full width'], ['readable', 'Readable column']])),
-    row2('Highlight on hover', 'The subtle background as your pointer passes a message.', pick('hover', onoff)),
-
-    el('h3', {}, 'Member list'),
-    row2('Show by default', 'Whether the member list is open when you arrive.', sw(prefs.membersDefault, (on) => { prefs.membersDefault = on; savePrefs(); showMembers = on; renderAll(); })),
-    row2('Width', '', pick('memberW', [['narrow', 'Narrow'], ['medium', 'Medium'], ['wide', 'Wide']])),
-    row2('Include offline', 'Show the people who aren’t around right now.', sw(prefs.memberOffline, (on) => setPref('memberOffline', on))),
-    row2('Second line', 'Show each person’s about text under their name.', sw(prefs.memberStatusText, (on) => setPref('memberStatusText', on))),
-    row2('Group by role', 'Roles shown separately get their own heading, as on Discord.', pick('memberGroups', onoff)),
-    el('h3', {}, 'Pictures'),
-    row2('Server banners', 'The picture at the top of a server’s channel list.', pick('serverBanner', onoff)),
-    row2('Banner height', '', pick('bannerH', [['s', 'Short'], ['m', 'Medium'], ['l', 'Tall']])),
-    row2('Nameplates', 'The pictures behind names in the member list, DMs and your panel.', pick('plates', onoff)),
-    row2('Profile beside DMs', 'The other person’s profile on the right of a DM.', sw(prefs.dmPanel, (on) => setPref('dmPanel', on))),
-    ...buttonsSection(redraw),
-
-    row2('Conversation start', 'The “Welcome to #channel” and “beginning of your DMs” headers.', pick('startHeaders', onoff)),
-
+    el('h2', {}, 'Layout'),
+    el('p', { className: 'sub' }, 'A small copy of Fluentdat’s screen. Drag any edge to resize it, drag parts and buttons to move them, drop a button in the tray to hide it, and click anything to see all of its settings.'),
+    layoutStudio(redraw),
     el('h3', {}, 'Shape & type'),
     row2('Corners', 'How rounded buttons, channels and messages are.', pick('radius', [['sharp', 'Sharp'], ['soft', 'Soft'], ['round', 'Round']])),
     row2('Interface font', 'The font used everywhere in the app.', pick('uiFont', [['system', 'System'], ['rounded', 'Rounded'], ['serif', 'Serif'], ['mono', 'Monospaced']])),
-    row2('Text size', 'Scales the whole interface.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })()),
-
+    ...buttonsSection(redraw),
     el('h3', {}, 'Start over'),
-    row2('Reset layout', 'Put every option on this page back to the default.', el('button', { className: 'btn danger', onclick: async () => { if (!(await confirmBox({ title: 'Reset Layout', text: 'Put every layout option, button and order back to the default?', ok: 'Reset', danger: true }))) return; prefs = { ...prefs, ...DEFAULT_PREFS, ...keepOf() }; savePrefs(); showMembers = true; renderAll(); redraw(); toast('Layout reset.'); } }, 'Reset')),
+    row2('Reset layout', 'Put every size, position, button and option on this page back to the default.', el('button', { className: 'btn danger', onclick: async () => {
+      if (!(await confirmBox({ title: 'Reset Layout', text: 'Put every layout option, size, position and button back to the default?', ok: 'Reset', danger: true }))) return;
+      prefs = { ...prefs, ...DEFAULT_PREFS, ...keepOf() }; savePrefs(); showMembers = true; renderAll(); redraw(); toast('Layout reset.');
+    } }, 'Reset')),
   ];
 }
 
 // Layout → Buttons: every button, in every bar, can be hidden or moved (the settings cog always stays)
 function buttonsSection(redraw) {
   const pick = (key, options) => sel(prefs[key], options, (v) => { setPref(key, v); });
-  const out = [el('h3', {}, 'Buttons'), el('p', { className: 'hint' }, 'Show, hide and move every button. The settings cog always stays, so you can always get back here.'),
-    row2('Button size', 'Top bar, message box and user panel buttons.', pick('btnSize', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large']])),
+  const out = [el('h3', {}, 'All buttons'), el('p', { className: 'hint' }, 'The same as dragging in the mini screen, as a list. The settings cog always stays, so you can always get back here.'),
     row2('Labels', 'Words beside the top bar buttons.', pick('btnLabels', [['off', 'Icons only'], ['on', 'Icons and words']]))];
   for (const [group, [title, items]] of Object.entries(BUTTONS)) {
     const order = ordered(group), list = el('div', { className: 'sx-list btn-list' });
@@ -1890,4 +1896,391 @@ function buttonsSection(redraw) {
   out.push(el('div', { className: 'row', style: 'justify-content:flex-start' },
     el('button', { className: 'btn', onclick: () => { prefs.hidden = {}; prefs.order = {}; savePrefs(); renderAll(); redraw(); toast('Buttons are back to normal.'); } }, 'Reset Buttons')));
   return out;
+}
+
+// ===================== the layout studio: a mini screen of the whole app =====================
+// Drag an edge to resize a part, drag a part to move it (columns left and right, the rest up and down), drag a button
+// along its bar to reorder it or into the tray to hide it, and click anything for all of its settings underneath.
+const PARTS = { status: 'Status bar', rail: 'Server rail', side: 'Sidebar', head: 'Server header', body: 'Channel list', panel: 'User panel',
+  main: 'Main area', top: 'Top bar', content: 'Messages', composer: 'Message box', members: 'Member list' };
+const PART_OF_BAR = { rail: 'rail', header: 'head', channels: 'body', dms: 'side', top: 'top', composer: 'composer', panel: 'panel' };
+const SIDE_PARTS = ['head', 'body', 'panel'], MAIN_PARTS = ['top', 'content', 'composer'];
+const WIDE_CHIPS = new Set(['servers', 'input', 'me', 'findDM']);
+const LAYOUT_KEYS = Object.keys(DEFAULT_PREFS).filter((k) => !KEEP.includes(k));
+const studio = { sel: 'content', view: 'server', history: [] };
+let studioDrag = null;
+
+function layoutStudio(redraw) {
+  const mini = el('div', { className: 'mini' }), wrap = el('div', { className: 'mini-wrap' }, mini);
+  const tray = el('div', { className: 'tray' }), insp = el('div', { className: 'insp' });
+  const HINT = 'Drag edges to resize · drag parts and buttons to move them · click anything for its settings';
+  const hint = el('div', { className: 'studio-hint' }, HINT);
+  let scale = 0.5, ghost = null, marker = null, lastW = 0;
+  const S = (v) => Math.max(1, Math.round(v * scale));
+  const remember = () => { studio.history.push(JSON.stringify(Object.fromEntries(LAYOUT_KEYS.map((k) => [k, prefs[k]])))); if (studio.history.length > 80) studio.history.shift(); };
+  const commit = () => { savePrefs(); renderAll(); draw(); };
+  const select = (id) => { studio.sel = id; draw(); };
+  const undo = () => { const s = studio.history.pop(); if (!s) return toast('Nothing to undo.'); Object.assign(prefs, JSON.parse(s)); showMembers = prefs.membersDefault !== false; commit(); };
+  const views = el('div', { className: 'seg' });
+  const tools = el('div', { className: 'studio-tools' }, views, el('span', { style: 'flex:1' }),
+    el('button', { className: 'btn small', onclick: undo, title: 'Undo the last change' }, 'Undo'),
+    ...Object.keys(LAYOUT_PRESETS).map((name) => el('button', { className: 'btn small', title: `The ${name} layout`, onclick: () => {
+      remember(); prefs = { ...prefs, ...DEFAULT_PREFS, ...LAYOUT_PRESETS[name], ...keepOf() }; showMembers = prefs.membersDefault !== false; commit(); toast(name + ' layout applied.');
+    } }, name)));
+
+  function draw() {
+    views.replaceChildren(...[['server', 'Server view'], ['dm', 'Direct messages']].map(([v, label]) =>
+      el('button', { className: studio.view === v ? 'on' : '', onclick: () => { studio.view = v; draw(); } }, label)));
+    drawMini(); drawTray(); drawInspector();
+  }
+
+  // ---------- the mini screen ----------
+  function drawMini() {
+    const avail = wrap.clientWidth || 640, realW = Math.max(700, innerWidth), realH = Math.max(460, innerHeight);
+    scale = Math.min(avail / realW, 430 / realH);
+    const W = S(realW), H = S(realH);
+    mini.style.width = W + 'px'; mini.style.height = H + 'px';
+    const statusOn = prefs.banner !== 'off', stH = statusOn ? S(prefs.statusH) : 5, bottom = prefs.statusPos === 'bottom';
+    const appTop = bottom ? 0 : stH, appH = H - stH, dm = studio.view === 'dm';
+    const membersOn = dm ? prefs.dmPanel !== false : prefs.membersDefault !== false;
+    const kids = [place(part('status', statusOn ? [el('span', { className: 'm-tag' }, 'Live, signed in')] : [], !statusOn), 0, bottom ? appH : 0, W, stH)];
+    const w = { rail: prefs.rail === 'off' ? 5 : S(prefs.railW), side: S(prefs.sideW), members: membersOn ? S(dm ? Math.max(prefs.membersW, 280) : prefs.membersW) : 5 };
+    w.main = Math.max(30, W - w.rail - w.side - w.members);
+    let x = 0;
+    for (const c of validOrder(prefs.cols, COLS)) {
+      kids.push(place(c === 'rail' ? railPart() : c === 'side' ? sidePart() : c === 'main' ? mainPart() : membersPart(membersOn), x, appTop, w[c], appH));
+      x += w[c];
+    }
+    mini.replaceChildren(...kids);
+    addHandles(membersOn);
+  }
+  const place = (node, left, top, width, height) => { Object.assign(node.style, { left: left + 'px', top: top + 'px', width: width + 'px', height: height + 'px' }); return node; };
+  function part(id, kids = [], off = false, cls = '') {
+    const p = el('div', { className: `mp m-${id}${cls ? ' ' + cls : ''}${studio.sel === id ? ' sel' : ''}${off ? ' off' : ''}`, title: PARTS[id] + (off ? ' (hidden: click it, then switch it back on)' : '') }, ...kids);
+    p.dataset.part = id;
+    p.addEventListener('pointerdown', (e) => partDown(e, id, p));
+    return p;
+  }
+  const chipSize = (node, px) => { node.style.setProperty('--chip', Math.max(7, S(px)) + 'px'); return node; };
+  function chipEl(group, id) {
+    const [, label, ic, fixed] = BUTTONS[group][1].find((b) => b[0] === id);
+    const na = (studio.view === 'dm' && id === 'members') || (studio.view === 'server' && id === 'dmProfile');
+    const c = el('span', { className: 'chip' + (WIDE_CHIPS.has(id) ? ' wide' : '') + (na ? ' na' : ''), title: label + (na ? ' (only shows in ' + (id === 'members' ? 'servers' : 'DMs') + ')' : '') + (fixed ? '' : '. Drag along the bar to move it, or into the tray to hide it.') });
+    if (id === 'servers') c.append(el('i'), el('i'), el('i'));
+    else if (id === 'input') c.append(el('em', {}, studio.view === 'dm' ? 'Message @Bee' : 'Message #general'));
+    else if (id === 'me') c.append(el('i'), el('em', {}, me.name));
+    else if (id === 'findDM') c.append(el('em', {}, 'Find a conversation'));
+    else c.append(icon(ic));
+    c.dataset.chip = id;
+    c.addEventListener('pointerdown', (e) => chipDown(e, group, id, c, false));
+    return c;
+  }
+  function bar(group, cls = '') {
+    const b = el('div', { className: 'm-bar' + (cls ? ' ' + cls : '') });
+    b.dataset.bar = group;
+    for (const id of ordered(group)) if (shown(id)) b.append(chipEl(group, id));
+    return b;
+  }
+  function railPart() {
+    const off = prefs.rail === 'off';
+    return chipSize(part('rail', off ? [] : [bar('rail', 'vertical')], off), Math.max(28, Math.min(80, prefs.railW - 26)));
+  }
+  function sidePart() {
+    const sv = Store.server(serverId) || { name: 'Server' };
+    // (the banner shows as it really would: only for a server that has one)
+    const dm = studio.view === 'dm', headOn = prefs.sideHead !== 'off', panelOn = prefs.userPanel !== 'off', banner = !dm && prefs.serverBanner !== 'off' && !!paint(sv.banner);
+    const head = part('head', headOn ? (dm ? [bar('dms', 'find')] : [el('span', { className: 'm-name' }, sv.name), bar('header')]) : [], !headOn, 'sub' + (headOn && banner ? ' bannered' : ''));
+    head.style.height = (headOn ? S(banner ? prefs.bannerH : prefs.topH) : 5) + 'px';
+    if (headOn && banner) head.style.background = paint(sv.banner);
+    const body = part('body', dm ? dmLines() : channelLines(), false, 'sub');
+    const panel = chipSize(part('panel', panelOn ? [bar('panel')] : [], !panelOn, 'sub'), prefs.icPanel);
+    panel.style.height = (panelOn ? S(prefs.panelH) : 5) + 'px';
+    if (panelOn) plateOn(panel, me.plate);
+    const col = part('side');
+    col.append(...validOrder(prefs.sideOrder, SIDE_PARTS).map((p) => ({ head, body, panel })[p]));
+    return col;
+  }
+  function channelLines() {
+    const H = Math.max(5, S(prefs.chanH)), out = [];
+    out.push(el('div', { className: 'm-cat' }, el('span', {}, prefs.cats !== 'off' ? 'TEXT CHANNELS' : ''), bar('channels', 'inline')));
+    ['general', 'build-log', 'programming', 'random'].forEach((n, i) => {
+      const row = el('div', { className: 'm-chan' + (i === 0 ? ' on first' : '') }, prefs.chanIcons === 'off' ? '' : el('b', {}, '#'), el('span', {}, n));
+      row.style.height = H + 'px';
+      out.push(row);
+    });
+    return out;
+  }
+  function dmLines() {
+    const H = Math.max(5, S(prefs.chanH));
+    const line = (txt, av) => { const r = el('div', { className: 'm-chan' }, av ? el('i', { className: 'm-dot' }) : null, el('span', {}, txt)); r.style.height = H + 'px'; return r; };
+    return [line('Friends'), el('div', { className: 'm-cat' }, 'DIRECT MESSAGES'), line('Bee', true), line('Cam', true)];
+  }
+  function mainPart() {
+    const dm = studio.view === 'dm', topOn = prefs.topbar !== 'off';
+    const top = chipSize(part('top', topOn ? [el('span', { className: 'm-title' }, dm ? '@ Bee' : '# general'), el('span', { style: 'flex:1' }), bar('top')] : [], !topOn, 'sub'), prefs.icTop);
+    top.style.height = (topOn ? S(prefs.topH) : 5) + 'px';
+    const content = part('content', sampleMessages(), false, 'sub');
+    const composer = chipSize(part('composer', [el('div', { className: 'm-box' }, bar('composer', 'inbox'))], false, 'sub'), prefs.icComposer);
+    composer.style.height = S(prefs.composerH + 24) + 'px';
+    const col = part('main');
+    col.append(...validOrder(prefs.mainOrder, MAIN_PARTS).map((p) => ({ top, content, composer })[p]));
+    return col;
+  }
+  function sampleMessages() {
+    const A = S(prefs.avatarPx), L = Math.max(3, S(prefs.fontSize * 0.85));
+    const msg = (w1, w2, first) => el('div', { className: 'm-msg' }, prefs.avatars === 'off' ? null : (() => { const i = el('i', { className: 'm-av' + (first ? ' first' : '') }); i.style.width = i.style.height = A + 'px'; return i; })(),
+      el('div', { className: 'm-lines' }, (() => { const b = el('b'); b.style.width = w1 + '%'; b.style.height = L + 'px'; return b; })(), (() => { const s = el('span'); s.style.width = w2 + '%'; s.style.height = L + 'px'; return s; })()));
+    return [msg(30, 82, true), msg(22, 56), msg(36, 70)];
+  }
+  function membersPart(on) {
+    if (!on) return part('members', [], true);
+    if (studio.view === 'dm') return part('members', [el('div', { className: 'm-dp' }, el('div', { className: 'm-dp-banner' }), el('i', { className: 'm-dp-av' }), el('b'), el('span'))]);
+    const M = S(prefs.memberAv);
+    const row = (first) => { const r = el('div', { className: 'm-mem' }, (() => { const i = el('i', { className: 'm-av' + (first ? ' first' : '') }); i.style.width = i.style.height = M + 'px'; return i; })(), el('b')); return first ? plateOn(r, me.plate) : r; };
+    return part('members', [el('div', { className: 'm-cat' }, 'ONLINE — 3'), row(true), row(), row()]);
+  }
+
+  // ---------- handles: the edges you drag to resize ----------
+  function addHandles(membersOn) {
+    const r0 = mini.getBoundingClientRect();
+    const rect = (q) => { const n = mini.querySelector(q); if (!n) return null; const r = n.getBoundingClientRect(); return { x: r.left - r0.left, y: r.top - r0.top, w: r.width, h: r.height, n }; };
+    const cols = validOrder(prefs.cols, COLS), mi = cols.indexOf('main'), hs = [];
+    for (const [c, key] of [['rail', 'railW'], ['side', 'sideW'], ['members', 'membersW']]) {
+      if ((c === 'rail' && prefs.rail === 'off') || (c === 'members' && !membersOn)) continue;
+      const r = rect('.m-' + c), right = cols.indexOf(c) < mi;
+      hs.push(handle('v', right ? r.x + r.w : r.x, r.y, r.h, key, right ? 1 : -1));
+    }
+    const edge = (id, key, stretch, order, all) => {
+      const r = rect('.m-' + id); if (!r || r.n.classList.contains('off')) return;
+      const o = validOrder(order, all), before = o.indexOf(id) < o.indexOf(stretch);
+      hs.push(handle('h', r.x, before ? r.y + r.h : r.y, r.w, key, before ? 1 : -1));
+    };
+    edge('top', 'topH', 'content', prefs.mainOrder, MAIN_PARTS);
+    edge('composer', 'composerH', 'content', prefs.mainOrder, MAIN_PARTS);
+    edge('panel', 'panelH', 'body', prefs.sideOrder, SIDE_PARTS);
+    edge('head', mini.querySelector('.m-head.bannered') ? 'bannerH' : 'topH', 'body', prefs.sideOrder, SIDE_PARTS);
+    if (prefs.banner !== 'off') { const r = rect('.m-status'), top = prefs.statusPos !== 'bottom'; hs.push(handle('h', r.x, top ? r.y + r.h : r.y, r.w, 'statusH', top ? 1 : -1)); }
+    const av = rect('.m-content .m-av.first'); if (av) hs.push(grip(av.x + av.w, av.y + av.h, 'avatarPx'));
+    const mav = rect('.m-members .m-av.first'); if (mav) hs.push(grip(mav.x + mav.w, mav.y + mav.h, 'memberAv'));
+    const ch = rect('.m-chan.first'); if (ch) hs.push(handle('h', ch.x, ch.y + ch.h, ch.w, 'chanH', 1, 'thin'));
+    mini.append(...hs);
+  }
+  function handle(axis, x, y, len, key, dir, cls = '') {
+    const h = el('div', { className: `m-handle ${axis}${cls ? ' ' + cls : ''}`, title: `${SIZES[key][0]}: ${prefs[key]}px (drag to change)` });
+    Object.assign(h.style, axis === 'v' ? { left: x + 'px', top: y + 'px', height: len + 'px' } : { left: x + 'px', top: y + 'px', width: len + 'px' });
+    h.addEventListener('pointerdown', (e) => resizeDown(e, axis, key, dir));
+    return h;
+  }
+  function grip(x, y, key) {
+    const g = el('div', { className: 'm-grip', title: `${SIZES[key][0]}: ${prefs[key]}px (drag to change)` });
+    Object.assign(g.style, { left: x + 'px', top: y + 'px' });
+    g.addEventListener('pointerdown', (e) => resizeDown(e, 'both', key, 1));
+    return g;
+  }
+
+  // ---------- dragging ----------
+  function begin(e, d) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    studioDrag = { ...d, x0: e.clientX, y0: e.clientY, moved: false };
+    addEventListener('pointermove', onMove); addEventListener('pointerup', onUp); addEventListener('pointercancel', onUp);
+  }
+  function onMove(e) {
+    const d = studioDrag; if (!d) return;
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+    if (!d.moved) { if (Math.hypot(dx, dy) < 5) return; d.moved = true; if (d.start) d.start(e); }
+    d.move(e, dx, dy);
+  }
+  function onUp(e) {
+    removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp); removeEventListener('pointercancel', onUp);
+    const d = studioDrag; studioDrag = null; if (!d) return;
+    if (!d.moved) { if (d.click) d.click(e); return; }
+    if (d.end) d.end(e);
+  }
+  function resizeDown(e, axis, key, dir) {
+    const v0 = prefs[key];
+    begin(e, {
+      click: () => select(partForSize(key)),
+      start: () => { remember(); document.documentElement.classList.add('resizing'); },
+      move: (ev, dx, dy) => {
+        const d = axis === 'v' ? dx : axis === 'h' ? dy : (dx + dy) / 2;
+        prefs[key] = sizeOf(key, v0 + (d * dir) / scale);
+        applyPrefs(); drawMini();
+        hint.textContent = `${SIZES[key][0]}: ${prefs[key]}px`;
+      },
+      end: () => { document.documentElement.classList.remove('resizing'); hint.textContent = HINT; savePrefs(); studio.sel = partForSize(key); draw(); },
+    });
+  }
+  const partForSize = (key) => ({ railW: 'rail', sideW: 'side', membersW: 'members', topH: 'top', composerH: 'composer', panelH: 'panel', bannerH: 'head',
+    statusH: 'status', avatarPx: 'content', memberAv: 'members', chanH: 'body', icTop: 'top', icComposer: 'composer', icPanel: 'panel', fontSize: 'content' })[key] || studio.sel;
+  function makeGhost(node, ev) {
+    const r = node.getBoundingClientRect(), g = node.cloneNode(true);
+    g.classList.add('m-ghost');
+    Object.assign(g.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+    g.dataset.dx = ev.clientX - r.left; g.dataset.dy = ev.clientY - r.top;
+    document.body.append(g);
+    return g;
+  }
+  const moveGhost = (ev) => { if (ghost) { ghost.style.left = ev.clientX - ghost.dataset.dx + 'px'; ghost.style.top = ev.clientY - ghost.dataset.dy + 'px'; } };
+  const dropGhost = () => { if (ghost) ghost.remove(); ghost = null; showMarker(null); };
+  function showMarker(m) {
+    if (!marker) marker = el('div', { className: 'm-drop' });
+    if (!m) { marker.remove(); return; }
+    Object.assign(marker.style, { left: m.x + 'px', top: m.y + 'px', width: m.w + 'px', height: m.h + 'px' });
+    mini.append(marker);
+  }
+  // moving a part: columns go left or right; the sidebar's and main area's parts go up or down; the status bar top or bottom
+  function partDown(e, id, node) {
+    const group = COLS.includes(id) ? 'cols' : SIDE_PARTS.includes(id) ? 'side' : MAIN_PARTS.includes(id) ? 'main' : 'status';
+    let target = null;
+    begin(e, {
+      click: () => select(id),
+      start: (ev) => { remember(); ghost = makeGhost(node, ev); node.classList.add('lifting'); },
+      move: (ev) => { moveGhost(ev); target = dropFor(group, id, ev); showMarker(target && target.marker); },
+      end: () => {
+        dropGhost(); node.classList.remove('lifting');
+        if (!target) return draw();
+        if (group === 'cols') prefs.cols = target.order; else if (group === 'side') prefs.sideOrder = target.order;
+        else if (group === 'main') prefs.mainOrder = target.order; else prefs.statusPos = target.pos;
+        studio.sel = id; commit();
+      },
+    });
+  }
+  function dropFor(group, id, ev) {
+    const r0 = mini.getBoundingClientRect();
+    if (group === 'status') { const low = ev.clientY > r0.top + r0.height / 2; return { pos: low ? 'bottom' : 'top', marker: { x: 0, y: low ? r0.height - 4 : 0, w: r0.width, h: 4 } }; }
+    const all = group === 'cols' ? validOrder(prefs.cols, COLS) : group === 'side' ? validOrder(prefs.sideOrder, SIDE_PARTS) : validOrder(prefs.mainOrder, MAIN_PARTS);
+    const others = all.filter((x) => x !== id), across = group === 'cols';
+    const rects = others.map((x) => mini.querySelector('.m-' + x).getBoundingClientRect());
+    const p = across ? ev.clientX : ev.clientY;
+    const i = rects.filter((r) => (across ? r.left + r.width / 2 : r.top + r.height / 2) < p).length;
+    const box = across ? r0 : mini.querySelector(group === 'side' ? '.m-side' : '.m-main').getBoundingClientRect();
+    const ref = rects[i] || rects[i - 1], end = !rects[i];
+    const marker = across ? { x: (end ? ref.right : ref.left) - r0.left - 2, y: box.top - r0.top, w: 4, h: box.height }
+      : { x: box.left - r0.left, y: (end ? ref.bottom : ref.top) - r0.top - 2, w: box.width, h: 4 };
+    return { order: [...others.slice(0, i), id, ...others.slice(i)], marker };
+  }
+  // moving a button: along its own bar, or into the tray (hide it) and back out
+  function chipDown(e, group, id, node, fromTray) {
+    const fixed = !!(BUTTONS[group][1].find((b) => b[0] === id) || [])[3];
+    let target = null;
+    begin(e, {
+      click: () => { if (fromTray) { const h = { ...(prefs.hidden || {}) }; delete h[id]; remember(); prefs.hidden = h; commit(); } else select(PART_OF_BAR[group]); },
+      start: (ev) => { remember(); ghost = makeGhost(node, ev); node.classList.add('lifting'); },
+      move: (ev) => {
+        moveGhost(ev);
+        const under = document.elementFromPoint(ev.clientX, ev.clientY);
+        const overTray = !!under && under.closest('.tray') === tray;
+        tray.classList.toggle('over', overTray && !fixed);
+        target = null;
+        if (overTray) { target = { hide: true }; showMarker(null); return; }
+        const barEl = under && under.closest('[data-bar]');
+        if (!barEl || barEl.dataset.bar !== group || !mini.contains(barEl)) { showMarker(null); return; }
+        const down = barEl.classList.contains('vertical'), chips = [...barEl.querySelectorAll('.chip')].filter((c) => c !== node);
+        const p = down ? ev.clientY : ev.clientX;
+        const i = chips.filter((c) => { const r = c.getBoundingClientRect(); return (down ? r.top + r.height / 2 : r.left + r.width / 2) < p; }).length;
+        target = { before: chips[i] ? chips[i].dataset.chip : null };
+        const r0 = mini.getBoundingClientRect(), br = barEl.getBoundingClientRect(), ref = chips[i] || chips[i - 1];
+        if (!ref) return showMarker({ x: br.left - r0.left, y: br.top - r0.top, w: down ? br.width : 3, h: down ? 3 : br.height });
+        const r = ref.getBoundingClientRect(), end = !chips[i];
+        showMarker(down ? { x: br.left - r0.left, y: (end ? r.bottom : r.top) - r0.top - 1, w: br.width, h: 3 } : { x: (end ? r.right : r.left) - r0.left - 1, y: br.top - r0.top, w: 3, h: br.height });
+      },
+      end: () => {
+        dropGhost(); node.classList.remove('lifting'); tray.classList.remove('over');
+        if (!target) return draw();
+        if (target.hide) {
+          if (fixed) { toast(id === 'settings' ? 'The settings cog always stays, so you can always get back here.' : 'That one can be moved, but not hidden.'); return draw(); }
+          prefs.hidden = { ...(prefs.hidden || {}), [id]: true };
+        } else {
+          const h = { ...(prefs.hidden || {}) }; delete h[id]; prefs.hidden = h;
+          const o = ordered(group).filter((x) => x !== id), at = target.before ? o.indexOf(target.before) : -1;
+          o.splice(at < 0 ? o.length : at, 0, id);
+          prefs.order = { ...(prefs.order || {}), [group]: o };
+        }
+        commit();
+      },
+    });
+  }
+
+  // ---------- the tray: hidden buttons (drag or tap one to bring it back) and hidden parts ----------
+  function drawTray() {
+    const items = [];
+    const parts = [['status', prefs.banner === 'off', () => { prefs.banner = 'on'; }], ['rail', prefs.rail === 'off', () => { prefs.rail = 'on'; }],
+      ['head', prefs.sideHead === 'off', () => { prefs.sideHead = 'on'; }], ['panel', prefs.userPanel === 'off', () => { prefs.userPanel = 'on'; }],
+      ['top', prefs.topbar === 'off', () => { prefs.topbar = 'on'; }], ['members', prefs.membersDefault === false, () => { prefs.membersDefault = true; showMembers = true; }]];
+    for (const [id, off, on] of parts) if (off) items.push(el('button', { className: 'chip tchip part', title: 'Show the ' + PARTS[id].toLowerCase() + ' again', onclick: () => { remember(); on(); studio.sel = id; commit(); } }, icon('eye'), el('span', {}, PARTS[id])));
+    for (const [group, [title, list]] of Object.entries(BUTTONS)) for (const [id, label, ic] of list) {
+      if (shown(id)) continue;
+      const c = el('span', { className: 'chip tchip', title: `${label}, in the ${title.toLowerCase()}. Drag it back onto its bar, or tap it, to show it.` }, icon(ic), el('span', {}, label));
+      c.dataset.chip = id;
+      c.addEventListener('pointerdown', (e) => chipDown(e, group, id, c, true));
+      items.push(c);
+    }
+    tray.replaceChildren(el('span', { className: 'tray-lbl' }, items.length ? 'Hidden:' : 'Drop a button here to hide it.'), ...items);
+  }
+
+  // ---------- the settings for whatever is selected ----------
+  function drawInspector() {
+    const id = studio.sel, out = [];
+    const flag = (key, label, desc, after) => row2(label, desc, sw(prefs[key] === true || prefs[key] === 'on', (on) => {
+      remember(); prefs[key] = typeof DEFAULT_PREFS[key] === 'boolean' ? on : on ? 'on' : 'off'; if (after) after(on); commit();
+    }));
+    const pickRow = (key, label, options, desc = '') => row2(label, desc, sel(prefs[key], options, (v) => { remember(); prefs[key] = v; commit(); }));
+    const size = (key, desc = '') => {
+      const [label, lo, hi] = SIZES[key], val = el('span', { className: 'val' }, prefs[key] + 'px');
+      const r = el('input', { type: 'range', min: lo, max: hi, step: 1, value: prefs[key] });
+      let first = true;
+      r.oninput = () => { if (first) { remember(); first = false; } prefs[key] = +r.value; val.textContent = r.value + 'px'; applyPrefs(); drawMini(); };
+      r.onchange = () => { first = true; savePrefs(); };
+      return row2(label, desc, el('div', { className: 'slide' }, r, val));
+    };
+    const move = (key, all, labels) => {
+      const o = validOrder(prefs[key], all), i = o.indexOf(id);
+      const go = (d) => { const j = i + d; if (j < 0 || j >= o.length) return; remember(); [o[i], o[j]] = [o[j], o[i]]; prefs[key] = o; commit(); };
+      return row2('Position', `${i + 1} of ${o.length}, ${key === 'cols' ? 'left to right' : 'top to bottom'}. You can also drag it in the mini screen.`,
+        el('div', { className: 'btn-row' }, el('button', { className: 'btn small', disabled: i === 0, onclick: () => go(-1) }, labels[0]), el('button', { className: 'btn small', disabled: i === o.length - 1, onclick: () => go(1) }, labels[1])));
+    };
+    const sideways = (key, all) => move(key, all, ['◀ Left', 'Right ▶']), updown = (key, all) => move(key, all, ['▲ Up', 'Down ▼']);
+    const onoff = [['on', 'Shown'], ['off', 'Hidden']];
+    if (id === 'status') out.push(flag('banner', 'Show the status bar', 'The line saying whether you’re signed in and live.'), size('statusH'),
+      row2('Position', 'Across the top or the bottom of the window.', el('div', { className: 'btn-row' }, ...[['top', 'Top'], ['bottom', 'Bottom']].map(([v, l]) =>
+        el('button', { className: 'btn small' + (prefs.statusPos === v || (v === 'top' && prefs.statusPos !== 'bottom') ? ' primary' : ''), onclick: () => { remember(); prefs.statusPos = v; commit(); } }, l)))));
+    if (id === 'rail') out.push(flag('rail', 'Show the server rail', 'The strip of server icons.'), size('railW', 'Server icons grow with it.'), sideways('cols', COLS),
+      pickRow('iconShape', 'Icon shape', [['squircle', 'Squircle'], ['round', 'Circle'], ['square', 'Rounded square']]), ...buttonRows('rail'));
+    if (id === 'side') out.push(size('sideW'), sideways('cols', COLS), size('chanH'), flag('cats', 'Category headings', 'TEXT CHANNELS, VOICE CHANNELS…'), flag('chanIcons', 'Channel icons', 'The # and speaker marks.'), ...buttonRows('dms'));
+    if (id === 'head') out.push(flag('sideHead', 'Show the server header', 'The server’s name and menu.'), flag('serverBanner', 'Server banners', 'A server’s picture at the top of its channels.'),
+      size('bannerH', 'When a server has a banner.'), updown('sideOrder', SIDE_PARTS), ...buttonRows('header'));
+    if (id === 'body') out.push(size('chanH'), flag('cats', 'Category headings', ''), flag('chanIcons', 'Channel icons', ''), updown('sideOrder', SIDE_PARTS), ...buttonRows('channels'));
+    if (id === 'panel') out.push(flag('userPanel', 'Show the user panel', 'You, your status and the settings cog.'), size('panelH'), size('icPanel'),
+      flag('plates', 'Nameplates', 'Pictures behind names here, in member lists and DMs.'), updown('sideOrder', SIDE_PARTS), ...buttonRows('panel'));
+    if (id === 'main') out.push(sideways('cols', COLS), pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']], 'Long lines can stop at a comfortable width.'));
+    if (id === 'top') out.push(flag('topbar', 'Show the top bar', 'The channel name and its buttons.'), size('topH'), size('icTop'),
+      pickRow('btnLabels', 'Labels', [['off', 'Icons only'], ['on', 'Icons and words']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('top'));
+    if (id === 'content') out.push(flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), pickRow('avatarShape', 'Avatar shape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']]),
+      size('fontSize', 'Everything in the app scales with it.'), pickRow('density', 'Spacing', [['cozy', 'Cozy'], ['compact', 'Compact']]),
+      pickRow('timestamps', 'Timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']]), flag('group', 'Group messages', 'One heading for several messages in a row.'),
+      pickRow('dividers', 'Date dividers', onoff), pickRow('hover', 'Highlight on hover', onoff), pickRow('startHeaders', 'Conversation start', onoff, '“Welcome to #channel”.'),
+      pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']]), updown('mainOrder', MAIN_PARTS));
+    if (id === 'composer') out.push(size('composerH'), size('icComposer'), updown('mainOrder', MAIN_PARTS), ...buttonRows('composer'));
+    if (id === 'members') out.push(flag('membersDefault', 'Open by default', 'You can always open it from the top bar.', (on) => { showMembers = on; }), size('membersW', 'The DM profile panel uses it too.'),
+      sideways('cols', COLS), size('memberAv'), flag('memberOffline', 'Include offline', ''), flag('memberStatusText', 'Second line', 'Each person’s about text.'),
+      pickRow('memberGroups', 'Group by role', onoff), flag('plates', 'Nameplates', ''), flag('dmPanel', 'Profile beside DMs', 'Shown in this column in DMs.'));
+    insp.replaceChildren(el('div', { className: 'insp-head' }, el('h3', {}, PARTS[id] || 'Layout'), el('span', { className: 'muted' }, 'Selected')), ...out);
+  }
+  function buttonRows(group) {
+    const [title, items] = BUTTONS[group], order = ordered(group), list = el('div', { className: 'sx-list btn-list' });
+    order.forEach((bid, i) => {
+      const [, label, ic, fixed] = items.find((b) => b[0] === bid);
+      const go = (d) => { const o = ordered(group), j = i + d; if (j < 0 || j >= o.length) return; remember(); [o[i], o[j]] = [o[j], o[i]]; prefs.order = { ...(prefs.order || {}), [group]: o }; commit(); };
+      list.append(el('div', { className: 'it' }, icon(ic, 17), el('span', { className: 'nm3' }, label), iconBtn('up', 'Move earlier', () => go(-1)), iconBtn('down', 'Move later', () => go(1)),
+        fixed ? el('span', { className: 'chip', title: 'Always shown' }, icon('lock', 12), 'Always')
+          : sw(shown(bid), (on) => { remember(); const h = { ...(prefs.hidden || {}) }; if (on) delete h[bid]; else h[bid] = true; prefs.hidden = h; commit(); })));
+    });
+    return [el('h4', { className: 'sub-h' }, title + ' buttons'), list];
+  }
+
+  // redraw when there's room for a different size (first showing, or the window resizing)
+  new ResizeObserver(() => { if (wrap.clientWidth && wrap.clientWidth !== lastW) { lastW = wrap.clientWidth; drawMini(); } }).observe(wrap);
+  draw();
+  return el('div', { className: 'studio' }, tools, hint, wrap, tray, insp);
 }
