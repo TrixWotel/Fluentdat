@@ -79,6 +79,7 @@ export const Store = new Proxy({}, {
       case 'signIn': return async (token) => { const r = await GitHubStore.signIn(token); impl = GitHubStore; emit(); return r; };
       case 'signInEmail': return (email) => SupabaseStore.signInEmail(email);
       case 'signInOAuth': return (provider) => SupabaseStore.signInOAuth(provider);
+      case 'providers': return () => SupabaseStore.providers();
       case 'verifyEmailCode': return async (email, code) => { await SupabaseStore.verifyEmailCode(email, code); impl = SupabaseStore; emit(); return SupabaseStore.account(); };
       case 'signOut': return async () => {
         if (impl === SupabaseStore) await SupabaseStore.signOut(); else GitHubStore.signOut();

@@ -475,7 +475,7 @@ function renderBanner() {
   else if (acc) {
     const when = st.lastSync ? 'synced ' + new Date(st.lastSync).toLocaleTimeString() : 'syncing…';
     b.append(st.error ? `Sync trouble: ${st.error}` : `Synced with GitHub as ${acc.login} — ${when}`);
-  } else b.append(Store.configured ? 'Saving in this browser only. Sign in with Discord, GitHub or email to chat with your team.' : 'Saving in this browser only. Sign in with GitHub to share with your team.');
+  } else b.append(Store.configured ? 'Saving in this browser only. Sign in to chat with your team.' : 'Saving in this browser only. Sign in with GitHub to share with your team.');
   b.onclick = () => (acc || Store.resuming ? openUserSettings('sync') : signInDialog());
 }
 
@@ -1281,12 +1281,18 @@ function signInDialog(after, title) {
       try { await Store.signInOAuth(id); b.lastChild.textContent = 'Opening ' + label + '…'; }   // (the page now goes to them and comes back)
       catch (err) { say(err); b.disabled = false; }
     } }, brand(id), el('span', {}, 'Continue with ' + label));
+    const btns = el('div', { className: 'sg-btns' }, provider('discord', 'Discord'), provider('github', 'GitHub'));
+    const or = el('div', { className: 'sg-or' }, el('span', {}, 'or with your email')), byEmail = el('div', { className: 'sg-row' }, email, send);
+    // only offer what the project has switched on (a button for one that's off would lead to an error page)
+    Store.providers().then((on) => {
+      for (const b of [...btns.children]) if (!on[b.classList.contains('discord') ? 'discord' : 'github']) b.remove();
+      if (!btns.children.length) { btns.remove(); or.remove(); }
+      if (!on.email) { or.remove(); byEmail.remove(); }
+    });
     box.replaceChildren(
       el('h3', {}, title || 'Sign in to Fluentdat'),
       el('p', { className: 'sg-sub' }, 'Chat with your team: servers, DMs and friends, live on every device.'),
-      el('div', { className: 'sg-btns' }, provider('discord', 'Discord'), provider('github', 'GitHub')),
-      el('div', { className: 'sg-or' }, el('span', {}, 'or with your email')),
-      el('div', { className: 'sg-row' }, email, send),
+      btns, or, byEmail,
       msg,
       el('div', { className: 'row' }, el('button', { className: 'btn ghost', onclick: () => tokenForm(false) }, icon('key', 16), ' GitHub token instead'), el('span', { style: 'flex:1' }), cancel));
   }

@@ -12,7 +12,7 @@ const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
 
-let sb = null, session = null, live = null, structure = null, active = null, following = false;
+let sb = null, session = null, live = null, structure = null, active = null, following = false, providersOn = null;
 let cache = blank();
 const pending = new Map();          // messages you've sent that the server hasn't confirmed yet (kept through reloads)
 const asking = new Set();           // profiles being fetched
@@ -212,6 +212,16 @@ export const SupabaseStore = {
     if (!session) return false;
     await start();
     return true;
+  },
+  // which sign-in methods the project has switched on (so the sign-in window only offers those)
+  async providers() {
+    if (providersOn) return providersOn;
+    try {
+      const j = await (await fetch(SUPABASE.url.replace(/\/$/, '') + '/auth/v1/settings', { headers: { apikey: SUPABASE.anonKey } })).json();
+      const ext = j.external || {};
+      providersOn = { discord: !!ext.discord, github: !!ext.github, email: ext.email !== false };
+    } catch { providersOn = { discord: true, github: true, email: true }; }     // (can't tell: offer them all)
+    return providersOn;
   },
   async signInEmail(email) { await client(); must(await sb.auth.signInWithOtp({ email: String(email).trim(), options: { emailRedirectTo: here() } })); },
   // the code in the same email — for when the link opens on another device (a phone) instead of this browser

@@ -3,6 +3,6 @@
 // rules allow (supabase/setup.sql). Leave them empty and those sign-in buttons stay hidden.
 // Never put the secret key (sb_secret_...), the service_role key or the database password here.
 export const SUPABASE = {
-  url: '',        // Connect (top of the project) → Project URL, like https://abcdefghijkl.supabase.co
-  anonKey: '',    // Connect → Publishable key (sb_publishable_...), or the older anon public key
+  url: 'https://lzrqlcmpvpysvulmwyfe.supabase.co',              // Connect (top of the project) → Project URL
+  anonKey: 'sb_publishable_adD0CBzLdeZGDYtAyVkomg_fRxfHlJ2',    // Connect → Publishable key (never a sb_secret_ one)
 };
