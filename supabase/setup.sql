@@ -477,6 +477,10 @@ revoke all on function public.create_server(text, text), public.create_invite(uu
 grant execute on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
   public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid) to authenticated;
+-- the rules call these helpers, so signed-in people need to be able to run them (granted here rather than left to the
+-- project's defaults, so it works however the project was set up)
+grant execute on function public.is_member(uuid), public.is_admin(uuid), public.is_owner(uuid), public.channel_server(uuid),
+  public.in_dm(uuid), public.knows(uuid) to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
