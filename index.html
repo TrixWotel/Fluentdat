@@ -172,7 +172,7 @@
     .picker .empty { color: var(--muted); font-size: .8rem; padding: 6px; }
 
     /* dialogs */
-    .scrim { position: fixed; inset: 0; background: #0008; display: grid; place-items: center; z-index: 30; padding: 20px; }
+    .scrim { position: fixed; inset: 0; background: #0008; display: grid; place-items: center; z-index: 60; padding: 20px; }
     .dialog { background: var(--side); border-radius: 16px; padding: 24px; width: 100%; max-width: 460px; max-height: 88dvh; overflow-y: auto; }
     .dialog.wide { max-width: 640px; }
     .dialog h3 { margin: 0 0 16px; color: var(--bright); }
@@ -210,20 +210,29 @@
     .banner { display: block; width: 100%; border: none; cursor: pointer; background: var(--accent); color: var(--accent-text); text-align: center; font-size: .82rem; padding: 6px 12px; flex: none; } .banner a { color: inherit; font-weight: 700; }
 
     /* ---- settings (user + server) ---- */
-    .sx { position: fixed; inset: 0; z-index: 50; background: var(--main); display: grid; grid-template-columns: 260px 1fr; }
-    .sx-nav { background: var(--side); overflow-y: auto; padding: 50px 12px 24px; }
+    .sx-backdrop { position: fixed; inset: 0; z-index: 45; background: rgba(0, 0, 0, .55); display: grid; place-items: center; padding: 24px; animation: sx-fade .15s ease; }
+    .sx { position: relative; width: min(1040px, max(74vw, 680px), 100%); height: min(780px, 88vh); background: var(--main); display: grid; grid-template-columns: 250px 1fr;
+      border-radius: 14px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 24px 80px rgba(0, 0, 0, .55); animation: sx-pop .18s ease; }
+    @keyframes sx-fade { from { opacity: 0; } }
+    @keyframes sx-pop { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+    .sx-nav { background: var(--side); overflow-y: auto; padding: 18px 12px 20px; }
     .sx-nav h4 { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 10px 6px; }
     .sx-nav button { width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px; color: var(--muted); display: flex; align-items: center; gap: 9px; margin-bottom: 2px; }
     .sx-nav button:hover { background: var(--hover); color: var(--text); }
     .sx-nav button.on { background: var(--hover); color: var(--bright); font-weight: 600; }
     .sx-nav button.danger { color: #e5534b; }
     .sx-nav hr { border: none; border-top: 1px solid var(--line); margin: 10px 6px; }
-    .sx-body { overflow-y: auto; padding: 50px 40px 80px; }
+    .sx-me { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
+    .sx-me .who { min-width: 0; }
+    .sx-me b { display: block; color: var(--bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sx-me .sx-edit { color: var(--muted); font-size: .8rem; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+    .sx-me .sx-edit:hover { color: var(--text); text-decoration: underline; }
+    .sx-body { overflow-y: auto; padding: 26px 64px 50px 34px; }
     .sx-inner { max-width: 720px; }
     .sx-body h2 { margin: 0 0 4px; color: var(--bright); font-size: 1.35rem; }
     .sx-body .sub { color: var(--muted); margin: 0 0 24px; }
     .sx-body h3 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 10px; }
-    .sx-close { position: fixed; top: 24px; right: 28px; width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--muted); color: var(--muted); display: grid; place-items: center; }
+    .sx-close { position: absolute; top: 14px; right: 16px; z-index: 2; width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--muted); color: var(--muted); display: grid; place-items: center; background: var(--main); }
     .sx-close:hover { background: var(--hover); color: var(--text); border-color: var(--text); }
     .row2 { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
     .row2 .lbl { flex: 1; min-width: 0; }
@@ -302,9 +311,10 @@
     /* phone */
     .top .menu { display: none; padding: 6px; color: var(--muted); }
     @media (max-width: 720px) {
-      .sx { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .sx-backdrop { padding: 0; }
+      .sx { width: 100%; height: 100%; border-radius: 0; border: none; grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
       .sx-nav { padding: 52px 12px 10px; display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); }
-      .sx-nav h4, .sx-nav hr { display: none; }
+      .sx-nav h4, .sx-nav hr, .sx-nav .sx-me, .sx-nav input { display: none; }
       .sx-nav button { width: auto; white-space: nowrap; margin: 0; }
       .sx-body { padding: 18px 18px 60px; }
       .sx-close { top: 12px; right: 14px; width: 34px; height: 34px; }

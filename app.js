@@ -509,7 +509,7 @@ function serverMenu(anchor) {
 }
 
 let toastT = 0;
-function toast(text) { let t = $('#toast'); if (!t) { t = el('div', { id: 'toast' }); Object.assign(t.style, { position: 'fixed', bottom: '92px', left: '50%', transform: 'translateX(-50%)', background: 'var(--rail)', color: 'var(--text)', padding: '10px 16px', borderRadius: '10px', boxShadow: '0 10px 30px #0007', zIndex: 50, maxWidth: '90%', textAlign: 'center' }); document.body.append(t); } t.textContent = text; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3400); }
+function toast(text) { let t = $('#toast'); if (!t) { t = el('div', { id: 'toast' }); Object.assign(t.style, { position: 'fixed', bottom: '92px', left: '50%', transform: 'translateX(-50%)', background: 'var(--rail)', color: 'var(--text)', padding: '10px 16px', borderRadius: '10px', boxShadow: '0 10px 30px #0007', zIndex: 70, maxWidth: '90%', textAlign: 'center' }); document.body.append(t); } t.textContent = text; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3400); }
 
 // ---------- wiring ----------
 $('#sticker-btn').append(icon('smile')); $('#send-btn').append(icon('send'));
@@ -586,9 +586,14 @@ function iconBtn(name, title, onclick, cls) { const b = el('button', { title, cl
 function overlay(navItems, firstSection, render) {
   let section = firstSection, navQuery = '';
   const nav = el('div', { className: 'sx-nav' }), body = el('div', { className: 'sx-body' });
-  const box = el('div', { className: 'sx' }, nav, body);
-  const close = el('button', { className: 'sx-close', title: 'Close (Esc)', onclick: () => shut() }); close.append(icon('x', 20));
-  box.append(close);
+  const panel = el('div', { className: 'sx', role: 'dialog' }, nav, body);
+  const close = el('button', { className: 'sx-close', title: 'Close (Esc)', onclick: () => shut() }); close.append(icon('x', 18));
+  panel.append(close);
+  const box = el('div', { className: 'sx-backdrop' }, panel);
+  // (only a click that starts AND ends outside closes it, so dragging a slider out of the window doesn't)
+  let downOutside = false;
+  box.addEventListener('mousedown', (e) => { downOutside = e.target === box; });
+  box.addEventListener('click', (e) => { if (downOutside && e.target === box) shut(); });
   function shut() { box.remove(); document.removeEventListener('keydown', esc); renderAll(); }
   const esc = (e) => { if (e.key === 'Escape') shut(); };
   document.addEventListener('keydown', esc);
@@ -597,6 +602,11 @@ function overlay(navItems, firstSection, render) {
     for (const item of navItems) {
       if (item.head) { nav.append(el('h4', {}, typeof item.head === 'function' ? item.head() : item.head)); continue; }
       if (item.hr) { nav.append(el('hr')); continue; }
+      if (item.profile) {
+        const edit = el('span', { className: 'sx-edit', onclick: () => { section = 'profile'; draw(); } }, 'Edit Profile', icon('edit', 13));
+        nav.append(el('div', { className: 'sx-me' }, avatarEl(asMember(), { size: 42 }), el('div', { className: 'who' }, el('b', {}, me.name), edit)));
+        continue;
+      }
       if (item.search) {
         const q = el('input', { type: 'text', placeholder: 'Search settings', value: navQuery,
           style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);font:inherit;margin-bottom:6px' });
@@ -653,6 +663,7 @@ const pushProfile = () => { if (Store.signedIn) Store.setProfile({ name: me.name
 // ===================== user settings =====================
 function openUserSettings(section = 'account') {
   const nav = [
+    { profile: true },
     { search: true },
     { head: 'User Settings' },
     { id: 'account', label: 'My Account', icon: 'user' },
