@@ -27,6 +27,8 @@ export const ANIMS = [
   ['banner', 'Servers & sidebar', 'Server banner', 'A server\'s banner fades into its channels and tucks away as you scroll.', ['.side-head.has-banner', '.side-head.has-banner::after', '.side-head.has-banner::before', '.side.banner-over .side-body']],
   ['members', 'Servers & sidebar', 'Member list', 'Members light up under the pointer, and the one whose card is open stays lit.', ['.mem', '.mem .avatar']],
   ['dmPanel', 'Profiles', 'DM profile panel', 'The profile beside a DM slides in and its cards rise one after another.', ['.dmp', '.dmp-card', '.dmp-tool', '.dmp-row > svg.ic', '.dmp-av .avatar .fill', '.dmp-full']],
+  ['decorations', 'Profiles', 'Avatar decorations', 'Decorations from the Shop sparkle, spin and flicker around avatars.', ['.deco *']],
+  ['profileEffects', 'Profiles', 'Profile effects', 'Effects from the Shop (snow, confetti…) play over profile cards.', ['.pfx > i', '.pfx-shoot']],
   ['nameEffects', 'Profiles', 'Moving names', 'Display name effects that move (Prism, Gummy, Glow) keep moving.', ['.ns', '.ns-prism', '.ns-gummy', '.ns-glow', '.ns-neon']],
   ['profileEditor', 'Profiles', 'Profile editor', 'The profile editor\'s preview follows every change, and the save bar slides up when you have unsaved changes.', ['.pe', '.pe-bar', '.pe-card', '.pe-card *', '.pe-sec', '.pe-tile']],
   ['buttons', 'Little things', 'Buttons', 'Buttons brighten when you point at them and press in when clicked.', ['.btn', '.sg-btn', '.sg-alt', '.dmp-full', '.top .act']],

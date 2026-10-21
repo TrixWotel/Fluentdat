@@ -288,7 +288,31 @@ create table if not exists public.profile_extras (
   connections jsonb not null default '[]'::jsonb,
   widgets jsonb not null default '[]'::jsonb,
   activity jsonb not null default '[]'::jsonb,
+  quests jsonb not null default '[]'::jsonb,                  -- the Quests you finished (their rewards are yours)
   updated_at timestamptz not null default now()
+);
+
+-- a server's events (Discord's): when, what, and where (one of its voice channels, or somewhere else)
+create table if not exists public.server_events (
+  id uuid primary key default gen_random_uuid(),
+  server_id uuid not null references public.servers (id) on delete cascade,
+  title text not null check (length(trim(title)) between 1 and 100),
+  description text not null default '' check (length(description) <= 1000),
+  starts_at timestamptz not null,
+  ends_at timestamptz,
+  channel_id uuid references public.channels (id) on delete set null,
+  place text not null default '' check (length(place) <= 100),
+  created_by uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  check (ends_at is null or ends_at > starts_at)
+);
+create index if not exists server_events_by_server on public.server_events (server_id, starts_at);
+-- who's interested in an event
+create table if not exists public.event_interest (
+  event_id uuid not null references public.server_events (id) on delete cascade,
+  user_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (event_id, user_id)
 );
 
 -- (running this again over an older Fluentdat: add what's new)
@@ -309,6 +333,15 @@ alter table public.profiles add column if not exists tag_badge text not null def
 alter table public.profiles add column if not exists tag_color text not null default '';
 -- the game you say you're playing, and since when (shown under your name, as on Discord)
 alter table public.profiles add column if not exists playing jsonb;
+-- what you picked in the Shop: an avatar decoration and a profile effect (by name; Fluentdat draws them); the Quests done
+alter table public.profiles add column if not exists decoration text not null default '';
+alter table public.profiles add column if not exists effect text not null default '';
+alter table public.profile_extras add column if not exists quests jsonb not null default '[]'::jsonb;
+-- what a server's sidebar offers above its channels (Browse Channels, Game Servers, Server Guide, Events), its Server
+-- Guide (a welcome, to-dos and resource pages), and the game servers its people play on
+alter table public.servers add column if not exists features jsonb not null default '{}'::jsonb;
+alter table public.servers add column if not exists guide jsonb not null default '{}'::jsonb;
+alter table public.servers add column if not exists game_servers jsonb not null default '[]'::jsonb;
 alter table public.servers add column if not exists tag text not null default '';
 alter table public.servers add column if not exists tag_badge text not null default '';
 alter table public.servers add column if not exists tag_color text not null default '';
@@ -354,6 +387,8 @@ alter table public.profiles add constraint profiles_style check ((theme1 = '' or
   and name_font ~ '^[a-z0-9]{0,16}$' and name_effect ~ '^[a-z]{0,16}$'
   and (name_color1 = '' or name_color1 ~ '^#[0-9a-fA-F]{6}$') and (name_color2 = '' or name_color2 ~ '^#[0-9a-fA-F]{6}$')
   and tag ~ '^[A-Za-z0-9]{0,4}$' and tag_badge ~ '^[a-z0-9]{0,20}$' and (tag_color = '' or tag_color ~ '^#[0-9a-fA-F]{6}$'));
+alter table public.profiles drop constraint if exists profiles_cosmetics;
+alter table public.profiles add constraint profiles_cosmetics check (decoration ~ '^[a-z0-9-]{0,24}$' and effect ~ '^[a-z0-9-]{0,24}$');
 alter table public.servers drop constraint if exists servers_shapes;
 alter table public.servers add constraint servers_shapes check ((img = '' or img ~ '^data:image/(png|jpeg|webp|gif);base64,')
   and (banner = '' or banner ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,'));
@@ -607,6 +642,32 @@ drop policy if exists "see people you know" on public.profiles;
 create policy "see people you know" on public.profiles for select to authenticated using (knows(id));
 drop policy if exists "edit your own profile" on public.profiles;
 create policy "edit your own profile" on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
+-- a server's events: seen by its members; made by its admins (and its members, when the server lets them); changed or
+-- cancelled by whoever made them, or an admin. Who's interested: seen by the members, said by each for themselves
+create or replace function public.can_make_events(p_server uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select is_admin(p_server) or (is_member(p_server) and coalesce((select (features->>'member_events')::boolean from servers where id = p_server), false));
+$$;
+alter table public.server_events enable row level security;
+drop policy if exists "members see their servers' events" on public.server_events;
+create policy "members see their servers' events" on public.server_events for select to authenticated using (is_member(server_id));
+drop policy if exists "make events" on public.server_events;
+create policy "make events" on public.server_events for insert to authenticated with check (created_by = auth.uid() and can_make_events(server_id));
+drop policy if exists "change events" on public.server_events;
+create policy "change events" on public.server_events for update to authenticated
+  using (is_member(server_id) and (is_admin(server_id) or created_by = auth.uid())) with check (is_admin(server_id) or created_by = auth.uid());
+drop policy if exists "cancel events" on public.server_events;
+create policy "cancel events" on public.server_events for delete to authenticated using (is_member(server_id) and (is_admin(server_id) or created_by = auth.uid()));
+alter table public.event_interest enable row level security;
+drop policy if exists "see who's interested" on public.event_interest;
+create policy "see who's interested" on public.event_interest for select to authenticated
+  using (exists (select 1 from server_events e where e.id = event_id and is_member(e.server_id)));
+drop policy if exists "say you're interested" on public.event_interest;
+create policy "say you're interested" on public.event_interest for insert to authenticated
+  with check (user_id = auth.uid() and exists (select 1 from server_events e where e.id = event_id and is_member(e.server_id)));
+drop policy if exists "take it back" on public.event_interest;
+create policy "take it back" on public.event_interest for delete to authenticated using (user_id = auth.uid());
+
 -- a profile's Connections, widgets and activity: seen by whoever can see the profile, kept by its owner
 alter table public.profile_extras enable row level security;
 drop policy if exists "see the extras of people you know" on public.profile_extras;
@@ -1039,6 +1100,10 @@ begin
      or exists (select 1 from jsonb_array_elements(new.activity) g where not game_ok(g, false)) then
     raise exception 'Recent activity is up to 10 games.';
   end if;
+  if coalesce(jsonb_typeof(new.quests), '') <> 'array' or jsonb_array_length(new.quests) > 50
+     or exists (select 1 from jsonb_array_elements(new.quests) q where coalesce(jsonb_typeof(q), '') <> 'string' or (q #>> '{}') !~ '^[a-z0-9-]{1,24}$') then
+    raise exception 'Quests are the names of the ones you finished.';
+  end if;
   new.updated_at := now();
   return new;
 end $$;
@@ -1062,6 +1127,64 @@ begin
 end $$;
 drop trigger if exists guard_playing on public.profiles;
 create trigger guard_playing before insert or update on public.profiles for each row execute function public.guard_playing();
+
+-- a server's sidebar extras: which are on, its Server Guide (a welcome, up to 7 to-dos that can point at a channel, up to
+-- 7 resource pages) and up to 12 game servers (a name, an address, maybe a game and a note)
+create or replace function public.server_extras_ok(f jsonb, g jsonb, gs jsonb) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce(jsonb_typeof(f) = 'object'
+    and not exists (select 1 from jsonb_each(f) e where e.key not in ('browse', 'games', 'guide', 'events', 'member_events') or jsonb_typeof(e.value) <> 'boolean')
+    and jsonb_typeof(g) = 'object' and not exists (select 1 from jsonb_object_keys(g) k where k not in ('welcome', 'todos', 'res'))
+    and (g->'welcome' is null or (jsonb_typeof(g->'welcome') = 'string' and length(g->>'welcome') <= 1000))
+    and (g->'todos' is null or (jsonb_typeof(g->'todos') = 'array' and jsonb_array_length(g->'todos') <= 7 and not exists (
+      select 1 from jsonb_array_elements(g->'todos') t where coalesce(jsonb_typeof(t), '') <> 'object'
+        or exists (select 1 from jsonb_object_keys(t) k where k not in ('t', 'c'))
+        or coalesce(jsonb_typeof(t->'t'), '') <> 'string' or length(t->>'t') not between 1 and 100
+        or (t->'c' is not null and coalesce(t->>'c', '') !~ '^[0-9a-f-]{36}$'))))
+    and (g->'res' is null or (jsonb_typeof(g->'res') = 'array' and jsonb_array_length(g->'res') <= 7 and not exists (
+      select 1 from jsonb_array_elements(g->'res') r where coalesce(jsonb_typeof(r), '') <> 'object'
+        or exists (select 1 from jsonb_object_keys(r) k where k not in ('t', 'b'))
+        or coalesce(jsonb_typeof(r->'t'), '') <> 'string' or length(r->>'t') not between 1 and 60
+        or coalesce(jsonb_typeof(r->'b'), 'string') <> 'string' or length(coalesce(r->>'b', '')) > 1500)))
+    and jsonb_typeof(gs) = 'array' and jsonb_array_length(gs) <= 12 and not exists (
+      select 1 from jsonb_array_elements(gs) s where coalesce(jsonb_typeof(s), '') <> 'object'
+        or exists (select 1 from jsonb_object_keys(s) k where k not in ('n', 'g', 'a', 'd'))
+        or coalesce(jsonb_typeof(s->'n'), '') <> 'string' or length(s->>'n') not between 1 and 60 or (s->>'n') ~ '[[:cntrl:]]'
+        or coalesce(s->>'a', '') !~ '^[A-Za-z0-9.-]{1,120}(:[0-9]{1,5})?$'
+        or (s->'g' is not null and not game_ok(s->'g', false))
+        or (s->'d' is not null and (coalesce(jsonb_typeof(s->'d'), '') <> 'string' or length(s->>'d') > 200))), false);
+$$;
+create or replace function public.guard_server_extras() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if TG_OP = 'UPDATE' and (new.features, new.guide, new.game_servers) is not distinct from (old.features, old.guide, old.game_servers) then return new; end if;
+  if not server_extras_ok(new.features, new.guide, new.game_servers) then
+    raise exception 'That isn''t a Server Guide, game server list or sidebar setting Fluentdat can keep.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_server_extras on public.servers;
+create trigger guard_server_extras before insert or update on public.servers for each row execute function public.guard_server_extras();
+-- an event stays in its server with who made it; its voice channel is one of that server's; it starts some time in the
+-- next two years and lasts up to a week
+create or replace function public.guard_event() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if TG_OP = 'UPDATE' and (new.server_id, new.created_by, new.created_at) is distinct from (old.server_id, old.created_by, old.created_at) then
+    raise exception 'An event stays in its server, with who made it.';
+  end if;
+  if new.channel_id is not null and not exists (select 1 from channels where id = new.channel_id and server_id = new.server_id) then
+    raise exception 'That channel is in another server.';
+  end if;
+  if (TG_OP = 'INSERT' or new.starts_at is distinct from old.starts_at) and (new.starts_at < now() - interval '1 day' or new.starts_at > now() + interval '2 years') then
+    raise exception 'An event starts some time in the next two years.';
+  end if;
+  if new.ends_at is not null and new.ends_at > new.starts_at + interval '7 days' then raise exception 'An event lasts up to a week.'; end if;
+  new.title := trim(new.title); new.place := trim(new.place);
+  return new;
+end $$;
+drop trigger if exists guard_event on public.server_events;
+create trigger guard_event before insert or update on public.server_events for each row execute function public.guard_event();
 create or replace function public.sync_server_tag() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
@@ -1469,7 +1592,8 @@ grant execute on function public.app_invite_check(text), public.redeem_app_invit
 grant execute on function public.is_member(uuid), public.is_admin(uuid), public.is_owner(uuid), public.channel_server(uuid),
   public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean),
   public.is_app_admin(), public.blocked_with(uuid), public.dm_blocked(uuid), public.expression_ok(text),
-  public.place_ok(uuid), public.message_in(uuid, uuid), public.react_ok(uuid), public.react_with(uuid, uuid, text), public.cat_can(uuid, text), public.chan_can(uuid, text) to authenticated;
+  public.place_ok(uuid), public.message_in(uuid, uuid), public.react_ok(uuid), public.react_with(uuid, uuid, text), public.cat_can(uuid, text), public.chan_can(uuid, text),
+  public.can_make_events(uuid) to authenticated;
 revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text), public.verify_connection(uuid, jsonb) from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================
@@ -1478,11 +1602,13 @@ grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras to authenticated;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras,
+  public.server_events, public.event_interest to authenticated;
 revoke all on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras from anon;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras,
+  public.server_events, public.event_interest from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
@@ -1508,6 +1634,8 @@ do $$ begin
     begin alter publication supabase_realtime add table public.server_stickers; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.reactions; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.category_perms; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.server_events; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.event_interest; exception when duplicate_object then null; end;
   end if;
 end $$;
 

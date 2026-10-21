@@ -13,7 +13,7 @@ const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
 
-let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, structure4 = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
+let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, structure4 = null, structure5 = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
 let styled = true;                  // (false on an older database: no profile themes, name styles or server tags there yet)
 let cache = blank();
 const pending = new Map();          // messages you've sent that the server hasn't confirmed yet (kept through reloads)
@@ -27,7 +27,7 @@ const listeners = new Set(), messageListeners = new Set(), callListeners = new S
 function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
-    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {} };
+    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [] };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -65,7 +65,8 @@ function toUser(p) {
     theme: p.theme1 || p.theme2 ? [p.theme1 || '', p.theme2 || ''] : null,
     style: p.name_font || p.name_effect || p.name_color1 ? { font: p.name_font || '', effect: p.name_effect || '', c1: p.name_color1 || '', c2: p.name_color2 || '' } : null,
     tag: p.tag && p.tag_server ? { text: p.tag, badge: p.tag_badge || '', color: p.tag_color || '', server: p.tag_server } : null,
-    playing: p.playing && typeof p.playing === 'object' && p.playing.n ? p.playing : null };
+    playing: p.playing && typeof p.playing === 'object' && p.playing.n ? p.playing : null,
+    decoration: p.decoration || '', effect: p.effect || '' };
 }
 const userOf = (id) => ({ ...toUser(cache.profiles[id]), id });
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
@@ -74,13 +75,14 @@ const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text
   user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : userOf(r.author) });
 const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, owner: r.owner, banner: r.banner || '', description: r.description || '',
   tag: r.tag || '', tagBadge: r.tag_badge || '', tagColor: r.tag_color || '',
+  features: r.features && typeof r.features === 'object' ? r.features : {}, guide: r.guide && typeof r.guide === 'object' ? r.guide : {}, gameServers: Array.isArray(r.game_servers) ? r.game_servers : [],
   category: r.category || '', public: !!r.public, since: Date.parse(r.created_at) || 0 });
 const toRole = (r) => ({ id: r.id, server: r.server_id, name: r.name, color: r.color, hoist: r.hoist, position: r.position });
 // someone's roles in a server, top one first
 const rolesOf = (sv, uid) => cache.memberRoles.filter((x) => x.server_id === sv && x.user_id === uid)
   .map((x) => cache.roles.find((r) => r.id === x.role_id)).filter(Boolean).sort(byPos);
 const toExtras = (r) => ({ connections: Array.isArray(r && r.connections) ? r.connections : [], widgets: Array.isArray(r && r.widgets) ? r.widgets : [],
-  activity: Array.isArray(r && r.activity) ? r.activity : [] });
+  activity: Array.isArray(r && r.activity) ? r.activity : [], quests: Array.isArray(r && r.quests) ? r.quests : [] });
 const toCategory = (r) => ({ id: r.id, server: r.server_id, name: r.name, position: r.position });
 const toChannel = (r) => ({ id: r.id, server: r.server_id, category: r.category_id, name: r.name, kind: r.kind, position: r.position, topic: r.topic || '' });
 const otherIn = (d) => (d.user_a === myId() ? d.user_b : d.user_a);
@@ -126,29 +128,35 @@ const toSticker = (r) => ({ id: r.id, server: r.server_id, name: r.name, emoji: 
 const PROFILE_COLS = 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at';
 const PROFILE_STYLE = ',theme1,theme2,name_font,name_effect,name_color1,name_color2,tag_server,tag,tag_badge,tag_color';
 // (newest first: an older database lacks the later columns, and Fluentdat carries on with what it has)
-const PROFILE_SETS = [PROFILE_COLS + PROFILE_STYLE + ',playing', PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS];
+const PROFILE_SETS = [PROFILE_COLS + PROFILE_STYLE + ',playing,decoration,effect', PROFILE_COLS + PROFILE_STYLE + ',playing', PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS];
 let profileSet = 0;
 async function profilesQ(q) {
   for (;;) {
     try { return await q('profiles', PROFILE_SETS[profileSet]); }
     catch (e) {
       if (!missing(e) || profileSet === PROFILE_SETS.length - 1) throw e;
-      profileSet++; state.needsSetup = true; if (profileSet === PROFILE_SETS.length - 1) styled = false;
+      profileSet++; state.needsSetup = true; if (profileSet === PROFILE_SETS.length - 1) styled = false;   // (and what each set lacks stays off)
     }
   }
 }
+// (each reload is numbered: one that finishes after a newer one started leaves its older results unused)
+let loadSeq = 0;
+// what you just said about events, kept on top of a reload until the database has surely caught up
+const interestOps = new Map();          // event id → { on, at }
 async function loadAll() {
   if (!session) return;
+  const seq = ++loadSeq;
   state.loading = true; state.error = ''; emit();
   try {
     const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
-    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms] = await Promise.all([
+    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms, events, interest] = await Promise.all([
       profilesQ(q),
       sb.from('profiles').select('*').eq('id', myId()).then(must),
       q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles'),
       soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null),
       soft(q('server_emoji'), []), soft(q('server_stickers'), []), soft(q('blocks'), []), soft(sb.rpc('is_app_admin').then(must), false),
-      soft(q('category_perms'), [])]);
+      soft(q('category_perms'), []), soft(q('server_events'), []), soft(q('event_interest'), [])]);
+    if (seq !== loadSeq) return;
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
     cache.me = mine[0] || null;
     if (cache.me) cache.profiles[cache.me.id] = cache.me;
@@ -165,6 +173,12 @@ async function loadAll() {
     cache.friendRows = friends;
     cache.reads = Object.fromEntries(reads.map((r) => [r.place, r]));
     cache.emoji = emoji; cache.stickers = stickers; cache.blocks = blocks; cache.admin = admin === true; cache.perms = perms;
+    cache.events = events; cache.interest = interest;
+    for (const [id, op] of interestOps) {
+      if (Date.now() - op.at > 10000) { interestOps.delete(id); continue; }
+      cache.interest = cache.interest.filter((i) => !(i.event_id === id && i.user_id === myId()));
+      if (op.on) cache.interest.push({ event_id: id, user_id: myId(), created_at: new Date(op.at).toISOString() });
+    }
     if (unread) cache.unread = Object.fromEntries(unread.map((u) => [u.place, { unread: u.unread, mentions: u.mentions, last: u.last_at ? Date.parse(u.last_at) : 0 }]));
     // (the first time on this version: what's already there counts as read, rather than every old message at once)
     if (unread && !reads.length && unread.some((u) => u.unread)) await soft(markAllRead(unread.map((u) => u.place)), null);
@@ -315,6 +329,10 @@ function watchStructure() {
   structure4 = sb.channel('fluentdat-structure-4');
   structure4.on('postgres_changes', { event: '*', schema: 'public', table: 'category_perms' }, again);
   structure4.subscribe();
+  // a server's events, and who's interested (their own channel too)
+  structure5 = sb.channel('fluentdat-structure-5');
+  for (const table of ['server_events', 'event_interest']) structure5.on('postgres_changes', { event: '*', schema: 'public', table }, again);
+  structure5.subscribe();
 }
 // signed in: load everything, keep it live, and notice if the session ends (signed out in another tab, or it ran out)
 async function start() {
@@ -510,8 +528,8 @@ export const SupabaseStore = {
     return found && found[0] ? { ...toUser(found[0]), id: found[0].id } : null;
   },
   async signOut() {
-    for (const ch of [feed, extras, structure, structure2, structure3, structure4, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
-    feed = extras = structure = structure2 = structure3 = structure4 = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
+    for (const ch of [feed, extras, structure, structure2, structure3, structure4, structure5, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
+    feed = extras = structure = structure2 = structure3 = structure4 = structure5 = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
     if (sb) await sb.auth.signOut({ scope: 'local' });   // (just this browser — your phone stays signed in)
     session = null; cache = blank(); active = null; pending.clear(); emit();
   },
@@ -552,7 +570,7 @@ export const SupabaseStore = {
   updateServer(id, patch) {
     const s = SupabaseStore.server(id); if (s) Object.assign(s, patch); emit();
     const row = {}; for (const k of ['name', 'icon', 'img', 'banner', 'description', 'category', 'public']) if (k in patch) row[k] = patch[k];
-    for (const [k, col] of [['tag', 'tag'], ['tagBadge', 'tag_badge'], ['tagColor', 'tag_color']]) if (k in patch) row[col] = patch[k];
+    for (const [k, col] of [['tag', 'tag'], ['tagBadge', 'tag_badge'], ['tagColor', 'tag_color'], ['features', 'features'], ['guide', 'guide'], ['gameServers', 'game_servers']]) if (k in patch) row[col] = patch[k];
     push(sb.from('servers').update(row).eq('id', id).select('id').then(took('Only this server’s admins can change it.')), loadAll);
   },
   updateChannel(id, patch) {
@@ -876,6 +894,40 @@ export const SupabaseStore = {
       emit(); throw e;
     }
   },
+  // ---- a server's events (Discord's): upcoming and happening ones, soonest first, with who's interested ----
+  events(sv) {
+    const now = Date.now(), me = myId();
+    return cache.events.filter((e) => e.server_id === sv && (Date.parse(e.ends_at || '') || Date.parse(e.starts_at) + 3 * 3600e3) > now)
+      .sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))
+      .map((e) => { const who = cache.interest.filter((i) => i.event_id === e.id).map((i) => i.user_id);
+        return { id: e.id, server: e.server_id, title: e.title, description: e.description || '', start: Date.parse(e.starts_at), end: e.ends_at ? Date.parse(e.ends_at) : 0,
+          channel: e.channel_id || null, place: e.place || '', by: e.created_by, mine: e.created_by === me, interested: who.length, me: who.includes(me), who }; });
+  },
+  canMakeEvents: (sv) => SupabaseStore.canManage(sv) || !!((SupabaseStore.server(sv) || {}).features || {}).member_events,
+  async addEvent(sv, ev) {
+    const row = { id: uuid(), server_id: sv, title: ev.title, description: ev.description || '', starts_at: new Date(ev.start).toISOString(), ends_at: ev.end ? new Date(ev.end).toISOString() : null,
+      channel_id: ev.channel || null, place: ev.channel ? '' : ev.place || '', created_by: myId() };
+    must(await sb.from('server_events').insert(row));
+    cache.events.push({ ...row, created_at: new Date().toISOString() }); emit(); return row.id;
+  },
+  async updateEvent(id, ev) {
+    const row = { title: ev.title, description: ev.description || '', starts_at: new Date(ev.start).toISOString(), ends_at: ev.end ? new Date(ev.end).toISOString() : null, channel_id: ev.channel || null, place: ev.channel ? '' : ev.place || '' };
+    took('Only whoever made the event, or an admin, can change it.')(await sb.from('server_events').update(row).eq('id', id).select('id'));
+    const e = cache.events.find((x) => x.id === id); if (e) Object.assign(e, row); emit();
+  },
+  async removeEvent(id) {
+    took('Only whoever made the event, or an admin, can cancel it.')(await sb.from('server_events').delete().eq('id', id).select('id'));
+    cache.events = cache.events.filter((x) => x.id !== id); cache.interest = cache.interest.filter((i) => i.event_id !== id); emit();
+  },
+  async setInterested(id, on) {
+    const me = myId(), had = cache.interest.filter((i) => i.event_id === id && i.user_id === me);
+    interestOps.set(id, { on, at: Date.now() });
+    cache.interest = cache.interest.filter((i) => !(i.event_id === id && i.user_id === me));
+    if (on) cache.interest.push({ event_id: id, user_id: me, created_at: new Date().toISOString() });
+    emit();
+    try { if (on) must(await sb.from('event_interest').upsert({ event_id: id, user_id: me })); else must(await sb.from('event_interest').delete().eq('event_id', id).eq('user_id', me)); }
+    catch (e) { interestOps.delete(id); cache.interest = cache.interest.filter((i) => !(i.event_id === id && i.user_id === me)).concat(had); emit(); throw e; }
+  },
   // ---- a profile's extras, fetched when someone opens it: Connections, the Board's widgets, the games played lately ----
   async profileExtras(id) {
     if (!isUuid(id)) return toExtras(null);
@@ -885,19 +937,20 @@ export const SupabaseStore = {
   extrasNow: (id) => cache.extras[id] || null,          // (what was fetched last, to show at once while it's fetched again)
   async setProfileExtras(patch) {
     const id = myId(), was = cache.extras[id], row = { id };
-    for (const k of ['connections', 'widgets', 'activity']) if (k in patch) row[k] = patch[k];
+    for (const k of ['connections', 'widgets', 'activity', 'quests']) if (k in patch) row[k] = patch[k];
     cache.extras[id] = { ...toExtras(was), ...patch }; emit();
     try { const r = must(await sb.from('profile_extras').upsert(row).select('*')); cache.extras[id] = toExtras(r[0]); emit(); return cache.extras[id]; }
     catch (e) { cache.extras[id] = was; emit(); throw e; }
   },
   // the game you say you're playing ({ n, s, l }), or null; the database times it and adds it to your recent activity
   setPlaying(game) {
-    if (!cache.me || profileSet > 0) return;
+    if (!cache.me || profileSet > 1) return;
     const g = game ? Object.fromEntries(['n', 's', 'l'].filter((k) => game[k]).map((k) => [k, game[k]])) : null;
     cache.me.playing = g ? { ...g, at: new Date().toISOString() } : null; emit();
     push(sb.from('profiles').update({ playing: g }).eq('id', myId()).then(must), loadAll);
   },
-  canPlay: () => profileSet === 0,
+  canPlay: () => profileSet <= 1,
+  canDecorate: () => profileSet === 0,
   // the accounts you sign in with (Discord, GitHub…): what a connection can be checked against
   identities: () => ((session && session.user && session.user.identities) || []).map((i) => {
     const d = i.identity_data || {};
@@ -976,7 +1029,8 @@ export const SupabaseStore = {
   },
   setProfile(patch) {
     if (!cache.me) return;
-    const keys = ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate', ...(styled ? ['theme1', 'theme2', 'name_font', 'name_effect', 'name_color1', 'name_color2'] : [])];
+    const keys = ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate', ...(styled ? ['theme1', 'theme2', 'name_font', 'name_effect', 'name_color1', 'name_color2'] : []),
+      ...(profileSet === 0 ? ['decoration', 'effect'] : [])];
     const row = {}; for (const k of keys) if (k in patch) row[k] = patch[k] == null ? (k === 'stickers' ? [] : '') : patch[k];
     Object.assign(cache.me, row);
     if ('status' in row) for (const [sv, ch] of rooms) announce(ch, sv);

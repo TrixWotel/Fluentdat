@@ -14,6 +14,7 @@ import { LOGOS, THEME_LOGO, logoEl, logoInfo, setFavicon } from './logo.js';
 import { openColor, colorSwatch, closeColor } from './color.js';
 import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily, loadFont } from './namestyle.js';
 import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
+import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, decoEl, effectEl, decoInfo, effectInfo, questInfo, questProgress } from './shop.js';
 import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (the test page hands in pretend cameras and microphones, and keeps everything quiet)
 const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
@@ -25,7 +26,7 @@ const DEFAULT_PREFS = {
   rail: 'on', iconShape: 'squircle', chanIcons: 'on', cats: 'on', sideHead: 'on', userPanel: 'on',
   topbar: 'on', banner: 'on',
   avatars: 'on', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
-  membersDefault: true, memberOffline: true, memberStatusText: false,
+  membersDefault: true, memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
   railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 136, statusH: 30,
   avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20,
@@ -77,7 +78,9 @@ const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
 const stamp = () => { const u = { name: me.name, color: me.color }; if (me.avatar) u.avatar = me.avatar; if (me.pronouns) u.pronouns = me.pronouns; if (me.about) u.about = me.about; if (me.style) u.style = me.style; return u; };
 const myTag = () => (Store.kind === 'supabase' && Store.myProfile ? Store.myProfile().tag || null : null);
 const asMember = () => ({ id: 'me', name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, plate: me.plate || '', banner: me.banner || '',
-  theme: me.theme || null, style: me.style || null, tag: myTag(), playing: me.playing || null, me: true });
+  theme: me.theme || null, style: me.style || null, tag: myTag(), playing: me.playing || null, decoration: me.decoration || '', effect: me.effect || '', me: true });
+// a profile effect over a card (when they have one, and effects are on)
+function withEffect(card, id) { if (id && prefs.effects !== 'off') { const fx = effectEl(id); if (fx) card.append(fx); } return card; }
 
 // other people's profiles are theirs to fill in, so only colours and pictures of the expected shape are drawn
 // (a stray web address would let a stranger see who looked at their profile)
@@ -110,7 +113,9 @@ const BUTTONS = {
   rail: ['Server rail', [['home', 'Direct Messages', 'logo'], ['servers', 'Your servers', 'bot', 1], ['add', 'Add a Server', 'plus'], ['discover', 'Discover', 'compass']]],
   header: ['Server header', [['invite', 'Invite People', 'personAdd'], ['serverMenu', 'Server menu arrow', 'chevD']]],
   channels: ['Channel list', [['newChannel', 'New channel (+)', 'plus'], ['chanInvite', 'Invite, on hover', 'personAdd'], ['chanSettings', 'Channel settings, on hover', 'gear'], ['delChannel', 'Delete channel (×)', 'x']]],
-  dms: ['Direct messages', [['findDM', 'Find or start a conversation', 'search'], ['friendsNav', 'Friends', 'users'], ['newDM', 'New DM (+)', 'plus']]],
+  dms: ['Direct messages', [['findDM', 'Find or start a conversation', 'search'], ['newDM', 'New DM (+)', 'plus']]],
+  dmNav: ['Direct messages list', [['friendsNav', 'Friends', 'users'], ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quests', 'quest']]],
+  serverTop: ['Server sidebar', [['browse', 'Browse Channels', 'browse'], ['games', 'Game Servers', 'game'], ['guide', 'Server Guide', 'signpost'], ['events', 'Events', 'calendar']]],
   top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['search', 'Search', 'search'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['saved', 'Bookmarks', 'bookmark']]],
   composer: ['Message box', [['upload', 'Attach files and pictures', 'plusCircle'], ['input', 'The text box', 'edit', 1], ['emoji', 'Emoji', 'smile'], ['sticker', 'Stickers', 'sticker'], ['voice', 'Voice message', 'mic'], ['send', 'Send', 'send']]],
   panel: ['User panel', [['me', 'You (avatar and name)', 'user', 1], ['mic', 'Mute', 'mic'], ['deafen', 'Deafen', 'headphones'], ['settings', 'User Settings', 'gear', 1]]],
@@ -131,6 +136,8 @@ function avatarEl(user, { size, status } = {}) {
   else if (user.bot) { fill.append(icon('bot', 20)); fill.style.color = '#fff'; }
   else fill.append(document.createTextNode(initials(user.name)));
   a.append(fill);
+  const deco = user.decoration && prefs.decorations !== 'off' ? decoEl(user.decoration) : null;
+  if (deco) a.append(deco);
   const st = status || (user.me ? me.status : user.status);
   if (st) a.append(el('div', { className: 'dot ' + st }));
   return a;
@@ -178,6 +185,21 @@ const cssVar = (v) => getComputedStyle(document.documentElement).getPropertyValu
 // ---------- state ----------
 let view = 'server', serverId = (Store.servers()[0] || {}).id || null, channelId = null, dmId = null, friendsTab = 'online', showMembers = true;
 let discoverCat = '', discoverQ = '', searchOpen = false, searchQ = '', searchKey = '';
+let homePage = null;                    // (the Direct Messages side shows Friends, or 'shop' or 'quests')
+let serverPage = null;                  // (a server's own page instead of a channel: { sv, id: 'browse' | 'games' | 'guide' })
+const pageNow = () => (view === 'server' && serverPage && serverPage.sv === serverId ? serverPage.id : null);
+// a server's sidebar extras (Server Settings → Server Sidebar): Browse Channels and Events are on unless switched off
+const FEATURES = { browse: true, events: true, games: false, guide: false, member_events: false };
+const featureOn = (sv, id) => !!(sv && { ...FEATURES, ...(sv.features || {}) }[id]);
+// channels you've hidden from your list (Browse Channels), per server, in this browser
+const HIDDEN_CHANS = 'fluentdat.hiddenChannels';
+let hiddenChans = (() => { try { const v = JSON.parse(localStorage.getItem(HIDDEN_CHANS)); return v && typeof v === 'object' ? v : {}; } catch { return {}; } })();
+const chanHidden = (sv, id) => (hiddenChans[sv] || []).includes(id);
+function setChanHidden(sv, id, hide) {
+  const l = new Set(hiddenChans[sv] || []); if (hide) l.add(id); else l.delete(id);
+  hiddenChans = { ...hiddenChans, [sv]: [...l] };
+  try { localStorage.setItem(HIDDEN_CHANS, JSON.stringify(hiddenChans)); } catch {}
+}
 // DMs you've closed (they come back when you message that person again)
 const closedDMs = new Set((() => { try { return JSON.parse(localStorage.getItem('fluentdat.closedDMs')) || []; } catch { return []; } })());
 const saveClosed = () => { try { localStorage.setItem('fluentdat.closedDMs', JSON.stringify([...closedDMs])); } catch {} };
@@ -478,6 +500,15 @@ function renderSide() {
   const groups = cats.length ? cats : [{ id: null, name: 'Channels' }];
   const hiding = live && hideMuted.has(serverId);
   let k = 0;
+  // (Browse Channels, Game Servers, Server Guide, Events: as the server's admins switched them on, in the order and with
+  // the ones you chose in Layout)
+  const extras = ordered('serverTop').filter((id) => shown(id) && featureOn(server, id) && (id !== 'events' || live));
+  for (const id of extras) {
+    const [, label, ic] = BUTTONS.serverTop[1].find((b) => b[0] === id), n = id === 'events' ? Store.events(serverId).length : 0;
+    body.append(swapIn(el('button', { className: 'chan side-x' + (pageNow() === id ? ' on' : ''), onclick: () => openServerPage(id) },
+      icon(ic, 18), el('span', { className: 'nm' }, label), n ? el('span', { className: 'mbadge soft', title: plural(n, 'upcoming event') }, String(n)) : null), k++));
+  }
+  if (extras.length) body.append(el('div', { className: 'side-sep' }));
   for (const cat of groups) {
     const mine = chans.filter((c) => (cat.id ? c.category === cat.id : true));
     const isCollapsed = collapsed.has(cat.id);
@@ -493,8 +524,9 @@ function renderSide() {
       const voiceHere = c.kind === 'voice' ? Store.voice(serverId)[c.id] || [] : [];
       if (isCollapsed && !isOn && !fresh && !ping && !voiceHere.length) continue;
       if (hiding && muted && !isOn && !ping) continue;
+      if (chanHidden(serverId, c.id) && !isOn && !ping) continue;           // (hidden in Browse Channels)
       const editable = canChans(c.category);
-      const rowc = el('button', { className: 'chan' + (isOn ? ' on' : '') + (fresh || ping ? ' unread' : '') + (muted ? ' muted' : '') + (call && call.place === c.id ? ' joined' : ''),
+      const rowc = el('button', { className: 'chan' + (isOn && !pageNow() ? ' on' : '') + (fresh || ping ? ' unread' : '') + (muted ? ' muted' : '') + (call && call.place === c.id ? ' joined' : ''),
         onclick: () => openChannel(c),
         oncontextmenu: (e) => { e.preventDefault(); channelCtx(c, e.clientX, e.clientY); } },
         icon(c.kind === 'voice' ? 'volume' : 'hash', 18), el('span', { className: 'nm' }, c.name));
@@ -540,7 +572,7 @@ function speaking(uid, place) {
 }
 // a channel: a text channel opens; a voice channel opens and joins its call (as on Discord)
 function openChannel(c) {
-  channelId = c.id;
+  channelId = c.id; serverPage = null;
   if (c.kind !== 'voice') rememberChannel(serverId, c.id);
   renderAll(); $('#app').classList.remove('show-side');
   if (c.kind === 'voice' && !(call && call.place === c.id)) joinVoice(c);
@@ -550,8 +582,14 @@ function dmSide(head, body) {
   head.replaceChildren(shown('findDM') ? el('button', { className: 'find-dm', onclick: () => newDMDialog() }, 'Find or start a conversation') : 'Messages');
   const parts = [];
   const req = Store.friendRequests().incoming.length;
-  if (shown('friendsNav')) parts.push(el('button', { className: 'nav-btn' + (!dmId ? ' on' : ''), onclick: () => { dmId = null; renderAll(); } }, icon('users'), el('span', { className: 'grow' }, 'Friends'),
-    req ? el('span', { className: 'mbadge' }, String(req)) : null));
+  const nav = (id, ic, label, page, badge) => el('button', { className: 'nav-btn' + (!dmId && homePage === page ? ' on' : ''), onclick: () => { dmId = null; homePage = page; renderAll(); $('#app').classList.remove('show-side'); } },
+    icon(ic), el('span', { className: 'grow' }, label), badge || null);
+  for (const id of ordered('dmNav')) {
+    if (!shown(id)) continue;
+    if (id === 'friendsNav') parts.push(nav(id, 'users', 'Friends', null, req ? el('span', { className: 'mbadge' }, String(req)) : null));
+    if (id === 'shopNav') parts.push(nav(id, 'shop', 'Shop', 'shop'));
+    if (id === 'questsNav') { const n = questsReady(); parts.push(nav(id, 'quest', 'Quests', 'quests', n ? el('span', { className: 'mbadge green', title: 'Rewards to claim' }, String(n)) : null)); }
+  }
   parts.push(el('div', { className: 'cat dm-cat' }, el('span', { className: 'nm' }, 'Direct Messages'),
     shown('newDM') ? el('span', { className: 'add', title: 'Create DM', onclick: (e) => { e.stopPropagation(); newDMDialog(); } }, icon('plus')) : null));
   // (newest conversation first, as on Discord)
@@ -633,12 +671,13 @@ function renderTop() {
   const act = (ic, title, onclick, on) => el('button', { className: 'act' + (on ? ' on' : ''), title, onclick }, icon(ic), prefs.btnLabels === 'on' ? el('span', { className: 'lbl' }, title) : null);
   let where = null;
   if (view === 'discover') parts.push(el('span', { className: 'hash' }, icon('compass')), el('span', {}, 'Discover'));
-  else if (view === 'home' && !dmId) parts.push(el('span', { className: 'hash' }, icon('users')), el('span', {}, 'Friends'));
+  else if (view === 'home' && !dmId) parts.push(el('span', { className: 'hash' }, icon(homePage === 'shop' ? 'shop' : homePage === 'quests' ? 'quest' : 'users')), el('span', {}, homePage === 'shop' ? 'Shop' : homePage === 'quests' ? 'Quests' : 'Friends'));
   else if (view === 'home') {
     const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
     if (d && d.kind === 'group') { parts.push(dmAvatar(d, 24), el('button', { className: 'ttl ttl-edit', title: 'Rename the group', onclick: () => renameGroup(d) }, dmName(d))); where = 'group'; }
     else { const u = Store.dmUser(dmId) || { name: '?' }; parts.push(avatarEl(u, { size: 24 }), el('span', { className: 'ttl' }, u.name)); where = 'dm'; }
   }
+  else if (pageNow()) { const [, label, ic] = BUTTONS.serverTop[1].find((b) => b[0] === pageNow()); parts.push(el('span', { className: 'hash' }, icon(ic)), el('span', { className: 'ttl' }, label)); }
   else {
     const c = Store.channel(channelId);
     if (!c) parts.push(el('span', {}, Store.syncState().loading ? 'Loading…' : 'Fluentdat'));
@@ -734,7 +773,7 @@ async function toggleReact(m, emoji, on) {
   const place = placeNow(); if (!place || !emoji || m.sending) return;
   if (on && !mayIn('react') && !(Store.reactions(place).get(m.id) || []).some((r) => r.emoji === emoji && r.count > (r.me ? 1 : 0))) return toast('You don’t have permission to add new reactions here.');
   if (on) { const c = String(emoji).match(CUSTOM_RE); noteUse(c ? 'c:' + c[3] : emoji); }
-  await attempt(() => Store.react(place, m.id, emoji, on));
+  if ((await attempt(() => Store.react(place, m.id, emoji, on))) !== null && on) questTick('react');
 }
 // pick any emoji to react with
 function reactPicker(m, anchor) {
@@ -789,6 +828,312 @@ function syncReacts(node, m, list, animate) {
   let i = 0;
   for (const n of out) { if (row.children[i] !== n) row.insertBefore(n, row.children[i] || null); i++; }
   while (row.children.length > out.length) row.lastElementChild.remove();
+}
+
+// ---------- Quests: what you've done (counted in this browser), and the ones you finished (kept on your profile) ----------
+const QSTATS = 'fluentdat.questStats';
+function questCounts() { try { const all = JSON.parse(localStorage.getItem(QSTATS)) || {}; return all[myXid() || 'me'] || {}; } catch { return {}; } }
+function questStats() {
+  const x = Store.extrasNow(myXid()) || {}, c = questCounts();
+  return { ...c, about: me.about ? 1 : 0, connections: (x.connections || []).length, board: (x.widgets || []).reduce((n, w) => n + ((w && Array.isArray(w.g)) ? w.g.length : 0), 0) };
+}
+const questsDone = () => ((Store.extrasNow(myXid()) || {}).quests || []);
+const questsReady = () => (Store.extrasNow(myXid()) ? QUESTS.filter((q) => !questsDone().includes(q.id) && questProgress(q, questStats()).done).length : 0);
+const unlocked = (quest) => !quest || questsDone().includes(quest);
+const questSaid = new Set();
+// count something you did, and say so when it finishes a Quest
+function questTick(key, by = 1) {
+  try {
+    const all = JSON.parse(localStorage.getItem(QSTATS)) || {}, k = myXid() || 'me', mine = all[k] || {};
+    mine[key] = (Number(mine[key]) || 0) + by; all[k] = mine; localStorage.setItem(QSTATS, JSON.stringify(all));
+  } catch {}
+  questCheck();
+}
+function questCheck() {
+  if (!Store.extrasNow(myXid())) return;                 // (not until it's known which you've finished)
+  const st = questStats(), done = questsDone();
+  for (const q of QUESTS) if (!done.includes(q.id) && !questSaid.has(q.id) && questProgress(q, st).done) {
+    questSaid.add(q.id); toast(`Quest complete: ${q.title}! Claim your reward in Quests.`);
+  }
+}
+async function claimQuest(q) {
+  const x = await Store.profileExtras(myXid()).catch(() => null), list = [...new Set([...((x && x.quests) || questsDone()), q.id])];
+  if ((await attempt(() => Store.setProfileExtras({ quests: list }))) === null) return;
+  const [kind, id] = q.reward, info = kind === 'deco' ? decoInfo(id) : effectInfo(id);
+  toast(`Unlocked: ${info ? info[1] : 'a reward'}. Find it in the Shop.`); renderAll();
+}
+// Quests (Discord's): things to do, how far along you are, and what each one unlocks
+function questsPage() {
+  const st = questStats(), done = questsDone(), you = asMember();
+  const cards = QUESTS.map((q) => {
+    const pr = questProgress(q, st), claimed = done.includes(q.id), [kind, rid] = q.reward, info = kind === 'deco' ? decoInfo(rid) : effectInfo(rid);
+    const art = kind === 'deco' ? el('div', { className: 'qs-prize' }, avatarEl({ ...you, decoration: rid }, { size: 46 })) : el('div', { className: 'qs-prize pfx-box' }, effectEl(rid));
+    return el('section', { className: 'qs' + (claimed ? ' claimed' : pr.done ? ' ready' : '') },
+      el('div', { className: 'qs-art', style: `--qh:${q.hue}` }, icon(q.icon, 34), el('span', { className: 'qs-kind' }, 'Quest')),
+      el('div', { className: 'qs-body' }, el('h3', {}, q.title), el('p', {}, q.desc),
+        ...pr.tasks.map((t) => el('div', { className: 'qs-task' + (t.have >= t.goal ? ' done' : '') },
+          el('div', { className: 'qs-tl' }, el('span', {}, t.have >= t.goal ? icon('check', 14) : null, t.label), el('small', {}, `${t.have}/${t.goal}`)),
+          el('div', { className: 'qs-bar' }, el('i', { style: `width:${Math.round((t.have / t.goal) * 100)}%` })))),
+        el('div', { className: 'qs-foot' }, art, el('div', { className: 'qs-rw' }, el('small', {}, 'Reward'), el('b', {}, info ? info[1] : ''), el('span', {}, kind === 'deco' ? 'Avatar Decoration' : 'Profile Effect')),
+          claimed ? el('span', { className: 'chip qs-claimed' }, icon('check', 13), 'Claimed') : el('button', { className: 'btn green', disabled: !pr.done, onclick: () => claimQuest(q) }, pr.done ? 'Claim Reward' : 'Not Yet'))));
+  });
+  const ready = QUESTS.filter((q) => !done.includes(q.id) && questProgress(q, st).done).length;
+  return el('div', { className: 'qs-page' }, el('div', { className: 'qs-hero' }, el('div', { className: 'qs-hero-ic' }, icon('quest', 40)),
+    el('div', {}, el('h1', {}, 'Quests'), el('p', {}, 'Do things in Fluentdat to unlock decorations and effects for your profile. ' + (ready ? `${plural(ready, 'reward')} ready to claim.` : `${done.length} of ${QUESTS.length} done.`)))),
+    el('div', { className: 'qs-list' }, ...cards));
+}
+// the Shop (Discord's, but everything's free): avatar decorations, profile effects and nameplates; some unlock with a Quest
+function shopPage() {
+  const live = Store.kind === 'supabase', you = asMember(), canDeco = !live || (Store.canDecorate && Store.canDecorate());
+  const use = (patch, said) => {
+    if (('decoration' in patch || 'effect' in patch) && !canDeco) return toast('The Shop needs the newest supabase/setup.sql: run it again in Supabase.');
+    Object.assign(me, patch); saveMe(); pushProfile(); renderAll(); toast(said);
+  };
+  const lockBtn = (quest) => el('button', { className: 'btn small ghost', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('lock', 14), `Quest: ${(questInfo(quest) || {}).title || ''}`);
+  const item = (preview, name, sub, action, on) => el('div', { className: 'shp-item' + (on ? ' on' : '') }, el('div', { className: 'shp-pv' }, preview), el('div', { className: 'shp-meta' }, el('b', {}, name), el('small', {}, sub)), action);
+  const decos = DECORATIONS.map(([id, name, quest]) => {
+    const on = me.decoration === id, ok = unlocked(quest);
+    return item(avatarEl({ ...you, decoration: id }, { size: 76 }), name, quest ? (ok ? 'Quest reward · yours' : 'Quest reward') : 'Free',
+      !ok ? lockBtn(quest) : on ? el('button', { className: 'btn small', onclick: () => use({ decoration: '' }, 'Decoration taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ decoration: id }, `${name} is on your avatar.`) }, 'Use'), on);
+  });
+  const mini = (id) => { const c = el('div', { className: 'shp-mini' }, el('div', { className: 'shp-mini-b' }), el('div', { className: 'shp-mini-av' }, avatarEl(you, { size: 38 })), el('b', {}, me.name)); setBanner(c.firstChild, me.banner, me.color); themeCard(c, you.theme); const fx = effectEl(id); if (fx) c.append(fx); return c; };
+  const effects = PROFILE_EFFECTS.map(([id, name, quest]) => {
+    const on = me.effect === id, ok = unlocked(quest);
+    return item(mini(id), name, quest ? (ok ? 'Quest reward · yours' : 'Quest reward') : 'Free',
+      !ok ? lockBtn(quest) : on ? el('button', { className: 'btn small', onclick: () => use({ effect: '' }, 'Profile effect taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ effect: id }, `${name} is on your profile.`) }, 'Use'), on);
+  });
+  const plates = GRADS.map((_, i) => {
+    const v = 'g:' + i, on = me.plate === v, row = el('div', { className: 'mem shp-plate plated' }, avatarEl(you, { size: 30 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, me.name)));
+    row.style.setProperty('--plate', paint(v));
+    return item(row, 'Nameplate ' + (i + 1), 'Free', on ? el('button', { className: 'btn small', onclick: () => use({ plate: '' }, 'Nameplate taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ plate: v }, 'Nameplate on.') }, 'Use'), on);
+  });
+  const sec = (title, sub, list, cls = '') => [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)];
+  return el('div', { className: 'shp-page' },
+    el('div', { className: 'shp-hero' }, el('div', {}, el('h1', {}, 'Shop'), el('p', {}, 'Everything here is free. A few things unlock when you finish a Quest.'),
+      el('div', { className: 'shp-hero-acts' }, el('button', { className: 'btn', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('quest', 16), 'Quests'),
+        el('button', { className: 'btn', onclick: () => nameStyleDialog(me.style, (st) => { me.style = st; saveMe(); pushProfile(); renderAll(); }, asMember) }, icon('brush', 16), 'Display Name Style'))),
+      el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
+    ...sec('Avatar Decorations', 'Shown around your avatar everywhere: in chats, the member list and your profile.', decos),
+    ...sec('Profile Effects', 'Played over your profile card when someone opens it.', effects, 'wide'),
+    ...sec('Nameplates', 'Behind your name in the member list and your DMs (when people have nameplates on).', plates, 'wide'),
+    prefs.decorations === 'off' || prefs.effects === 'off' ? el('div', { className: 'note-box' }, 'You’ve turned off decorations or effects for yourself (Settings → Appearance), so you won’t see them on other people.') : null);
+}
+
+// ---------- a server's own pages (Discord's): Browse Channels, Game Servers, Server Guide, and its Events ----------
+const pageHead = (ic, title, sub, ...acts) => el('div', { className: 'sp-head' }, el('div', { className: 'sp-ic' }, icon(ic, 26)),
+  el('div', { className: 'grow' }, el('h1', {}, title), el('p', {}, sub)), ...acts);
+// Browse Channels: which of the server's channels show in your list (in this browser)
+function browsePage(sv) {
+  const cats = Store.categories(sv.id), chans = Store.channels(sv.id), groups = cats.length ? cats : [{ id: null, name: 'Channels' }];
+  const all = chans.every((c) => !chanHidden(sv.id, c.id)), out = [];
+  out.push(el('div', { className: 'sp-all' }, row2('Show All Channels', 'Every channel you can see, in your list.', sw(all, (on) => { for (const c of chans) setChanHidden(sv.id, c.id, !on); renderAll(); }))));
+  for (const cat of groups) {
+    const mine = chans.filter((c) => (cat.id ? c.category === cat.id : true)); if (!mine.length) continue;
+    out.push(el('h3', { className: 'sp-cat' }, cat.name));
+    for (const c of mine) out.push(el('div', { className: 'sp-chan' + (chanHidden(sv.id, c.id) ? ' off' : '') }, icon(c.kind === 'voice' ? 'volume' : 'hash', 20),
+      el('div', { className: 'sp-ct' }, el('b', {}, c.name), c.topic ? el('small', {}, plainText(c.topic, fmtCtx())) : null),
+      el('span', { className: 'sp-state' }, chanHidden(sv.id, c.id) ? 'Hidden' : 'Shown'), sw(!chanHidden(sv.id, c.id), (on) => { setChanHidden(sv.id, c.id, !on); renderAll(); })));
+  }
+  return el('div', { className: 'sp-page' }, pageHead('browse', 'Browse Channels', 'Pick the channels you see in your list. A hidden channel still shows up when someone pings you there.'), ...out);
+}
+// Game Servers: where the server's people play (the address to copy; a Minecraft server says whether it's up)
+const mcAsked = new Map();
+function mcStatus(addr) {
+  const seen = mcAsked.get(addr);
+  if (seen && Date.now() - seen.at < 60000) return seen.p;
+  const p = fetch('https://api.mcsrvstat.us/3/' + encodeURIComponent(addr), { referrerPolicy: 'no-referrer', credentials: 'omit' }).then((r) => r.json())
+    .then((j) => ({ online: !!j.online, players: j.players ? [j.players.online, j.players.max] : null, version: String(j.version || '').slice(0, 40) })).catch(() => null);
+  mcAsked.set(addr, { at: Date.now(), p });
+  return p;
+}
+function gameServersPage(sv) {
+  const list = sv.gameServers || [], can = Store.canManage(sv.id);
+  const cards = list.map((g) => {
+    const status = el('div', { className: 'gs-status' });
+    const card = el('div', { className: 'gs-card' }, g.g ? gameTile(g.g) : gameTile({ n: g.n }),
+      el('div', { className: 'gs-body' }, el('b', {}, g.n), g.g ? el('small', {}, g.g.n) : null,
+        el('div', { className: 'gs-addr' }, el('code', {}, g.a), el('button', { className: 'btn small', onclick: () => copyText(g.a, 'Address copied. Paste it into the game.') }, icon('copy', 14), 'Copy')),
+        g.d ? el('p', {}, g.d) : null, status));
+    if (/minecraft/i.test(((g.g && g.g.n) || '') + ' ' + g.n)) {
+      status.textContent = 'Checking…';
+      mcStatus(g.a).then((st) => {
+        if (!st) { status.textContent = 'Couldn’t check whether it’s up.'; return; }
+        status.replaceChildren(el('i', { className: 'gs-dot' + (st.online ? ' on' : '') }), st.online ? `Online${st.players ? ` · ${st.players[0]}/${st.players[1]} playing` : ''}${st.version ? ` · ${st.version}` : ''}` : 'Offline');
+      });
+    }
+    return card;
+  });
+  return el('div', { className: 'sp-page' }, pageHead('game', 'Game Servers', 'Where this server’s people play together. Copy an address and paste it into the game.',
+    can ? el('button', { className: 'btn small', onclick: () => openServerSettings(sv.id, 'gameservers') }, icon('edit', 14), 'Manage') : null),
+    list.length ? el('div', { className: 'gs-grid' }, ...cards) : el('div', { className: 'empty-note' }, can ? 'No game servers yet. Add the ones you play on with Manage.' : 'No game servers here yet.'));
+}
+// the Server Guide: a welcome, things to do first (ticked off in this browser), and resource pages
+const GUIDE_DONE = 'fluentdat.guideDone';
+const guideDone = (sv) => { try { return (JSON.parse(localStorage.getItem(GUIDE_DONE)) || {})[sv] || []; } catch { return []; } };
+function markGuideDone(sv, i) { try { const all = JSON.parse(localStorage.getItem(GUIDE_DONE)) || {}; all[sv] = [...new Set([...(all[sv] || []), i])]; localStorage.setItem(GUIDE_DONE, JSON.stringify(all)); } catch {} }
+function guidePage(sv) {
+  const g = sv.guide || {}, can = Store.canManage(sv.id), done = guideDone(sv.id);
+  const hero = el('div', { className: 'sgd-hero' }); setBanner(hero, sv.banner, '#5865f2');
+  hero.append(el('div', { className: 'sgd-hero-in' }, serverFace(sv, 64), el('h1', {}, `Welcome to ${sv.name}`),
+    g.welcome ? el('p', {}, g.welcome) : el('p', { className: 'sgd-quiet' }, can ? 'Write a welcome for new people with Edit Server Guide.' : 'Glad you’re here.')));
+  const todos = (g.todos || []).map((t, i) => {
+    const ch = t.c ? Store.channel(t.c) : null, ticked = done.includes(i);
+    return el('button', { className: 'sgd-todo' + (ticked ? ' done' : ''), onclick: () => { markGuideDone(sv.id, i); if (ch) openChannel(ch); else renderAll(); } },
+      el('span', { className: 'sgd-check' }, ticked ? icon('check', 14) : null), el('span', { className: 'grow' }, t.t),
+      ch ? el('span', { className: 'sgd-ch' }, icon(ch.kind === 'voice' ? 'volume' : 'hash', 14), ch.name) : null, icon('chevR', 16));
+  });
+  const res = (g.res || []).map((r) => el('button', { className: 'sgd-res', onclick: () => {
+    const t = el('div', { className: 'text sgd-res-text' }); t.innerHTML = richText(r.b || '', fmtCtx());
+    const m = modal({ title: r.t, cls: 'sgd-res-dlg', body: [t], actions: [el('button', { className: 'btn primary', onclick: () => m.close() }, 'Close')] });
+  } }, icon('book', 22), el('b', {}, r.t), el('span', {}, plainText(r.b || '', fmtCtx()).slice(0, 110))));
+  return el('div', { className: 'sp-page sgd-page' }, hero,
+    can ? el('div', { className: 'sgd-edit' }, el('button', { className: 'btn small', onclick: () => openServerSettings(sv.id, 'guide') }, icon('edit', 14), 'Edit Server Guide')) : null,
+    todos.length ? el('h2', {}, 'Get Started') : null, todos.length ? el('div', { className: 'sgd-todos' }, ...todos) : null,
+    res.length ? el('h2', {}, 'Resources') : null, res.length ? el('div', { className: 'sgd-res-grid' }, ...res) : null,
+    !todos.length && !res.length && can ? el('div', { className: 'empty-note' }, 'Add things to do first, and resource pages, with Edit Server Guide.') : null);
+}
+// Events (Discord's): what's coming up and happening now, who's interested, and making one
+const pad2 = (n) => String(n).padStart(2, '0');
+function eventWhen(ts) {
+  const d = new Date(ts), t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), day = Math.round((new Date(ts).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+  return day === 0 ? `Today at ${t}` : day === 1 ? `Tomorrow at ${t}` : day > 1 && day < 7 ? `${d.toLocaleDateString([], { weekday: 'long' })} at ${t}` : `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} at ${t}`;
+}
+function eventsDialog(sv) {
+  const can = Store.canMakeEvents(sv), list = el('div', { className: 'ev-list' }), count = el('span', { className: 'ev-count' });
+  const draw = () => {
+    const evs = Store.events(sv);
+    count.textContent = evs.length ? plural(evs.length, 'Event') : '';
+    list.replaceChildren(...(evs.length ? evs.map((e) => eventCard(e, () => m.close())) : [el('div', { className: 'ev-empty' }, el('div', { className: 'fp-empty-ic' }, icon('calendar', 34)),
+      el('b', {}, 'No upcoming events'), el('span', {}, can ? 'Make one so people know when to show up.' : 'When there are some, they show up here.'))]));
+  };
+  const off = Store.onChange(() => { if (list.isConnected) draw(); });
+  const m = modal({ title: 'Events', cls: 'ev-dlg', body: [el('div', { className: 'ev-top' }, count, el('span', { style: 'flex:1' }),
+    can ? el('button', { className: 'btn primary small', onclick: () => eventEditor(sv, null) }, icon('plus', 14), 'Create Event') : null), list], actions: [], onClose: () => off() });
+  draw();
+}
+function eventCard(e, closeList) {
+  const now = Date.now(), live = e.start <= now && (e.end ? e.end > now : now - e.start < 3 * 3600e3), ch = e.channel ? Store.channel(e.channel) : null;
+  const names = e.who.map((id) => (id === Store.myId() ? 'You' : person(id).name));
+  const interested = el('button', { className: 'btn small' + (e.me ? ' green' : ''), title: e.me ? 'You’re interested (click to take it back)' : 'Say you’re interested',
+    onclick: async () => { if ((await attempt(() => Store.setInterested(e.id, !e.me))) !== null && !e.me) questTick('event'); } }, icon(e.me ? 'check' : 'bell', 14), 'Interested');
+  const more = e.mine || Store.canManage(e.server) ? el('button', { className: 'btn small ghost ev-more', title: 'More', onclick: (ev) => {
+    const r = ev.currentTarget.getBoundingClientRect();
+    menu([{ label: 'Edit Event', icon: 'edit', action: () => eventEditor(e.server, e) },
+      { label: 'Cancel Event', icon: 'trash', danger: true, action: async () => { if (await confirmBox({ title: 'Cancel Event', text: `Cancel “${e.title}”? Everyone who was interested will see it’s gone.`, ok: 'Cancel Event', danger: true })) attempt(() => Store.removeEvent(e.id)); } }],
+      r.right - 190, r.bottom + 4);
+  } }, icon('more', 16)) : null;
+  return el('div', { className: 'ev-card' + (live ? ' live' : '') },
+    el('div', { className: 'ev-when' }, icon('calendar', 14), live ? 'Happening now' : eventWhen(e.start), e.end ? el('span', { className: 'ev-till' }, ` – ${new Date(e.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`) : null),
+    el('h3', {}, e.title), e.description ? el('p', {}, e.description) : null,
+    ch || e.place ? el('div', { className: 'ev-where' }, icon(ch ? (ch.kind === 'voice' ? 'volume' : 'hash') : 'pin', 15), ch ? ch.name : e.place) : null,
+    el('div', { className: 'ev-foot' }, el('span', { className: 'ev-n', title: names.join(', ') || 'Nobody yet' }, icon('users', 14), `${e.interested} ${e.interested === 1 ? 'person' : 'people'} interested`),
+      el('span', { style: 'flex:1' }),
+      live && ch && ch.kind === 'voice' ? el('button', { className: 'btn small primary', onclick: () => { closeList(); view = 'server'; serverId = e.server; openChannel(ch); } }, icon('volume', 14), 'Join') : null,
+      interested, more));
+}
+function eventEditor(sv, e) {
+  const voice = Store.channels(sv).filter((c) => c.kind === 'voice');
+  const start = new Date(e ? e.start : Date.now() + 3600e3); if (!e) start.setMinutes(start.getMinutes() < 30 ? 30 : 60, 0, 0);
+  const title = el('input', { type: 'text', maxLength: 100, value: e ? e.title : '', placeholder: 'What’s happening?' });
+  const desc = el('textarea', { maxLength: 1000, rows: 3, value: e ? e.description : '', placeholder: 'Tell people a little more (optional)' });
+  const date = el('input', { type: 'date', value: `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}` });
+  const time = el('input', { type: 'time', value: `${pad2(start.getHours())}:${pad2(start.getMinutes())}` });
+  const hours = e && e.end ? String(Math.max(1, Math.round((e.end - e.start) / 3600e3))) : '2';
+  const dur = sel(['1', '2', '3', '4', '6', '12', '24'].includes(hours) ? hours : '2', [['0', 'No end time'], ['1', '1 hour'], ['2', '2 hours'], ['3', '3 hours'], ['4', '4 hours'], ['6', '6 hours'], ['12', '12 hours'], ['24', 'A whole day']], () => {});
+  let where = e ? (e.channel ? 'voice' : 'else') : voice.length ? 'voice' : 'else';
+  const chSel = voice.length ? sel(e && e.channel ? e.channel : voice[0].id, voice.map((c) => [c.id, c.name]), () => {}) : null;
+  const place = el('input', { type: 'text', maxLength: 100, value: e ? e.place : '', placeholder: 'Where? (a place, or a link)' });
+  const opt = (v, label) => el('label', { className: 'ev-opt' }, (() => { const r = el('input', { type: 'radio', name: 'ev-where', checked: where === v }); r.onchange = () => { where = v; paint(); }; return r; })(), el('span', {}, label));
+  const whereBox = el('div', {});
+  const paint = () => whereBox.replaceChildren(el('div', { className: 'ev-opts' }, voice.length ? opt('voice', 'A voice channel') : null, opt('else', 'Somewhere else')), where === 'voice' && chSel ? chSel : place);
+  paint();
+  const err = el('div', { className: 'sg-msg' }), save = el('button', { className: 'btn primary' }, e ? 'Save Event' : 'Create Event');
+  const m = modal({ title: e ? 'Edit Event' : 'Create Event', cls: 'ev-edit', body: [
+    el('div', { className: 'field' }, el('label', {}, 'Event Topic'), title),
+    el('div', { className: 'field ev-row' }, el('div', {}, el('label', {}, 'Start Date'), date), el('div', {}, el('label', {}, 'Start Time'), time), el('div', {}, el('label', {}, 'How Long'), dur)),
+    el('div', { className: 'field' }, el('label', {}, 'Where'), whereBox),
+    el('div', { className: 'field' }, el('label', {}, 'Description'), desc), err],
+    actions: [el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), save] });
+  save.onclick = async () => {
+    const t = title.value.trim(); if (!t) { err.textContent = 'Give the event a topic.'; title.focus(); return; }
+    const at = new Date(`${date.value}T${time.value || '00:00'}`).getTime();
+    if (!Number.isFinite(at)) { err.textContent = 'Pick when it starts.'; return; }
+    if (at < Date.now() - 864e5) { err.textContent = 'That’s in the past.'; return; }
+    const h = Number(dur.value), ev = { title: t, description: desc.value.trim(), start: at, end: h ? at + h * 3600e3 : 0, channel: where === 'voice' && chSel ? chSel.value : null, place: where === 'voice' ? '' : place.value.trim() };
+    save.disabled = true;
+    const ok = await attempt(() => (e ? Store.updateEvent(e.id, ev) : Store.addEvent(sv, ev)));
+    save.disabled = false;
+    if (ok === null) return;
+    m.close(); toast(e ? 'Event saved.' : 'Event created. People can say they’re interested.'); if (!e) questTick('event'); renderAll();
+  };
+  setTimeout(() => title.focus(), 0);
+}
+// Server Settings → Server Sidebar: which extras show above the channels, for everyone
+function svSidebar(sv, redraw) {
+  const f = { ...FEATURES, ...(sv.features || {}) }, live = Store.kind === 'supabase';
+  const set = (k, v) => { Store.updateServer(sv.id, { features: { ...f, [k]: v } }); renderAll(); setTimeout(redraw, 150); };
+  const item = (k, title, desc) => row2(title, desc, sw(!!f[k], (on) => set(k, on)));
+  return [el('h2', {}, 'Server Sidebar'), el('p', { className: 'sub' }, 'What shows above the channels, for everyone in the server. Each person can still hide or move these for themselves in Settings → Layout → Buttons.'),
+    item('browse', 'Browse Channels', 'People pick which channels show in their list.'),
+    item('games', 'Game Servers', 'The game servers you play on, with addresses to copy (set them up in Game Servers).'),
+    item('guide', 'Server Guide', 'A welcome, things to do first, and resource pages (write it in Server Guide).'),
+    live ? item('events', 'Events', 'What’s coming up, and who’s interested.') : null,
+    live ? item('member_events', 'Members can make events', 'Otherwise only admins can.') : null];
+}
+// Server Settings → Server Guide: the welcome, up to 7 things to do first (each can point at a channel), up to 7 pages
+function svGuide(sv, redraw, shut) {
+  const g = sv.guide || {}, chans = Store.channels(sv.id), chanOpts = [['', 'No channel'], ...chans.map((c) => [c.id, (c.kind === 'voice' ? '🔊 ' : '# ') + c.name])];
+  const welcome = el('textarea', { className: 'area', maxLength: 1000, rows: 4, value: g.welcome || '', placeholder: 'Say hello, and what this server is about.' });
+  const todos = (g.todos || []).map((t) => ({ t: t.t, c: t.c && chans.some((c) => c.id === t.c) ? t.c : '' })), res = (g.res || []).map((r) => ({ t: r.t, b: r.b || '' }));
+  const todoBox = el('div', { className: 'gd-list' }), resBox = el('div', { className: 'gd-list' });
+  const input = (obj, key, attrs) => { const i = el(attrs.rows ? 'textarea' : 'input', { ...attrs, value: obj[key] || '' }); i.oninput = () => { obj[key] = i.value; }; return i; };
+  const drawTodos = () => todoBox.replaceChildren(...todos.map((t, i) => el('div', { className: 'gd-row' }, input(t, 't', { type: 'text', className: 'wide-in', maxLength: 100, placeholder: 'Something to do first, like “Read the rules”' }),
+    sel(t.c, chanOpts, (v) => { t.c = v; }), iconBtn('x', 'Remove', () => { todos.splice(i, 1); drawTodos(); }, 'del'))),
+    todos.length < 7 ? el('button', { className: 'btn small', onclick: () => { todos.push({ t: '', c: '' }); drawTodos(); } }, icon('plus', 14), 'Add a To-Do') : null);
+  const drawRes = () => resBox.replaceChildren(...res.map((r, i) => el('div', { className: 'gd-res' }, el('div', { className: 'gd-row' }, input(r, 't', { type: 'text', className: 'wide-in', maxLength: 60, placeholder: 'Page title' }),
+    iconBtn('x', 'Remove', () => { res.splice(i, 1); drawRes(); }, 'del')), input(r, 'b', { className: 'area', maxLength: 1500, rows: 3, placeholder: 'What it says (Discord formatting works)' }))),
+    res.length < 7 ? el('button', { className: 'btn small', onclick: () => { res.push({ t: '', b: '' }); drawRes(); } }, icon('plus', 14), 'Add a Resource Page') : null);
+  drawTodos(); drawRes();
+  const save = () => {
+    const guide = { welcome: welcome.value.trim().slice(0, 1000), todos: todos.filter((t) => t.t.trim()).map((t) => ({ t: t.t.trim().slice(0, 100), ...(t.c ? { c: t.c } : {}) })),
+      res: res.filter((r) => r.t.trim()).map((r) => ({ t: r.t.trim().slice(0, 60), b: r.b.trim().slice(0, 1500) })) };
+    const turnOn = !featureOn(sv, 'guide') && (guide.welcome || guide.todos.length || guide.res.length);
+    Store.updateServer(sv.id, { guide, ...(turnOn ? { features: { ...FEATURES, ...(sv.features || {}), guide: true } } : {}) });
+    renderAll(); toast(turnOn ? 'Server Guide saved, and switched on in the sidebar.' : 'Server Guide saved.'); setTimeout(redraw, 150);
+  };
+  return [el('h2', {}, 'Server Guide'), el('p', { className: 'sub' }, 'What new people see first: a welcome, things to do, and pages to read. It shows in the sidebar when Server Guide is on (Server Sidebar).'),
+    el('h3', {}, 'Welcome Message'), welcome, el('h3', {}, 'New Member To-Dos'), todoBox, el('h3', {}, 'Resource Pages'), resBox,
+    el('div', { className: 'row', style: 'justify-content:flex-start;margin-top:18px' }, el('button', { className: 'btn primary', onclick: save }, 'Save Changes'),
+      el('button', { className: 'btn', onclick: () => { if (shut) shut(); serverPage = { sv: sv.id, id: 'guide' }; view = 'server'; serverId = sv.id; renderAll(); } }, 'See It'))];
+}
+// Server Settings → Game Servers: up to 12 (a name, an address, the game, a note)
+function svGameServers(sv, redraw) {
+  const list = (sv.gameServers || []).map((g) => ({ ...g })), box = el('div', { className: 'gd-list' });
+  const input = (obj, key, attrs) => { const i = el('input', { type: 'text', ...attrs, value: obj[key] || '' }); i.oninput = () => { obj[key] = i.value; }; return i; };
+  const draw = () => box.replaceChildren(...list.map((g, i) => el('div', { className: 'gd-gs' },
+    el('button', { className: 'gd-game', title: 'Pick the game', onclick: async () => { const [x] = await pickGames({ title: 'Which game?', max: 1 }); if (x) { g.g = { n: x.n, ...(x.s ? { s: x.s } : x.l ? { l: x.l } : {}) }; draw(); } } },
+      g.g ? gameTile(g.g) : el('span', { className: 'gt gc-add-t' }, icon('game', 22)), el('small', {}, g.g ? g.g.n : 'Pick a game')),
+    el('div', { className: 'gd-gs-f' }, input(g, 'n', { className: 'wide-in', maxLength: 60, placeholder: 'Name, like “Our Minecraft”' }),
+      input(g, 'a', { className: 'wide-in', maxLength: 126, placeholder: 'Address, like mc.example.org:25565', spellcheck: false }),
+      input(g, 'd', { className: 'wide-in', maxLength: 200, placeholder: 'A note (optional): whitelist, mods, when you play…' })),
+    iconBtn('x', 'Remove', () => { list.splice(i, 1); draw(); }, 'del'))),
+    list.length < 12 ? el('button', { className: 'btn small', onclick: () => { list.push({ n: '', a: '' }); draw(); } }, icon('plus', 14), 'Add a Game Server') : null);
+  draw();
+  const save = () => {
+    const out = [];
+    for (const g of list) {
+      const n = String(g.n || '').trim(), a = String(g.a || '').trim().replace(/^[a-z]+:\/\//i, '');
+      if (!n && !a) continue;
+      if (!n) return toast('Give every game server a name.');
+      if (!/^[A-Za-z0-9.-]{1,120}(:[0-9]{1,5})?$/.test(a)) return toast(`“${n}” needs an address like mc.example.org or 203.0.113.7:25565.`);
+      out.push({ n: n.slice(0, 60), a, ...(g.g ? { g: g.g } : {}), ...(String(g.d || '').trim() ? { d: String(g.d).trim().slice(0, 200) } : {}) });
+    }
+    const turnOn = out.length && !featureOn(sv, 'games');
+    Store.updateServer(sv.id, { gameServers: out, ...(turnOn ? { features: { ...FEATURES, ...(sv.features || {}), games: true } } : {}) });
+    renderAll(); toast(turnOn ? 'Game servers saved, and switched on in the sidebar.' : 'Game servers saved.'); setTimeout(redraw, 150);
+  };
+  return [el('h2', {}, 'Game Servers'), el('p', { className: 'sub' }, 'The game servers your people play on. Everyone sees them under Game Servers in the sidebar, with the address to copy; Minecraft servers also say whether they’re up.'),
+    box, el('div', { className: 'row', style: 'justify-content:flex-start;margin-top:18px' }, el('button', { className: 'btn primary', onclick: save }, 'Save Changes'))];
 }
 
 // ---------- server tags beside names ----------
@@ -1073,10 +1418,22 @@ function renderContent() {
     if (content.dataset.key !== key) { content.replaceChildren(discoverPage()); content.dataset.key = key; }
     composer.hidden = true; return;
   }
+  if (view === 'home' && !dmId && homePage) {
+    const key = homePage + ':' + JSON.stringify(homePage === 'shop' ? [me.decoration, me.effect, me.plate, me.name, me.avatar, me.color, questsDone()] : [questStats(), questsDone(), me.decoration]);
+    if (content.dataset.key !== key) { content.replaceChildren(homePage === 'shop' ? shopPage() : questsPage()); content.dataset.key = key; }
+    composer.hidden = true; return;
+  }
   if (view === 'home' && !dmId) {
     const key = 'friends:' + friendsTab;
     if (!(friendsTab === 'add' && content.dataset.key === key)) content.replaceChildren(friendsPage());      // (keep what you're typing)
     content.dataset.key = key; composer.hidden = true; return;
+  }
+  const pg = pageNow(), psv = pg && Store.server(serverId);
+  if (pg && psv) {
+    const key = 'page:' + serverId + ':' + pg + ':' + JSON.stringify(pg === 'browse' ? [Store.channels(serverId).map((c) => [c.id, c.name, c.topic, c.category]), hiddenChans[serverId]]
+      : pg === 'games' ? psv.gameServers : [psv.guide, psv.name, psv.banner, guideDone(serverId), Store.canManage(serverId)]);
+    if (content.dataset.key !== key) { content.replaceChildren(pg === 'browse' ? browsePage(psv) : pg === 'games' ? gameServersPage(psv) : guidePage(psv)); content.dataset.key = key; }
+    composer.hidden = true; return;
   }
   const ch = view === 'home' ? null : Store.channel(channelId);
   if (view === 'server' && !ch) {
@@ -1193,7 +1550,7 @@ function renderMembers() {
   }
   if (view === 'home' && dmId && prefs.dmPanel) {
     const u = Store.dmUser(dmId), key = u ? JSON.stringify([u.id, u.name, u.login, u.pronouns, u.about, u.since, String(u.avatar || '').length, u.color, u.theme, u.style, u.tag, u.status,
-      friendState(u), Store.kind === 'supabase' && Store.blocked(u.id), Store.mutualServerList(u.id).map((x) => x.id), noteOn(u.id), playingNow(u.playing) && u.playing]) : '';
+      friendState(u), Store.kind === 'supabase' && Store.blocked(u.id), Store.mutualServerList(u.id).map((x) => x.id), noteOn(u.id), playingNow(u.playing) && u.playing, u.decoration, u.effect]) : '';
     if (box.dataset.dmp !== key) { box.dataset.dmp = key; box.replaceChildren(u ? dmPanel(u) : ''); }
     return;
   }
@@ -1387,7 +1744,8 @@ function showProfile(user, anchor) {
   closePop();
   if (again) return;
   const mine = isMe(user), sv = view === 'server' ? serverId : null, live = Store.kind === 'supabase';
-  const u = mine ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, plate: me.plate } : user;
+  const u = mine ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, plate: me.plate,
+    decoration: me.decoration || '', effect: me.effect || '' } : user;
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, u.banner, u.color);
   const toFull = () => fullProfile(user);
   const inner = el('div', { className: 'inner' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: toFull }, avatarEl(u, { size: 74 })),
@@ -1411,6 +1769,13 @@ function showProfile(user, anchor) {
       ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), r.name)),
       Store.canManage(sv) && all.length ? el('button', { className: 'rchip add', title: 'Give a role', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu(roleItems(sv, u), r.left, r.bottom + 4); } }, icon('plus', 13)) : null)));
   }
+  // what they added to their profile (fetched now): their connections, and the first games on their Board
+  const xid = u.bot ? null : mine ? myXid() : live && u.id ? u.id : null;
+  if (xid) {
+    const xbox = el('div', { className: 'p-extras' }), fill = (x) => xbox.replaceChildren(...extrasBits(x, sec, () => { closePop(); fullProfile(user, 'board'); }));
+    fill(Store.extrasNow(xid)); inner.append(xbox);
+    Store.profileExtras(xid).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
+  }
   if (mine) inner.append(el('div', { className: 'card' }, el('button', { onclick: () => { closePop(); openProfileEditor(); } }, icon('edit'), 'Edit Profile')));
   else if (!u.bot) {
     const say = el('input', { type: 'text', placeholder: 'Message @' + (u.login || u.name), maxLength: 4000 });
@@ -1427,7 +1792,7 @@ function showProfile(user, anchor) {
   }
   pop = el('div', { className: 'pop prof' }, banner, inner);
   pop.dataset.uid = String(user.id || user.name); pop.dataset.src = src;
-  themeCard(pop, u.theme);
+  themeCard(pop, u.theme); withEffect(pop, u.effect);
   document.body.append(pop); placePop(anchor);
   if (anchor.classList && anchor.classList.contains('mem')) anchor.classList.add('open');
   if (!u.banner && u.id && !mine) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
@@ -1502,9 +1867,14 @@ function dmPanel(u) {
   body.append(mutual);
   const note = noteOn(u.id);
   if (note) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Note'), el('div', { className: 'dmp-about' }, note)));
+  if (live && u.id && !u.bot) {          // (their connections and Board, fetched now)
+    const xbox = el('div', { className: 'dmp-extras' }), fill = (x) => xbox.replaceChildren(...extrasBits(x, (t, ...k) => el('section', { className: 'dmp-card' }, el('h4', {}, t), ...k), () => fullProfile(u, 'board')));
+    fill(Store.extrasNow(u.id)); body.append(xbox);
+    Store.profileExtras(u.id).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
+  }
   if (!u.banner && u.id) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
-  return themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, el('div', { className: 'dmp-top' }, banner, tools, av), id, body),
-    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'))), u.theme);
+  return withEffect(themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, el('div', { className: 'dmp-top' }, banner, tools, av), id, body),
+    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'))), u.theme), u.effect);
 }
 
 // the whole profile, in the middle of the screen (Discord's): their card on the left (message them, befriend them, their
@@ -1514,7 +1884,8 @@ let fullOpen = null;
 function fullProfile(user, tab = null) {
   closePop(); if (fullOpen) fullOpen.close();
   const self = isMe(user), live = Store.kind === 'supabase';
-  const u = self ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, playing: me.playing || null, login: (Store.account() || {}).login || user.login } : user;
+  const u = self ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, playing: me.playing || null,
+    decoration: me.decoration || '', effect: me.effect || '', login: (Store.account() || {}).login || user.login } : user;
   const banner = el('div', { className: 'fp-banner' }); setBanner(banner, u.banner, u.color);
   const acts = el('div', { className: 'fp-acts' });
   const drawActs = () => {
@@ -1557,7 +1928,7 @@ function fullProfile(user, tab = null) {
   const quiet = el('div', { className: 'fp-quiet' }, 'Nothing here yet.');
   card.append(quiet); quiet.hidden = [...card.children].some((c) => c !== quiet && !c.hidden);
   left.append(card);
-  themeCard(left, u.theme);
+  themeCard(left, u.theme); withEffect(left, u.effect);
   // the right side: their Board, Activity and Wishlist, and what you share
   const right = el('div', { className: 'fp-right' });
   const ms = live && !self ? Store.mutualServerList(u.id) : [];
@@ -1600,6 +1971,21 @@ function fullProfile(user, tab = null) {
   if (xid) Store.profileExtras(xid).then((x) => { extras = x; fetched = true; if (fullOpen === w) { drawConns(); quiet.hidden = [...card.children].some((c) => c !== quiet && !c.hidden); draw(false); } },
     () => { fetched = true; if (fullOpen === w) draw(false); });
   return w;
+}
+// what someone added to their profile, for a card: their connections (as icons) and the first games on their Board.
+// sec(title, ...kids) makes a section the way that card does
+const myXid = () => (Store.kind === 'supabase' ? Store.myId() : 'me');
+function extrasBits(x, sec, onBoard) {
+  const out = [], conns = (x && x.connections) || [];
+  if (conns.length) out.push(sec('Connections', el('div', { className: 'p-conns' }, ...conns.map((c) => {
+    const href = connectionLink(c), s = SERVICE[c.s] || { name: c.s }, t = brandIcon(c.s, 18, { tile: true }), title = `${s.name}: ${connectionLabel(c)}${c.v ? ' (verified)' : ''}`;
+    if (c.v) t.append(el('span', { className: 'p-cv' }, icon('check', 9)));
+    return href ? el('a', { className: 'p-conn', href, target: '_blank', rel: 'noopener noreferrer', title }, t) : el('span', { className: 'p-conn', title }, t);
+  }))));
+  const w = widgetsOf(x).find((v) => v && Array.isArray(v.g) && v.g.length);
+  if (w) out.push(sec((WIDGET[w.t] || { title: 'Games' }).title, el('button', { className: 'p-board', title: 'See their Board', onclick: onBoard },
+    ...w.g.slice(0, 4).map((g) => gameTile(g)), w.g.length > 4 ? el('span', { className: 'p-more-n' }, '+' + (w.g.length - 4)) : null)));
+  return out;
 }
 // one of someone's connections, on their profile (it opens their page there, when the service has one)
 function connectionRow(c) {
@@ -1749,6 +2135,7 @@ function showAccount(anchor) {
   closePop();
   const row = (ic, label, extra, onclick) => el('button', { onclick }, icon(ic), el('span', {}, label), extra || null);
   const card = el('div', { className: 'card' },
+    row('user', 'View Full Profile', null, () => { closePop(); fullProfile(asMember(), 'board'); }),
     row('edit', 'Edit Profile', null, () => { closePop(); openProfileEditor(); }),
     el('hr'), row('dot', 'Set Status', el('span', { className: 'chev' }, icon('chevR', 16)), (e) => { e.stopPropagation(); statusMenu(); }),
     el('hr'), row('palette', 'Themes', el('span', { className: 'chev' }, icon('chevR', 16)), () => { closePop(); openThemes(); }),
@@ -1756,11 +2143,14 @@ function showAccount(anchor) {
       ? row('id', 'Copy My @handle', null, () => copyText('@' + (Store.account() || {}).login, 'Handle copied.'))
       : row('id', 'Copy User ID', null, () => copyText(me.id, 'User ID copied.')));
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, me.banner, me.color);
+  const xbox = el('div', { className: 'p-extras' });
   pop = el('div', { className: 'pop acct' }, banner,
     el('div', { className: 'inner' }, avatarEl(asMember(), { size: 74 }),
       el('div', { className: 'pn' }, styledName(el('span', {}, me.name), asMember()), tagChipFor(asMember())), el('div', { className: 'pr' }, me.pronouns || (STATUSES.find((s) => s[0] === me.status) || [, 'Online'])[1]),
-      me.about ? el('div', { className: 'ab' }, me.about) : null, card));
-  themeCard(pop, me.theme);
+      me.about ? el('div', { className: 'ab' }, me.about) : null, xbox, card));
+  themeCard(pop, me.theme); withEffect(pop, me.effect);
+  const fill = (x) => xbox.replaceChildren(...extrasBits(x, (t, ...k) => el('div', { className: 'psec' }, el('h4', {}, t), ...k), () => { closePop(); fullProfile(asMember(), 'board'); }));
+  fill(Store.extrasNow(myXid())); Store.profileExtras(myXid()).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
   document.body.append(pop); placePop(anchor);
 }
 function statusMenu() {
@@ -1782,6 +2172,7 @@ async function send() {
   const where = { dm: view === 'home', id: place }, reply = d.reply ? d.reply.id : null;
   const post = (msg) => (where.dm ? Store.sendDM(where.id, { user: stamp(), ...msg }) : Store.send(where.id, { user: stamp(), ...msg }));
   inp.value = ''; inp.style.height = 'auto'; d.reply = null; closeMentions();
+  questTick('send');
   const text = withMentions(await withEmoji(raw, customEmoji).catch(() => raw));
   if (newLine.place === place) newLine = { place: null, at: 0 };
   if (!files.length) { post({ text, reply }); renderComposerExtras(); if (view === 'server') botReplies(raw); else if (target().bot) dmBot(raw); return; }
@@ -2033,6 +2424,7 @@ async function joinVoice(c) {
   if (call && call.place === c.id) return;
   if (call) leaveCall();
   await enterCall({ kind: 'vc', place: c.id, server: c.server, video: false });
+  if (call && call.place === c.id) questTick('voice');
 }
 let joining = false;
 async function enterCall({ kind, place, server, callId, video, outgoing }) {
@@ -2280,7 +2672,12 @@ function editTheme(id) {
 function toHex(c) { c = String(c).trim(); if (/^#[0-9a-f]{6}$/i.test(c)) return c; if (/^#[0-9a-f]{3}$/i.test(c)) return '#' + c.slice(1).split('').map((x) => x + x).join(''); const m = c.match(/\d+/g); if (m && m.length >= 3) return '#' + m.slice(0, 3).map((n) => (+n).toString(16).padStart(2, '0')).join(''); return '#222222'; }
 
 // ---------- create server / channel ----------
-function go(where) { view = 'server'; serverId = where; channelId = firstChannel(where); renderAll(); }
+function go(where) { view = 'server'; serverId = where; channelId = firstChannel(where); serverPage = null; renderAll(); }
+// one of a server's own pages (Browse Channels, Game Servers, Server Guide), or its Events
+function openServerPage(id) {
+  if (id === 'events') return eventsDialog(serverId);
+  serverPage = { sv: serverId, id }; renderAll(); $('#app').classList.remove('show-side');
+}
 
 function newChannelFlow(categoryId, sv = serverId, after) {
   let kind = 'text';
@@ -2924,6 +3321,7 @@ addEventListener('resize', closePop);
 let lastError = '';
 Store.onChange(() => {
   if (Store.kind === 'supabase') adoptProfile();          // (your profile can change on another device)
+  questCheck();
   renderAll(); alertNew();
   const err = Store.syncState().error || '';
   if (err && err !== lastError && Store.kind === 'supabase') toast(err);
@@ -3035,7 +3433,7 @@ function loadPrefs() {
   return p;
 }
 // what a layout preset or reset leaves alone (they're not about layout)
-const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo'];
+const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo', 'decorations', 'effects'];
 const keepOf = () => Object.fromEntries(KEEP.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
 function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
 function applyPrefs() {
@@ -3098,7 +3496,7 @@ let joinCode = null;
 }
 ready.then((ok) => {
   if (joinCode) { if (ok) { adoptProfile(); renderAll(); } return appJoin(joinCode); }
-  if (ok) { adoptProfile(); renderAll(); joinPendingInvite(); finishLinking(); return; }
+  if (ok) { adoptProfile(); renderAll(); joinPendingInvite(); finishLinking(); Store.profileExtras(Store.myId()).then(() => { questCheck(); renderSide(); }, () => {}); return; }
   if (Store.resumeError) toast('Sign-in trouble: ' + Store.resumeError);
   let code = null; try { code = localStorage.getItem(PENDING_INVITE); } catch {}
   if (code && Store.configured) signInDialog(null, 'Sign in to join the server you were invited to');
@@ -3381,7 +3779,8 @@ function adoptProfile() {
   if (p && p.name) {
     const next = { ...me, name: p.name, color: p.color || me.color, avatar: p.avatar || '', pronouns: p.pronouns || '', about: p.about || '', status: p.status || me.status,
       banner: p.banner || '', plate: p.plate || '', ...(Store.styled && Store.styled() ? { theme: p.theme || null, style: p.style || null } : {}),
-      ...(Store.canPlay && Store.canPlay() ? { playing: p.playing || null } : {}) };
+      ...(Store.canPlay && Store.canPlay() ? { playing: p.playing || null } : {}),
+      ...(Store.canDecorate && Store.canDecorate() ? { decoration: p.decoration || '', effect: p.effect || '' } : {}) };
     if (p.id) next.id = p.id;
     if (JSON.stringify(next) !== JSON.stringify(me)) { me = next; saveMe(); }
   }
@@ -3394,12 +3793,14 @@ function setPlaying(g) {
   me.playing = game ? { ...game, at: new Date().toISOString() } : null; saveMe();
   Store.setPlaying(game);
   renderMembers();
+  if (game) questTick('play');
 }
 const pushProfile = () => {
   if (!Store.signedIn) return;
   const t = me.theme || [], st = me.style || {};
   Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, banner: me.banner || '', plate: me.plate || '',
-    theme1: t[0] || '', theme2: t[1] || '', name_font: st.font || '', name_effect: st.effect || '', name_color1: st.c1 || '', name_color2: st.c2 || '' });
+    theme1: t[0] || '', theme2: t[1] || '', name_font: st.font || '', name_effect: st.effect || '', name_color1: st.c1 || '', name_color2: st.c2 || '',
+    decoration: me.decoration || '', effect: me.effect || '' });
 };
 
 // choose a banner or nameplate: nothing, one of the gradients, or your own picture (made small enough to keep)
@@ -3447,7 +3848,7 @@ function openProfileEditor() {
     theme: me.theme ? [me.theme[0] || '', me.theme[1] || ''] : ['', ''], style: { font: '', effect: '', c1: '', c2: '', ...(me.style || {}) }, tag: (myTag() || {}).server || '' });
   let base = fromMe(), d = JSON.parse(JSON.stringify(base));
   const dirty = () => JSON.stringify(d) !== JSON.stringify(base);
-  const asUser = () => ({ name: d.name || 'You', color: d.color, avatar: d.avatar, status: me.status, me: true, style: hasStyle(d.style) ? d.style : null,
+  const asUser = () => ({ name: d.name || 'You', color: d.color, avatar: d.avatar, status: me.status, me: true, style: hasStyle(d.style) ? d.style : null, decoration: me.decoration || '',
     login: (Store.account() || {}).login || '', pronouns: d.pronouns, theme: d.theme[0] || d.theme[1] ? d.theme : null,
     tag: live && d.tag ? (() => { const sv = Store.server(d.tag); return sv && sv.tag ? { text: sv.tag, badge: sv.tagBadge, color: sv.tagColor, server: sv.id } : null; })() : null });
   // ---- the left: what you can change ----
@@ -3469,6 +3870,26 @@ function openProfileEditor() {
     if (!mine.length) return el('p', { className: 'hint' }, 'None of your servers has a tag yet. A server’s admins can make one in Server Settings → Server Tag.');
     return sel(d.tag, [['', 'No tag'], ...mine.map((sv) => [sv.id, `${sv.tag} · ${sv.name}`])], (v) => { d.tag = v; update(); });
   })() : el('p', { className: 'hint' }, 'Sign in to wear a server’s tag.');
+  // connections, the Board, and the Shop's decoration and effect: these save as you change them (not with the bar)
+  const xid = myXid(), now = () => Store.extrasNow(xid) || { connections: [], widgets: [], activity: [] };
+  const connBox = el('div', { className: 'pe-conns' }), boardBox = el('div', { className: 'pe-board' }), shopBox = el('div', { className: 'pe-shop' });
+  const saveX = async (patch) => { await attempt(() => Store.setProfileExtras(patch)); drawExtras(); };
+  function drawExtras() {
+    const list = now().connections;
+    connBox.replaceChildren(...list.map((c) => el('div', { className: 'pe-conn' }, brandIcon(c.s, 18, { tile: true }), el('span', { className: 'grow' }, connectionLabel(c)),
+      c.v ? el('span', { className: 'cx-v', title: 'Verified' }, icon('check', 11)) : null,
+      el('button', { className: 'cx-btn del', title: 'Remove', onclick: () => saveX({ connections: list.filter((y) => y !== c) }) }, icon('x', 14)))),
+      el('button', { className: 'btn small', onclick: () => pickService(drawExtras) }, icon('plus', 14), 'Add Connection'));
+    boardBox.replaceChildren(...boardView(now(), true, saveX));
+    const di = decoInfo(me.decoration), ei = effectInfo(me.effect), toShop = () => { if (dirty()) return leave(); w.close(); view = 'home'; dmId = null; homePage = 'shop'; renderAll(); };
+    shopBox.replaceChildren(
+      el('div', { className: 'pe-shoprow' }, el('span', { className: 'grow' }, el('b', {}, 'Avatar Decoration'), el('small', {}, di ? di[1] : 'None')),
+        di ? el('button', { className: 'btn small ghost', onclick: () => { me.decoration = ''; saveMe(); pushProfile(); drawExtras(); update(); renderAll(); } }, 'Remove') : null),
+      el('div', { className: 'pe-shoprow' }, el('span', { className: 'grow' }, el('b', {}, 'Profile Effect'), el('small', {}, ei ? ei[1] : 'None')),
+        ei ? el('button', { className: 'btn small ghost', onclick: () => { me.effect = ''; saveMe(); pushProfile(); drawExtras(); update(); renderAll(); } }, 'Remove') : null),
+      el('button', { className: 'btn small primary', onclick: toShop }, icon('shop', 14), 'Get More in the Shop'));
+    if (typeof update === 'function' && card.isConnected) update();
+  }
   const side = el('div', { className: 'pe-side' },
     el('div', { className: 'pe-title' }, icon('edit', 18), el('b', {}, 'Main Profile')),
     sec('Display Name', name),
@@ -3484,7 +3905,10 @@ function openProfileEditor() {
     sec('Banner', picturePicker(d.banner, (v) => { d.banner = v; update(); }, { w: 680, h: 240, label: 'Upload a banner' })),
     sec('Nameplate', picturePicker(d.plate, (v) => { d.plate = v; update(); }, { w: 480, h: 96, label: 'Upload a nameplate' })),
     sec('Server Tag', tagPick),
-    sec('About Me', about, count));
+    sec('About Me', about, count),
+    sec('Avatar Decoration & Profile Effect', shopBox),
+    sec('Connections', connBox),
+    sec('Widgets', el('p', { className: 'hint' }, 'Your Board, on your full profile. Saved as you change it.'), boardBox));
   // ---- the middle: your profile, as others see it ----
   const card = el('div', { className: 'pe-card' }), chat = el('div', { className: 'pe-chat' }), memRow = el('div', { className: 'mem pe-mem' });
   const preview = el('div', { className: 'pe-main' }, el('div', { className: 'pe-label' }, 'Preview'), card,
@@ -3505,8 +3929,9 @@ function openProfileEditor() {
         el('h2', { className: 'pe-cname' }, styledName(el('span', {}, d.name || 'You'), u)),
         el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, d.pronouns ? el('span', { className: 'dmp-pro' }, d.pronouns) : null, u.tag ? el('span', { className: 'dmp-tagwrap' }, tagChip(u.tag)) : null),
         d.about ? el('section', { className: 'pe-csec' }, el('h4', {}, 'About Me'), el('div', { className: 'fp-about' }, d.about)) : null,
-        el('section', { className: 'pe-csec' }, el('h4', {}, 'Member Since'), el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong((Store.myProfile && Store.myProfile().since) || Date.now()))))));
-    themeCard(card, u.theme);
+        el('section', { className: 'pe-csec' }, el('h4', {}, 'Member Since'), el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong((Store.myProfile && Store.myProfile().since) || Date.now())))),
+        ...extrasBits(now(), (t, ...k) => el('section', { className: 'pe-csec' }, el('h4', {}, t), ...k), () => {})));
+    themeCard(card, u.theme); withEffect(card, me.effect);
     // a message, and a member-list row
     const nm = styledName(el('span', { className: 'nm' }, d.name || 'You'), u); nm.style.setProperty('--who', safeColor(d.color));
     chat.replaceChildren(el('div', { className: 'msg' }, avatarEl(u), el('div', { className: 'body' },
@@ -3538,7 +3963,14 @@ function openProfileEditor() {
   w.scrim.addEventListener('mousedown', (e) => { if (e.target === w.scrim && dirty()) { e.stopImmediatePropagation(); leave(); } }, true);
   w.scrim.addEventListener('click', (e) => { if (e.target === w.scrim && dirty()) e.stopImmediatePropagation(); }, true);
   w.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: leave }, icon('x', 20)));
-  update();
+  update(); drawExtras();
+  Store.profileExtras(xid).then(() => { if (w.scrim.isConnected) drawExtras(); }, () => {});
+}
+// pick a service to add (from inside a window, where Settings would open underneath)
+function pickService(after) {
+  const m = modal({ title: 'Add a Connection', cls: 'cx-pickdlg', body: [el('p', { className: 'dlg-sub' }, 'Which of your accounts should your profile show?'),
+    el('div', { className: 'cx-grid' }, ...SERVICES.map((s) => el('button', { className: 'cx-pick', title: s.name, onclick: () => { m.close(); addConnection(s.id, after); } }, brandIcon(s.id, 26))))],
+    actions: [el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel')] });
 }
 
 // Discord's "Change Display Name Style": a font, an effect and colours, with a preview, Surprise Me and Apply
@@ -3893,6 +4325,9 @@ function appearancePane(redraw) {
     row2('Display', 'Cozy gives each message room. Compact fits more on screen.', sel(prefs.density, [['cozy', 'Cozy'], ['compact', 'Compact']], (v) => { prefs.density = v; savePrefs(); })),
     row2('Text size', 'Everything in the app scales with this.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })()),
     row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos under the messages that link to them.', sw(prefs.embeds !== 'off', (on) => { prefs.embeds = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
+    el('h3', {}, 'Decorations & Effects'),
+    row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => { prefs.decorations = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
+    row2('Profile effects', 'Snow, sparkles and more over people’s profile cards, from the Shop.', sw(prefs.effects !== 'off', (on) => { prefs.effects = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
     row2('Formatting bar', 'Bold, italics, code and more above the message box when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => { prefs.formatBar = on ? 'on' : 'off'; savePrefs(); }))];
 }
 
@@ -3995,6 +4430,9 @@ function openServerSettings(svId, section = 'profile') {
     can && { id: 'channels', label: 'Channels', icon: 'hash' },
     can && { id: 'categories', label: 'Categories', icon: 'menu' },
     live && can && { id: 'tag', label: 'Server Tag', icon: 'tag' },
+    can && { id: 'sidebar', label: 'Server Sidebar', icon: 'browse' },
+    can && { id: 'guide', label: 'Server Guide', icon: 'signpost' },
+    can && { id: 'gameservers', label: 'Game Servers', icon: 'game' },
     live && can && { id: 'emoji', label: 'Emoji', icon: 'smile' },
     live && can && { id: 'stickers', label: 'Stickers', icon: 'sticker' },
     { head: 'People' },
@@ -4014,6 +4452,9 @@ function openServerSettings(svId, section = 'profile') {
     if (sec === 'categories') return svCategories(cur, redraw);
     if (sec === 'emoji') return svEmoji(cur, redraw);
     if (sec === 'tag') return svTag(cur, redraw);
+    if (sec === 'sidebar') return svSidebar(cur, redraw);
+    if (sec === 'guide') return svGuide(cur, redraw, shut);
+    if (sec === 'gameservers') return svGameServers(cur, redraw);
     if (sec === 'stickers') return svStickers(cur, redraw);
     if (sec === 'members') return svMembers(cur, redraw);
     if (sec === 'roles') return svRoles(cur, redraw, state);
@@ -4700,7 +5141,7 @@ function layoutStudio(redraw) {
     return col;
   }
   function channelLines() {
-    const H = Math.max(5, S(prefs.chanH)), out = [];
+    const H = Math.max(5, S(prefs.chanH)), out = [bar('serverTop', 'inline')];
     out.push(el('div', { className: 'm-cat' }, el('span', {}, prefs.cats !== 'off' ? 'TEXT CHANNELS' : ''), bar('channels', 'inline')));
     ['general', 'build-log', 'programming', 'random'].forEach((n, i) => {
       const row = el('div', { className: 'm-chan' + (i === 0 ? ' on first' : '') }, prefs.chanIcons === 'off' ? '' : el('b', {}, '#'), el('span', {}, n));
@@ -4712,7 +5153,7 @@ function layoutStudio(redraw) {
   function dmLines() {
     const H = Math.max(5, S(prefs.chanH));
     const line = (txt, av) => { const r = el('div', { className: 'm-chan' }, av ? el('i', { className: 'm-dot' }) : null, el('span', {}, txt)); r.style.height = H + 'px'; return r; };
-    return [line('Friends'), el('div', { className: 'm-cat' }, 'DIRECT MESSAGES'), line('Bee', true), line('Cam', true)];
+    return [bar('dmNav', 'inline'), el('div', { className: 'm-cat' }, 'DIRECT MESSAGES'), line('Bee', true), line('Cam', true)];
   }
   function mainPart() {
     const dm = studio.view === 'dm', topOn = prefs.topbar !== 'off';
