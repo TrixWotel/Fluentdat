@@ -13,6 +13,8 @@ const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
 
+let structure7 = null;
+const tradeListeners = new Set();
 let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, structure4 = null, structure5 = null, structure6 = null, pinsLive = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
 let styled = true;                  // (false on an older database: no profile themes, name styles or server tags there yet)
 let cache = blank();
@@ -27,7 +29,8 @@ const listeners = new Set(), messageListeners = new Set(), callListeners = new S
 function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
-    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [], pins: {}, boosts: [], threadInfo: {} };
+    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [], pins: {}, boosts: [], threadInfo: {},
+    wallet: null, owned: [], shop: {}, trades: [] };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -79,7 +82,11 @@ const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, own
   tag: r.tag || '', tagBadge: r.tag_badge || '', tagColor: r.tag_color || '',
   features: r.features && typeof r.features === 'object' ? r.features : {}, guide: r.guide && typeof r.guide === 'object' ? r.guide : {}, gameServers: Array.isArray(r.game_servers) ? r.game_servers : [],
   category: r.category || '', public: !!r.public, since: Date.parse(r.created_at) || 0 });
-const toRole = (r) => ({ id: r.id, server: r.server_id, name: r.name, color: r.color, hoist: r.hoist, position: r.position });
+const toRole = (r) => ({ id: r.id, server: r.server_id, name: r.name, color: r.color, hoist: r.hoist, position: r.position, icon: r.icon || '' });
+// a trade, as the page shows it
+const toTrade = (r) => ({ id: r.id, from: r.from_user, to: r.to_user, giveBux: Number(r.give_bux) || 0, giveItems: Array.isArray(r.give_items) ? r.give_items : [],
+  wantBux: Number(r.want_bux) || 0, wantItems: Array.isArray(r.want_items) ? r.want_items : [], note: r.note || '', status: r.status, why: r.why || '',
+  at: Date.parse(r.created_at) || 0, decided: r.decided_at ? Date.parse(r.decided_at) : 0 });
 // someone's roles in a server, top one first
 const rolesOf = (sv, uid) => cache.memberRoles.filter((x) => x.server_id === sv && x.user_id === uid)
   .map((x) => cache.roles.find((r) => r.id === x.role_id)).filter(Boolean).sort(byPos);
@@ -150,7 +157,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 8;                // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 9;                // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -173,7 +180,21 @@ async function loadOnce() {
       soft(q('category_perms'), []), soft(q('server_events'), []), soft(q('event_interest'), []), soft(q('server_boosts'), []),
       soft(sb.rpc('setup_version').then(must), 0)]);
     if (seq !== loadSeq) return newestLoad;
-    cache.version = Number(version) || 0;
+    // (Datbux: your wallet, what you have, the Shop's prices, your trades; the version is known once they are)
+    const ver = Number(version) || 0;
+    if (ver >= 9) {
+      const [wal, owned, shop, trades] = await Promise.all([soft(sb.from('wallets').select('*').eq('user_id', myId()).then(must), []),
+        soft(sb.from('owned_items').select('kind,item,how,got_at').eq('user_id', myId()).then(must), []), soft(q('shop_items'), []),
+        soft(sb.from('trades').select('*').order('created_at', { ascending: false }).limit(80).then(must), [])]);
+      if (seq !== loadSeq) return newestLoad;
+      cache.wallet = wal[0] || null; cache.owned = owned; cache.shop = Object.fromEntries(shop.map((r) => [r.kind + ':' + r.item, Number(r.price) || 0])); cache.trades = trades;
+      // (something you were putting on that isn't yours any more, after a trade, isn't kept on top)
+      for (const [k, kind] of [['decoration', 'deco'], ['name_font', 'font'], ['effect', 'effect'], ['frame', 'frame']]) {
+        const op = meOps.get(k);
+        if (op && op.v && (cache.shop[kind + ':' + op.v] || 0) > 0 && !owned.some((o) => o.kind === kind && o.item === op.v)) meOps.delete(k);
+      }
+    }
+    cache.version = ver;
     if (cache.version < SETUP_VERSION) state.needsSetup = true;
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
     cache.me = mine[0] || null;
@@ -368,6 +389,14 @@ function watchStructure() {
   structure6 = sb.channel('fluentdat-structure-6');
   structure6.on('postgres_changes', { event: '*', schema: 'public', table: 'server_boosts' }, again);
   structure6.subscribe();
+  // (Datbux: your wallet, what you have, and trades for you; an offer is told to the app)
+  structure7 = sb.channel('fluentdat-structure-7');
+  for (const table of ['wallets', 'owned_items']) structure7.on('postgres_changes', { event: '*', schema: 'public', table }, again);
+  structure7.on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, ({ eventType, new: row }) => {
+    again();
+    if (eventType === 'INSERT' && row && row.to_user === myId()) for (const cb of tradeListeners) try { cb(toTrade(row)); } catch {}
+  });
+  structure7.subscribe();
 }
 // signed in: load everything, keep it live, and notice if the session ends (signed out in another tab, or it ran out)
 async function start() {
@@ -563,8 +592,8 @@ export const SupabaseStore = {
     return found && found[0] ? { ...toUser(found[0]), id: found[0].id } : null;
   },
   async signOut() {
-    for (const ch of [feed, extras, structure, structure2, structure3, structure4, structure5, structure6, pinsLive, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
-    feed = extras = structure = structure2 = structure3 = structure4 = structure5 = structure6 = pinsLive = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
+    for (const ch of [feed, extras, structure, structure2, structure3, structure4, structure5, structure6, structure7, pinsLive, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
+    feed = extras = structure = structure2 = structure3 = structure4 = structure5 = structure6 = structure7 = pinsLive = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
     if (sb) await sb.auth.signOut({ scope: 'local' });   // (just this browser — your phone stays signed in)
     session = null; cache = blank(); active = null; pending.clear(); emit();
   },
@@ -670,9 +699,12 @@ export const SupabaseStore = {
     const rs = rolesOf(sv, m.user_id);
     return { ...toUser(cache.profiles[m.user_id]), id: m.user_id, role: m.role, me: m.user_id === myId(), roles: rs.map((r) => r.id), nick: m.nick || '',
       booster: cache.boosts.some((b) => b.server_id === sv && b.user_id === m.user_id),
-      roleColor: (rs.find((r) => r.color) || {}).color || '', group: rs.find((r) => r.hoist) ? toRole(rs.find((r) => r.hoist)) : null };
+      roleColor: (rs.find((r) => r.color) || {}).color || '', group: rs.find((r) => r.hoist) ? toRole(rs.find((r) => r.hoist)) : null,
+      roleIcon: rs.find((r) => r.icon) ? toRole(rs.find((r) => r.icon)) : null };
   }),
   memberColor: (sv, uid) => (rolesOf(sv, uid).find((r) => r.color) || {}).color || '',
+  // (the icon of someone's highest role that has one, shown beside their name)
+  memberIcon: (sv, uid) => { const r = rolesOf(sv, uid).find((x) => x.icon); return r ? toRole(r) : null; },
 
   // ---- roles (a name and a colour that admins hand out) ----
   roles: (sv) => cache.roles.filter((r) => r.server_id === sv).sort(byPos).map(toRole),
@@ -684,7 +716,7 @@ export const SupabaseStore = {
   },
   updateRole(id, patch) {
     const r = cache.roles.find((x) => x.id === id); if (r) Object.assign(r, patch); emit();
-    const row = {}; for (const k of ['name', 'color', 'hoist', 'position']) if (k in patch) row[k] = patch[k];
+    const row = {}; for (const k of ['name', 'color', 'hoist', 'position', ...((cache.version || 0) >= 9 ? ['icon'] : [])]) if (k in patch) row[k] = patch[k];
     push(sb.from('roles').update(row).eq('id', id).select('id').then(took('Only this server’s admins can change roles.')), loadAll);
   },
   removeRole(id) {
@@ -810,6 +842,26 @@ export const SupabaseStore = {
   calls: (dm) => (cache.calls[dm] || []).map(toCall),
   call: (id) => { for (const list of Object.values(cache.calls)) { const c = list.find((x) => x.id === id); if (c) return toCall(c); } return null; },
   onCall(cb) { callListeners.add(cb); return () => callListeners.delete(cb); },
+  onTrade(cb) { tradeListeners.add(cb); return () => tradeListeners.delete(cb); },
+  // ---- Datbux: your wallet, the Shop's prices and what you have, tasks, sending, trades (the database does all of it) ----
+  canBux: () => (cache.version || 0) >= 9,
+  wallet: () => { const w = cache.wallet; return w ? { balance: +w.balance || 0, earned: +w.earned || 0, spent: +w.spent || 0, sent: +w.sent || 0, received: +w.received || 0 } : null; },
+  priceOf: (kind, item) => (kind + ':' + item in cache.shop ? cache.shop[kind + ':' + item] : null),
+  owns: (kind, item) => cache.owned.some((o) => o.kind === kind && o.item === item),
+  ownedList: () => cache.owned.map((o) => ({ kind: o.kind, item: o.item, how: o.how })),
+  async ownedBy(uid) { return must(await sb.from('owned_items').select('kind,item').eq('user_id', uid)) || []; },
+  async taskProgress() { return (must(await sb.rpc('task_progress')) || []).map((t) => ({ ...t, resets: Date.parse(t.resets) || 0 })); },
+  async claimTask(task) { const b = must(await sb.rpc('claim_task', { p_task: task })); await loadAll(); return Number(b); },
+  async buyItem(kind, item) { const b = must(await sb.rpc('buy_item', { p_kind: kind, p_item: item })); await loadAll(); return Number(b); },
+  async sendBux(to, amount, note = '') { must(await sb.rpc('send_datbux', { p_to: to, p_amount: amount, p_note: note })); await loadAll(); },
+  async offerTrade(to, give, want, note = '') {
+    const id = must(await sb.rpc('offer_trade', { p_to: to, p_give_bux: give.bux || 0, p_give_items: give.items || [], p_want_bux: want.bux || 0, p_want_items: want.items || [], p_note: note }));
+    await loadAll(); return id;
+  },
+  async answerTrade(id, accept) { const r = must(await sb.rpc('answer_trade', { p_trade: id, p_accept: !!accept })); await loadAll(); return r; },
+  async cancelTrade(id) { must(await sb.rpc('cancel_trade', { p_trade: id })); await loadAll(); },
+  trades: () => cache.trades.map(toTrade),
+  async buxLog() { return must(await sb.from('datbux_log').select('*').order('id', { ascending: false }).limit(60)) || []; },
   // a call's private live channel ("call:<id>" or "vc:<voice channel id>"), which only its people may join
   callChannel: (topic, key) => sb.channel(topic, { config: { private: true, presence: { key }, broadcast: { self: false, ack: false } } }),
   dropChannel: (ch) => { try { sb.removeChannel(ch); } catch {} },

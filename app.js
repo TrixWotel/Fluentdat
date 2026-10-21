@@ -15,7 +15,8 @@ import { openColor, colorSwatch, closeColor } from './color.js';
 import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily, loadFont } from './namestyle.js';
 import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
 import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, FRAMES, decoEl, effectEl, frameEl, decoInfo, effectInfo, frameInfo, questInfo, questProgress } from './shop.js';
-import { BADGES as PROFILE_BADGES, BADGE as PROFILE_BADGE, RARITY, badgesOf, badgeIcon, toNext, tierAt, fmt as fmtN } from './badges.js';
+import { BADGE as PROFILE_BADGE, KINDS as BADGE_KINDS, SECRETS as SECRET_BADGES, COUNT as BADGE_COUNT, badgesOf, badgeState, badgeIcon, toNext, tierAt } from './badges.js';
+import { TASKS, TASK, EVERY, PRICES, WELCOME, fmtBux, period, resetsIn } from './datbux.js';
 import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, gamesByLetter, LETTERS, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (the test page hands in pretend cameras and microphones, and keeps everything quiet)
 const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
@@ -25,7 +26,7 @@ const DEFAULT_PREFS = {
   density: 'cozy', fontSize: 15, reduceMotion: false, highContrast: false, notify: false, sendOnEnter: true, dmFrom: 'anyone',
   // layout — all of these really move something (Settings → Layout)
   rail: 'on', iconShape: 'squircle', chanIcons: 'on', cats: 'on', sideHead: 'on', userPanel: 'on',
-  topbar: 'on', banner: 'on',
+  topbar: 'on', banner: 'on', liveBanner: 'off',
   avatars: 'on', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
   membersDefault: true, membersStyle: 'card', memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
@@ -131,25 +132,46 @@ function bubbleDialog() {
 const FIRST_RUN = (() => { try { let t = +localStorage.getItem('fluentdat.firstRun'); if (!t) { t = Date.now(); localStorage.setItem('fluentdat.firstRun', String(t)); } return t; } catch { return Date.now(); } })();
 // (signed out: what's kept in this browser)
 function localStats() {
-  const x = Store.extrasNow('me') || {}, mine = (list) => (list || []).filter((m) => m.user && !m.user.bot && isMe(m.user)).length;
-  let messages = 0;
-  for (const sv of Store.servers()) for (const c of Store.channels(sv.id)) messages += mine(Store.messages(c.id));
-  for (const d of Store.dmList()) messages += mine(Store.dm(d.id));
-  const games = (Array.isArray(x.widgets) ? x.widgets : []).filter((w) => w && w.t === 'likes').reduce((n, w) => n + ((w.g || []).length), 0);
-  return { since: new Date(FIRST_RUN).toISOString(), messages, reactions: 0, threads: 0, friends: Store.friends().filter((f) => !f.bot).length, members: 0, boost_since: null,
-    events: 0, quests: (x.quests || []).length, connections: (x.connections || []).length, games, play_seconds: 0, staff: false };
+  const x = Store.extrasNow('me') || {}, w = localWallet(), kinds = new Set();
+  let messages = 0, files = 0, night = 0, reactions = 0, said42 = false, saidHello = false, selfReact = false;
+  const scan = (place, list) => {
+    const mine = new Set();
+    for (const m of list || []) if (m.user && !m.user.bot && isMe(m.user)) {
+      messages++; mine.add(m.id);
+      if ((m.files || []).length) files++;
+      if (new Date(m.ts).getUTCHours() < 4) night++;
+      const t = String(m.text || '').trim();
+      if (t === '42') said42 = true;
+      if (/hello fluentdat/i.test(t)) saidHello = true;
+    }
+    for (const [mid, rs] of (Store.reactions ? Store.reactions(place) : new Map())) for (const r of rs) if (r.me) { reactions++; kinds.add(r.emoji); if (mine.has(mid)) selfReact = true; }
+  };
+  for (const sv of Store.servers()) for (const c of Store.channels(sv.id)) scan(c.id, Store.messages(c.id));
+  for (const d of Store.dmList()) scan(d.id, Store.dm(d.id));
+  const widgets = Array.isArray(x.widgets) ? x.widgets : [], count = (t) => widgets.filter((v) => v && v.t === t).reduce((n, v) => n + ((v.g || []).length), 0);
+  // (your best run of daily check-ins)
+  const days = Object.keys(w.claims || {}).filter((k) => k.startsWith('daily-checkin@')).map((k) => Date.parse(k.slice(14) + 'T00:00:00Z')).sort((a, b) => a - b);
+  let streak = 0, run = 0, prev = 0;
+  for (const t of days) { run = prev && t - prev === 864e5 ? run + 1 : 1; prev = t; streak = Math.max(streak, run); }
+  return { since: new Date(FIRST_RUN).toISOString(), messages, reactions, threads: 0, friends: Store.friends().filter((f) => !f.bot).length, members: 0, boost_since: null,
+    events: 0, quests: (x.quests || []).length, connections: (x.connections || []).length, games: count('likes'), want: count('want'), play_seconds: 0, staff: false,
+    servers: Store.servers().length, files, calls: 0, night, said42, said_hello: saidHello, self_react: selfReact, emoji_kinds: kinds.size, bot_cmds: 0,
+    looks: { avatar: !!me.avatar, banner: !!me.banner, bio: !!me.about, pronouns: !!me.pronouns, theme: !!(me.theme && (me.theme[0] || me.theme[1])), style: !!(me.style && (me.style.font || me.style.effect)),
+      deco: !!me.decoration, effect: !!me.effect, frame: !!me.frame, plate: !!me.plate, bubble: !!myBubble(), tag: false },
+    bux_earned: w.earned || 0, bux_spent: w.spent || 0, bux_sent: 0, sent_people: 0, trades: 0, owned: (w.owned || []).length, tasks: Object.keys(w.claims || {}).length, streak };
 }
 const statsId = (u) => (!u || u.bot ? null : Store.kind === 'supabase' ? (isMe(u) ? Store.myId() : u.id) : isMe(u) ? 'me' : null);
 // what someone's badges are made of: the database counts (signed in), or this browser does (yours, signed out)
 async function statsOf(u) { if (Store.kind !== 'supabase') return isMe(u) ? localStats() : null; const id = statsId(u); return id ? Store.badgeStats(id) : null; }
 const statsNow = (u) => (Store.kind !== 'supabase' ? (isMe(u) ? localStats() : null) : statsId(u) ? Store.badgeStatsNow(statsId(u)) : null);
 const badgePrefs = (u) => { const id = statsId(u), x = id ? Store.extrasNow(id) : null; return (x && x.badges) || { order: [], hidden: [] }; };
+const badgeTitle = (b) => `${b.kind ? b.kind.name + ': ' : ''}${b.name} (${b.rarity[0]})`;
 // a row of someone's badges (the ones they show, in their order), filled in when they're known; click one for its details
 function badgeRow(u, { max = 6 } = {}) {
   const row = el('div', { className: 'p-badges' }); row.hidden = true;
   const fill = (stats) => {
     const list = stats ? badgesOf(stats, badgePrefs(u)).shown : [];
-    row.replaceChildren(...list.slice(0, max).map((b) => el('button', { className: 'p-badge', title: `${b.def.name}: ${b.name}`, onclick: (e) => { e.stopPropagation(); badgesDialog(u, b.id); } }, badgeIcon(b.id, b.tier, 22))),
+    row.replaceChildren(...list.slice(0, max).map((b) => el('button', { className: 'p-badge', title: badgeTitle(b), onclick: (e) => { e.stopPropagation(); badgesDialog(u, b.id); } }, badgeIcon(b.id, 22))),
       ...(list.length > max ? [el('button', { className: 'p-badge more', title: 'See all the badges', onclick: (e) => { e.stopPropagation(); badgesDialog(u); } }, '+' + (list.length - max))] : []));
     row.hidden = !list.length;
   };
@@ -158,38 +180,52 @@ function badgeRow(u, { max = 6 } = {}) {
   Promise.all([statsOf(u), id && Store.kind === 'supabase' && !Store.extrasNow(id) ? Store.profileExtras(id).catch(() => null) : null]).then(([st]) => fill(st), () => {});
   return row;
 }
-// Your badges (Discord's): the ones you have and the ones still to earn; one at a time, big, with its level, how far
-// along you are, and every level there is (someone else's: the ones they show)
+// Your badges (Discord's): the 100, kind by kind, the secret ones you've found, and how many are still hidden; one at a
+// time on the right, big, with how far along you are and the rest of its kind (someone else's: the ones they show)
 async function badgesDialog(u, focus = null) {
   closePop();
   const mine = isMe(u), title = mine ? 'Your badges' : `${u.name}’s badges`;
   const left = el('div', { className: 'bg-left' }), right = el('div', { className: 'bg-right' });
-  let stats = statsNow(u), cur = focus;
+  let stats = statsNow(u), cur = focus, filter = 'all';
   const draw = () => {
     if (!stats) { left.replaceChildren(el('h2', {}, title), el('p', { className: 'bg-sub' }, Store.kind === 'supabase' && !Store.canFrame() ? 'Badges need the newest supabase/setup.sql.' : 'Loading…')); right.replaceChildren(); return; }
-    const bp = badgePrefs(u), { shown, have, todo } = badgesOf(stats, { ...bp, all: mine }), list = mine ? have : shown, all = [...list, ...(mine ? todo : [])];
-    if (!all.some((b) => b.id === cur)) cur = (all[0] || {}).id || null;
-    const tile = (b) => el('button', { className: 'bg-tile' + (b.id === cur ? ' on' : '') + (b.tier < 0 ? ' todo' : '') + (mine && bp.hidden.includes(b.id) ? ' hid' : ''), title: b.def.name + (b.tier >= 0 ? ': ' + b.name : ''),
-      onclick: () => { cur = b.id; draw(); } }, badgeIcon(b.id, b.tier, 34), mine && bp.hidden.includes(b.id) ? el('span', { className: 'cb-eye' }, icon('eyeOff', 13)) : null);
-    left.replaceChildren(el('h2', {}, title),
-      el('p', { className: 'bg-sub' }, mine ? 'Browse your badges and discover new ones you can unlock.' : list.length ? `The badges ${u.name} shows on their profile.` : `${u.name} hasn’t shown any badges yet.`),
-      list.length ? el('div', { className: 'bg-grid' }, ...list.map(tile)) : null,
-      ...(mine && todo.length ? [el('h4', {}, 'Available to unlock'), el('div', { className: 'bg-grid' }, ...todo.map(tile))] : []),
-      mine ? el('div', { className: 'bg-foot' }, el('button', { className: 'btn', disabled: !have.length, onclick: () => customizeBadges(() => draw()) }, 'Customize Your Badges')) : null);
-    const b = all.find((x) => x.id === cur);
+    const bp = badgePrefs(u), res = badgesOf(stats, { ...bp, all: mine }), list = mine ? res.have : res.shown;
+    const known = new Map([...res.have, ...(mine ? res.todo : [])].map((b) => [b.id, b])), open = (id) => (mine || list.some((b) => b.id === id));
+    if (!cur || !known.has(cur) || !open(cur)) cur = (list[0] || res.todo[0] || {}).id || null;
+    const tile = (b) => el('button', { className: 'bg-tile' + (b.id === cur ? ' on' : '') + (!b.have ? ' todo' : '') + (mine && res.hiddenOf(b) ? ' hid' : ''), title: badgeTitle(b) + (b.have ? '' : ': not yet'),
+      onclick: () => { cur = b.id; draw(); } }, badgeIcon(b.id, 34, { locked: !b.have }), mine && res.hiddenOf(b) ? el('span', { className: 'cb-eye' }, icon('eyeOff', 13)) : null);
+    let body;
+    if (mine) {
+      const want = (b) => filter === 'all' || (filter === 'have' ? b.have : !b.have);
+      const kinds = BADGE_KINDS.map((k) => {
+        const five = k.tiers.map((_, i) => known.get(`${k.id}-${i + 1}`)).filter(Boolean), shown = five.filter(want);
+        return shown.length ? el('div', { className: 'bg-kindrow' }, el('h4', {}, k.name, el('small', {}, `${five.filter((b) => b.have).length}/5`)), el('div', { className: 'bg-grid' }, ...shown.map(tile))) : null;
+      });
+      const found = res.have.filter((b) => b.def.secret || b.def.special);
+      const secret = filter === 'todo' ? null : el('div', { className: 'bg-kindrow' }, el('h4', {}, 'Secret', el('small', {}, `${SECRET_BADGES.length - res.secretsLeft}/${SECRET_BADGES.length}`)),
+        el('div', { className: 'bg-grid' }, ...found.map(tile), ...Array.from({ length: res.secretsLeft }, () => el('span', { className: 'bg-tile secret', title: 'A secret badge: nobody sees it until it’s earned' }, '?'))));
+      body = [el('div', { className: 'bg-filter' }, ...[['all', 'All'], ['have', 'Unlocked'], ['todo', 'To unlock']].map(([k, l]) => el('button', { className: 'chip' + (filter === k ? ' on' : ''), onclick: () => { filter = k; draw(); } }, l))),
+        ...kinds, secret];
+    } else body = [list.length ? el('div', { className: 'bg-grid' }, ...list.map(tile)) : null];
+    left.replaceChildren(...[el('h2', {}, title),
+      el('p', { className: 'bg-sub' }, mine ? `${res.count} of ${BADGE_COUNT} unlocked, and ${SECRET_BADGES.length - res.secretsLeft} of ${SECRET_BADGES.length} secret ones found.` : list.length ? `The badges ${u.name} shows on their profile.` : `${u.name} hasn’t shown any badges yet.`),
+      ...body,
+      mine ? el('div', { className: 'bg-foot' }, el('button', { className: 'btn', disabled: !res.have.length, onclick: () => customizeBadges(() => draw()) }, 'Customize Your Badges')) : null].filter(Boolean));
+    const b = known.get(cur);
     if (!b) { right.replaceChildren(el('div', { className: 'bg-empty' }, el('div', { className: 'fp-empty-ic' }, icon('medal', 34)), mine ? 'Do things in Fluentdat to earn badges.' : 'Nothing to see here yet.')); return; }
-    const d = b.def, bits = [b.tier >= 0 || b.value > 0 ? d.line(b.value) : '', b.unlocked ? 'Unlocked ' + new Date(b.unlocked).toLocaleDateString() : ''].filter(Boolean);
-    right.replaceChildren(
-      el('div', { className: 'bg-art' + (b.tier < 0 ? ' todo' : '') }, badgeIcon(b.id, Math.max(0, b.tier), 132)),
-      el('div', { className: 'bg-kind' }, d.name),
-      el('div', { className: 'bg-tier' }, b.tier >= 0 ? b.name : 'Not unlocked yet'),
-      el('div', { className: 'bg-line' }, ...bits.flatMap((t, i) => (i ? [' • ', t] : [t])),
-        b.tier >= 0 && d.id !== 'staff' ? el('span', { className: 'bg-rar', style: `--rc:${b.rarity[1]}` }, icon('up', 11), b.rarity[0].toUpperCase()) : null),
-      mine && b.next ? el('div', { className: 'bg-prog' }, el('h4', {}, 'Your progress'),
-        el('div', { className: 'bg-bar' }, badgeIcon(b.id, b.tier, 30), el('div', { className: 'bg-track' }, el('b', {}, toNext(b)), el('div', { className: 'bg-fill' }, el('i', { style: `width:${Math.round(b.progress * 100)}%` }))),
-          badgeIcon(b.id, b.tier + 1, 30)), el('p', {}, d.how)) : el('p', { className: 'bg-how' }, d.how),
-      d.tiers.length > 1 ? el('div', { className: 'bg-tiers' }, ...d.tiers.map(([at, tn], i) => el('div', { className: 'bg-t' + (i === b.tier ? ' on' : '') + (i > b.tier ? ' later' : '') },
-        badgeIcon(b.id, i, 34), el('b', {}, tn), el('small', {}, tierAt(d, at))))) : null);
+    const d = b.def, k = b.kind;
+    const bits = [k && (b.have || b.value > 0) ? k.line(b.value) : '', b.unlocked ? 'Unlocked ' + new Date(b.unlocked).toLocaleDateString() : '', d.secret ? 'Found' : ''].filter(Boolean);
+    const five = k ? k.tiers.map((_, i) => known.get(`${k.id}-${i + 1}`) || badgeState(PROFILE_BADGE[`${k.id}-${i + 1}`], stats)).filter(Boolean) : [];
+    right.replaceChildren(...[
+      el('div', { className: 'bg-art' + (!b.have ? ' todo' : ''), style: `--rc:${b.rarity[1]}` }, badgeIcon(b.id, 132, { locked: !b.have })),
+      el('div', { className: 'bg-kind' }, k ? k.name : d.secret ? 'Secret badge' : 'Fluentdat'),
+      el('div', { className: 'bg-tier' }, b.name),
+      el('div', { className: 'bg-line' }, ...bits.flatMap((t, i) => (i ? [' • ', t] : [t])), el('span', { className: 'bg-rar', style: `--rc:${b.rarity[1]}` }, b.rarity[0].toUpperCase())),
+      mine && !b.have && k ? el('div', { className: 'bg-prog' }, el('h4', {}, 'Your progress'),
+        el('div', { className: 'bg-bar' }, el('div', { className: 'bg-track' }, el('b', {}, toNext(b) || 'Not yet'), el('div', { className: 'bg-fill', style: `--rc:${b.rarity[1]}` }, el('i', { style: `width:${Math.round(b.progress * 100)}%` }))),
+          el('small', {}, Math.round(b.progress * 100) + '%')), el('p', {}, k.how)) : el('p', { className: 'bg-how' }, k ? k.how : d.how),
+      five.length ? el('div', { className: 'bg-tiers' }, ...five.map((t) => el(open(t.id) ? 'button' : 'div', { className: 'bg-t' + (t.id === b.id ? ' on' : '') + (!t.have ? ' later' : ''), ...(open(t.id) ? { onclick: () => { cur = t.id; draw(); } } : {}) },
+        badgeIcon(t.id, 34, { locked: !t.have }), el('b', {}, t.name), el('small', {}, `${t.rarity[0]} · ${tierAt(t.def)}`)))) : null].filter(Boolean));
   };
   const m = modal({ cls: 'bg-dlg', body: [el('div', { className: 'bg' }, left, right)] });
   m.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: () => m.close() }, icon('x', 20)));
@@ -203,16 +239,16 @@ async function customizeBadges(after) {
   if (Store.kind === 'supabase' && !Store.canFrame()) return toast('Badges need the newest supabase/setup.sql: run it again in Supabase.');
   const u = asMember(), stats = statsNow(u) || (await statsOf(u).catch(() => null));
   if (!stats) return toast('Your badges aren’t known yet. Try again in a moment.');
-  const bp = badgePrefs(u), have = badgesOf(stats, { ...bp, all: true }).have;
+  const bp = badgePrefs(u), res = badgesOf(stats, { ...bp, all: true }), have = res.have;
   if (!have.length) return toast('You haven’t earned a badge yet. Open Badges to see how.');
-  let order = have.map((b) => b.id), hidden = bp.hidden.filter((id) => order.includes(id)), dragId = null;
+  let order = have.map((b) => b.id), hidden = have.filter((b) => res.hiddenOf(b)).map((b) => b.id), dragId = null;
   const grid = el('div', { className: 'cb-grid' }), pv = el('div', { className: 'cb-pv' });
-  const drawPv = () => { const shown = order.filter((id) => !hidden.includes(id)); pv.replaceChildren(el('span', {}, 'On your profile:'), ...shown.slice(0, 6).map((id) => badgeIcon(id, have.find((b) => b.id === id).tier, 22)),
-    shown.length > 6 ? el('span', { className: 'p-badge more' }, '+' + (shown.length - 6)) : null, shown.length ? null : el('i', {}, 'none')); };
+  const drawPv = () => { const shown = order.filter((id) => !hidden.includes(id)); pv.replaceChildren(...[el('span', {}, 'On your profile:'), ...shown.slice(0, 6).map((id) => badgeIcon(id, 22)),
+    shown.length > 6 ? el('span', { className: 'p-badge more' }, '+' + (shown.length - 6)) : null, shown.length ? null : el('i', {}, 'none')].filter(Boolean)); };
   const draw = () => { grid.replaceChildren(...order.map((id) => {
     const b = have.find((x) => x.id === id), off = hidden.includes(id);
-    const t = el('button', { className: 'cb-tile' + (off ? ' hid' : ''), draggable: true, title: `${b.def.name}: ${b.name}. Click to ${off ? 'show' : 'hide'} it, drag to move it.`,
-      onclick: () => { hidden = off ? hidden.filter((x) => x !== id) : [...hidden, id]; draw(); } }, badgeIcon(id, b.tier, 34), off ? el('span', { className: 'cb-eye' }, icon('eyeOff', 14)) : null);
+    const t = el('button', { className: 'cb-tile' + (off ? ' hid' : ''), draggable: true, title: `${badgeTitle(b)}. Click to ${off ? 'show' : 'hide'} it, drag to move it.`,
+      onclick: () => { hidden = off ? hidden.filter((x) => x !== id) : [...hidden, id]; draw(); } }, badgeIcon(id, 34), off ? el('span', { className: 'cb-eye' }, icon('eyeOff', 14)) : null);
     t.dataset.id = id;
     t.addEventListener('dragstart', (e) => { dragId = id; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', id); } catch {} setTimeout(() => t.classList.add('drag'), 0); });
     t.addEventListener('dragend', () => { dragId = null; draw(); });
@@ -224,12 +260,16 @@ async function customizeBadges(after) {
     });
     return t;
   })); drawPv(); };
+  // (just the best of each kind: the rest hidden)
+  const bestOnly = () => { const top = new Map(); for (const b of have) if (b.kind && (!top.has(b.kind.id) || b.tier > top.get(b.kind.id).tier)) top.set(b.kind.id, b); hidden = have.filter((b) => b.kind && top.get(b.kind.id) !== b).map((b) => b.id); draw(); };
   const save = async () => {
-    if ((await attempt(() => Store.setProfileExtras({ badges: { order, hidden } }))) === null) return;
+    const cap = Store.kind === 'supabase' && !Store.canBux() ? 40 : 120;            // (an older setup.sql keeps up to 40 of each)
+    if ((await attempt(() => Store.setProfileExtras({ badges: { order: order.slice(0, cap), hidden: hidden.slice(0, cap) } }))) === null) return;
     m.close(); toast('Badges saved.'); if (after) after(); renderAll();
   };
   const m = modal({ title: 'Customize Your Badges', sub: 'Drag them into the order you want them shown in, and click the ones you don’t want others to see.', cls: 'cb-dlg', body: [grid, pv],
-    actions: [el('button', { className: 'btn ghost', onclick: () => { order = badgesOf(stats, {}).have.map((b) => b.id); hidden = []; draw(); } }, 'Reset'), el('span', { style: 'flex:1' }),
+    actions: [el('button', { className: 'btn ghost', onclick: () => { order = badgesOf(stats, {}).have.map((b) => b.id); hidden = []; draw(); } }, 'Reset'),
+      el('button', { className: 'btn ghost', title: 'Show only the best badge of each kind', onclick: bestOnly }, 'Best of Each'), el('span', { style: 'flex:1' }),
       el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), el('button', { className: 'btn primary', onclick: save }, 'Save')] });
   draw();
 }
@@ -276,7 +316,7 @@ const BUTTONS = {
   header: ['Server header', [['invite', 'Invite People', 'personAdd'], ['serverMenu', 'Server menu arrow', 'chevD']]],
   channels: ['Channel list', [['newChannel', 'New channel (+)', 'plus'], ['chanInvite', 'Invite, on hover', 'personAdd'], ['chanSettings', 'Channel settings, on hover', 'gear'], ['delChannel', 'Delete channel (×)', 'x']]],
   dms: ['Direct messages', [['findDM', 'Find or start a conversation', 'search'], ['newDM', 'New DM (+)', 'plus']]],
-  dmNav: ['Direct messages list', [['friendsNav', 'Friends', 'users'], ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quests', 'quest']]],
+  dmNav: ['Direct messages list', [['friendsNav', 'Friends', 'users'], ['datbuxNav', 'Datbux', 'coin'], ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quests', 'quest']]],
   serverTop: ['Server sidebar', [['browse', 'Browse Channels', 'browse'], ['games', 'Game Servers', 'game'], ['guide', 'Server Guide', 'signpost'], ['events', 'Events', 'calendar']]],
   top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['threads', 'Threads', 'thread'],
     ['notify', 'Notification settings', 'bell'], ['pins', 'Pinned messages', 'pin'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['search', 'Search', 'search'], ['saved', 'Bookmarks', 'bookmark']]],
@@ -348,7 +388,7 @@ const cssVar = (v) => getComputedStyle(document.documentElement).getPropertyValu
 // ---------- state ----------
 let view = 'server', serverId = (Store.servers()[0] || {}).id || null, channelId = null, dmId = null, friendsTab = 'online', showMembers = true;
 let discoverCat = '', discoverQ = '', searchOpen = false, searchQ = '', searchKey = '';
-let homePage = null;                    // (the Direct Messages side shows Friends, or 'shop' or 'quests')
+let homePage = null;                    // (the Direct Messages side shows Friends, or 'datbux', 'shop' or 'quests')
 let serverPage = null;                  // (a server's own page instead of a channel: { sv, id: 'browse' | 'games' | 'guide' })
 const pageNow = () => (view === 'server' && serverPage && serverPage.sv === serverId ? serverPage.id : null);
 // a server's sidebar extras (Server Settings → Server Sidebar): Browse Channels and Events are on unless switched off
@@ -764,6 +804,7 @@ function dmSide(head, body) {
   for (const id of ordered('dmNav')) {
     if (!shown(id)) continue;
     if (id === 'friendsNav') parts.push(nav(id, 'users', 'Friends', null, req ? el('span', { className: 'mbadge' }, String(req)) : null));
+    if (id === 'datbuxNav') { const n = buxLive() && Store.canBux() ? Store.trades().filter((t) => t.status === 'open' && t.to === Store.myId()).length : 0; parts.push(nav(id, 'coin', 'Datbux', 'datbux', n ? el('span', { className: 'mbadge', title: 'Trades waiting for you' }, String(n)) : null)); }
     if (id === 'shopNav') parts.push(nav(id, 'shop', 'Shop', 'shop'));
     if (id === 'questsNav') { const n = questsReady(); parts.push(nav(id, 'quest', 'Quests', 'quests', n ? el('span', { className: 'mbadge green', title: 'Rewards to claim' }, String(n)) : null)); }
   }
@@ -848,7 +889,7 @@ function renderTop() {
   const act = (ic, title, onclick, on) => el('button', { className: 'act' + (on ? ' on' : ''), title, onclick }, icon(ic), prefs.btnLabels === 'on' ? el('span', { className: 'lbl' }, title) : null);
   let where = null;
   if (view === 'discover') parts.push(el('span', { className: 'hash' }, icon('compass')), el('span', {}, 'Discover'));
-  else if (view === 'home' && !dmId) parts.push(el('span', { className: 'hash' }, icon(homePage === 'shop' ? 'shop' : homePage === 'quests' ? 'quest' : 'users')), el('span', {}, homePage === 'shop' ? 'Shop' : homePage === 'quests' ? 'Quests' : 'Friends'));
+  else if (view === 'home' && !dmId) parts.push(el('span', { className: 'hash' }, icon(homePage === 'shop' ? 'shop' : homePage === 'quests' ? 'quest' : homePage === 'datbux' ? 'coin' : 'users')), el('span', {}, homePage === 'shop' ? 'Shop' : homePage === 'quests' ? 'Quests' : homePage === 'datbux' ? 'Datbux' : 'Friends'));
   else if (view === 'home') {
     const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
     if (d && d.kind === 'group') { parts.push(dmAvatar(d, 24), el('button', { className: 'ttl ttl-edit', title: 'Rename the group', onclick: () => renameGroup(d) }, dmName(d))); where = 'group'; }
@@ -1039,7 +1080,7 @@ async function toggleReact(m, emoji, on) {
   const place = placeNow(); if (!place || !emoji || m.sending) return;
   if (on && !mayIn('react') && !(Store.reactions(place).get(m.id) || []).some((r) => r.emoji === emoji && r.count > (r.me ? 1 : 0))) return toast('You don’t have permission to add new reactions here.');
   if (on) { const c = String(emoji).match(CUSTOM_RE); noteUse(c ? 'c:' + c[3] : emoji); }
-  if ((await attempt(() => Store.react(place, m.id, emoji, on))) !== null && on) questTick('react');
+  if ((await attempt(() => Store.react(place, m.id, emoji, on))) !== null && on) { questTick('react'); if (!buxLive()) buxReacted(); }
 }
 // pick any emoji to react with
 function reactPicker(m, anchor) {
@@ -1148,20 +1189,292 @@ function questsPage() {
     el('div', {}, el('h1', {}, 'Quests'), el('p', {}, 'Do things in Fluentdat to unlock decorations and effects for your profile. ' + (ready ? `${plural(ready, 'reward')} ready to claim.` : `${done.length} of ${QUESTS.length} done.`)))),
     el('div', { className: 'qs-list' }, ...cards));
 }
-// the Shop (Discord's, but everything's free): avatar decorations, profile effects and nameplates; some unlock with a Quest
+// ---------- Datbux, Fluentdat's own money: earned with tasks, spent in the Shop, sent and traded to people you know ----------
+// Signed in, the database keeps it all (and the Shop's prices); signed out, this browser keeps your wallet the same way.
+const BUX_KEY = 'fluentdat.bux';
+const buxLive = () => Store.kind === 'supabase';
+// (signed in, Datbux needs the newest setup.sql; until then everything in the Shop stays free)
+const buxReady = () => !buxLive() || Store.canBux();
+function localWallet() {
+  let w = LS.get(BUX_KEY, null);
+  if (!w || typeof w !== 'object' || !Array.isArray(w.owned)) {
+    w = { balance: WELCOME, earned: WELCOME, spent: 0, sent: 0, received: 0, claims: {}, owned: [], reacts: [], log: [{ at: Date.now(), amount: WELCOME, kind: 'welcome', note: '' }] };
+    // (what you wore before things had prices stays yours)
+    for (const [k, v] of [['deco', me.decoration], ['font', (me.style || {}).font]]) if (v && PRICES[k + ':' + v] > 0) w.owned.push(k + ':' + v);
+    LS.set(BUX_KEY, w);
+  }
+  return w;
+}
+function keepWallet(w, entry) {
+  if (entry) w.log = [{ at: Date.now(), ...entry }, ...(w.log || [])].slice(0, 60);
+  const old = Date.now() - 400 * 864e5; for (const [k, t] of Object.entries(w.claims)) if (t < old) delete w.claims[k];
+  LS.set(BUX_KEY, w);
+}
+// (signed out, reactions don't say when they were made: they're counted here as you make them)
+function buxReacted() { const w = localWallet(); w.reacts = [...(w.reacts || []), Date.now()].filter((t) => t > Date.now() - 400 * 864e5).slice(-3000); keepWallet(w); }
+// how much of a task you've done since a time (signed out: from what's in this browser)
+function localCount(counts, since) {
+  if (counts === 'none') return 1;
+  if (counts === 'reactions') return (localWallet().reacts || []).filter((t) => t >= since).length;
+  if (counts === 'threads') return 0;
+  const times = [], take = (list) => { for (const m of list || []) if (m.user && !m.user.bot && isMe(m.user) && m.ts >= since) times.push(m.ts); };
+  for (const sv of Store.servers()) for (const c of Store.channels(sv.id)) take(Store.messages(c.id));
+  for (const d of Store.dmList()) take(Store.dm(d.id));
+  return counts === 'days' ? new Set(times.map((t) => new Date(t).toISOString().slice(0, 10))).size : times.length;
+}
+// what something from the Shop is called
+function itemName(kind, item) {
+  const n = kind === 'deco' ? (decoInfo(item) || [])[1] : kind === 'font' ? (FONTS.find((f) => f[0] === item) || [])[1] : kind === 'effect' ? (effectInfo(item) || [])[1] : kind === 'frame' ? (frameInfo(item) || [])[1] : '';
+  return n || item;
+}
+const KIND_NAME = { deco: 'Avatar Decoration', font: 'Name Font', effect: 'Profile Effect', frame: 'Profile Frame' };
+const Bux = {
+  // your wallet (signed in, before your first claim or buy: the welcome Datbux waiting for you)
+  wallet() {
+    if (!buxLive()) return localWallet();
+    return Store.wallet() || { balance: WELCOME, earned: 0, spent: 0, sent: 0, received: 0, waiting: true };
+  },
+  // what the Shop asks for something: Datbux (0: free), or null when it isn't sold (so it's free)
+  price: (kind, item) => (!item || !buxReady() ? null : buxLive() ? Store.priceOf(kind, item) : PRICES[kind + ':' + item] ?? null),
+  owns: (kind, item) => (buxLive() ? Store.owns(kind, item) : localWallet().owned.includes(kind + ':' + item)),
+  // whether you may wear it: it's free, or it's yours
+  mayWear: (kind, item) => !item || !(Bux.price(kind, item) > 0) || Bux.owns(kind, item),
+  owned: () => (buxLive() ? Store.ownedList() : localWallet().owned.map((k) => { const [kind, item] = k.split(':'); return { kind, item, how: 'buy' }; })),
+  // the tasks: how far along each is, whether it's claimed this time, and when it comes back
+  async tasks() {
+    if (buxLive()) return (await Store.taskProgress()).map((r) => ({ ...(TASK[r.task] || { title: r.task, how: '' }), id: r.task, every: r.every, reward: r.reward, goal: r.goal, have: r.have, claimed: r.claimed, resets: r.resets }));
+    const w = localWallet();
+    return TASKS.map((t) => { const p = period(t.every); return { ...t, have: Math.min(t.goal, localCount(t.counts, p.start)), claimed: !!w.claims[t.id + '@' + p.key], resets: p.end, signIn: t.counts === 'threads' }; });
+  },
+  async claim(t) {
+    if (buxLive()) return attempt(() => Store.claimTask(t.id));
+    const w = localWallet(), p = period(t.every), have = localCount(t.counts, p.start);
+    if (w.claims[t.id + '@' + p.key]) { toast('You’ve claimed that already.'); return null; }
+    if (have < t.goal) { toast(`Not done yet: ${fmtBux(have)} of ${fmtBux(t.goal)}.`); return null; }
+    w.claims[t.id + '@' + p.key] = Date.now(); w.balance += t.reward; w.earned += t.reward; keepWallet(w, { amount: t.reward, kind: 'task', note: t.id });
+    return w.balance;
+  },
+  async buy(kind, item) {
+    const cost = Bux.price(kind, item);
+    if (!(cost > 0) || Bux.owns(kind, item)) return true;
+    if (buxLive()) return (await attempt(() => Store.buyItem(kind, item))) !== null;
+    const w = localWallet();
+    if (w.balance < cost) { toast(`That costs ${fmtBux(cost)} Datbux, and you have ${fmtBux(w.balance)}.`); return false; }
+    w.balance -= cost; w.spent += cost; w.owned.push(kind + ':' + item); keepWallet(w, { amount: -cost, kind: 'buy', note: kind + ':' + item });
+    return true;
+  },
+  // what's happened in your wallet, newest first: { at, amount, kind, note, other }
+  async history() {
+    if (!buxLive()) return localWallet().log || [];
+    return (await Store.buxLog()).map((r) => ({ at: Date.parse(r.created_at) || 0, amount: Number(r.amount) || 0, kind: r.kind, note: r.note || '', other: r.other || null }));
+  },
+};
+const buxTag = (n, cls = '') => el('span', { className: 'bux-tag' + (cls ? ' ' + cls : '') }, icon('coin', 14), fmtBux(n));
+// buying something (asked first): true once it's yours
+async function buyFlow(kind, item) {
+  const cost = Bux.price(kind, item), name = itemName(kind, item);
+  if (!(cost > 0) || Bux.owns(kind, item)) return true;
+  const bal = Bux.wallet().balance;
+  if (bal < cost) { toast(`${name} costs ${fmtBux(cost)} Datbux, and you have ${fmtBux(bal)}. Earn more with tasks (Direct Messages → Datbux).`); return false; }
+  if (!(await confirmBox({ title: `Buy ${name}?`, text: `${KIND_NAME[kind] || 'It'}: ${fmtBux(cost)} Datbux. You have ${fmtBux(bal)}, so ${fmtBux(bal - cost)} would be left. It’s yours to keep, or to trade.`, ok: `Buy for ${fmtBux(cost)}` }))) return false;
+  if (!(await Bux.buy(kind, item))) return false;
+  toast(`${name} is yours.`); renderAll();
+  return true;
+}
+// the people you could send Datbux to or trade with: friends, the people in your DMs and in your servers
+function knownPeople() {
+  const people = new Map(), add = (p) => { if (p && p.id && !p.bot && !p.me && !isMe(p) && !people.has(p.id)) people.set(p.id, p); };
+  for (const f of Store.friends()) add(f);
+  for (const d of Store.dmList()) { add(d.user); for (const p of d.people || []) add(p); }
+  for (const sv of Store.servers()) for (const p of Store.members(sv.id) || []) add(p);
+  return [...people.values()];
+}
+function pickPerson(title, sub) {
+  return new Promise((done) => {
+    const people = knownPeople(), list = el('div', { className: 'pick-list' }), q = el('input', { type: 'search', placeholder: 'Search by name', className: 'pick-q' });
+    const draw = () => {
+      const s = q.value.trim().toLowerCase(), hits = people.filter((p) => !s || String(p.name || '').toLowerCase().includes(s) || String(p.login || '').toLowerCase().includes(s));
+      list.replaceChildren(...(hits.length ? hits.slice(0, 80).map((p) => el('button', { className: 'pick', onclick: () => m.close(p) }, avatarEl(p, { size: 32 }), el('span', { className: 'nm3' }, p.name), p.login ? el('span', { className: 'muted' }, p.login) : null))
+        : [el('div', { className: 'empty-note' }, people.length ? 'Nobody by that name.' : 'Nobody to pick yet: make friends, or join a server.')]));
+    };
+    q.oninput = draw;
+    const m = modal({ title, sub, body: [q, list], onClose: (v) => done(v || null), actions: [el('button', { className: 'btn', onclick: () => m.close(null) }, 'Cancel')] });
+    draw(); setTimeout(() => q.focus(), 0);
+  });
+}
+const buxSignedIn = () => {
+  if (!buxLive()) { toast('Sign in to send Datbux and trade with people.'); return false; }
+  if (!Store.canBux()) { toast('Datbux needs the newest supabase/setup.sql: run it again in Supabase.'); return false; }
+  return true;
+};
+// Send Datbux to someone you know (with a note, if you like)
+async function sendBuxDialog(to = null) {
+  if (!buxSignedIn()) return;
+  const who = to || (await pickPerson('Send Datbux', 'Who to?')); if (!who) return;
+  const bal = Bux.wallet().balance;
+  const amount = el('input', { type: 'number', min: 1, max: Math.max(1, Math.min(100000, bal)), step: 1, value: String(Math.min(50, Math.max(1, bal))) });
+  const note = el('input', { type: 'text', maxLength: 160, placeholder: 'Say what it’s for (optional)' });
+  const send = async () => {
+    const n = Math.floor(Number(amount.value));
+    if (!(n >= 1 && n <= 100000)) return toast('Send between 1 and 100,000 Datbux.');
+    if (n > Bux.wallet().balance) return toast(`You have ${fmtBux(Bux.wallet().balance)} Datbux.`);
+    go.disabled = true;
+    if ((await attempt(() => Store.sendBux(who.id, n, note.value.trim()))) === null) { go.disabled = false; return; }
+    m.close(); toast(`Sent ${fmtBux(n)} Datbux to ${who.name}.`); renderAll();
+  };
+  const go = el('button', { className: 'btn primary', onclick: send }, 'Send');
+  amount.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  const m = modal({ title: 'Send Datbux', cls: 'dbx-dlg',
+    body: [el('div', { className: 'dbx-to' }, avatarEl(who, { size: 40 }), el('div', { className: 'grow' }, el('b', {}, who.name), who.login ? el('small', {}, who.login) : null), el('span', { className: 'dbx-have' }, 'You have ', buxTag(bal))),
+      el('div', { className: 'field' }, el('label', {}, 'How many'), el('div', { className: 'dbx-amt' }, icon('coin', 18), amount)),
+      el('div', { className: 'dbx-quick' }, ...[10, 50, 100, 500].filter((n) => n <= bal).map((n) => el('button', { className: 'btn small', onclick: () => { amount.value = String(n); } }, fmtBux(n)))),
+      el('div', { className: 'field' }, el('label', {}, 'Note'), note)],
+    actions: [el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), go] });
+  setTimeout(() => amount.select(), 0);
+}
+// something from the Shop, small: its picture and name
+function itemChip(kind, item, { on = false, onclick = null } = {}) {
+  const pv = kind === 'deco' ? avatarEl({ ...asMember(), decoration: item }, { size: 28 }) : kind === 'font' ? styleName(el('span', { className: 'dbx-fnt' }, 'Aa'), { font: item }) : icon(kind === 'frame' ? 'frame' : 'sparkle', 18);
+  return el(onclick ? 'button' : 'span', { className: 'dbx-item' + (on ? ' on' : ''), title: KIND_NAME[kind] || '', ...(onclick ? { onclick } : {}) }, el('span', { className: 'dbx-ipv' }, pv), el('span', {}, itemName(kind, item)), on ? icon('check', 13) : null);
+}
+// Trade (with someone you know): Datbux and things from the Shop each way; they say yes or no, and it all swaps at once
+async function tradeDialog(to = null) {
+  if (!buxSignedIn()) return;
+  const who = to || (await pickPerson('Trade', 'Who with?')); if (!who) return;
+  const theirs = await attempt(() => Store.ownedBy(who.id)); if (theirs === null) return;
+  const mine = Bux.owned(), has = (list, k, i) => list.some((o) => o.kind === k && o.item === i);
+  const canGive = mine.filter((o) => !has(theirs, o.kind, o.item)), canGet = theirs.filter((o) => !has(mine, o.kind, o.item));
+  const give = new Set(), want = new Set(), key = (o) => o.kind + ':' + o.item;
+  const giveBux = el('input', { type: 'number', min: 0, max: 100000, step: 1, value: '0' }), wantBux = el('input', { type: 'number', min: 0, max: 100000, step: 1, value: '0' });
+  const note = el('input', { type: 'text', maxLength: 200, placeholder: 'A note for them (optional)' });
+  const giveBox = el('div', { className: 'dbx-items' }), wantBox = el('div', { className: 'dbx-items' });
+  const draw = () => {
+    giveBox.replaceChildren(...(canGive.length ? canGive.map((o) => itemChip(o.kind, o.item, { on: give.has(key(o)), onclick: () => { if (give.has(key(o))) give.delete(key(o)); else if (give.size >= 10) return toast('Up to 10 things each way.'); else give.add(key(o)); draw(); } }))
+      : [el('small', { className: 'muted' }, 'Nothing from the Shop to offer (that they don’t have).')]));
+    wantBox.replaceChildren(...(canGet.length ? canGet.map((o) => itemChip(o.kind, o.item, { on: want.has(key(o)), onclick: () => { if (want.has(key(o))) want.delete(key(o)); else if (want.size >= 10) return toast('Up to 10 things each way.'); else want.add(key(o)); draw(); } }))
+      : [el('small', { className: 'muted' }, `${who.name} has nothing from the Shop you don’t have.`)]));
+  };
+  const items = (set) => [...set].map((k) => { const [kind, item] = k.split(':'); return { k: kind, i: item }; });
+  const offer = async () => {
+    const gb = Math.floor(Number(giveBux.value) || 0), wb = Math.floor(Number(wantBux.value) || 0);
+    if (gb < 0 || wb < 0 || gb > 100000 || wb > 100000) return toast('Up to 100,000 Datbux each way.');
+    if (!gb && !wb && !give.size && !want.size) return toast('Put something in the trade.');
+    if (gb > Bux.wallet().balance) return toast(`You have ${fmtBux(Bux.wallet().balance)} Datbux.`);
+    go.disabled = true;
+    if ((await attempt(() => Store.offerTrade(who.id, { bux: gb, items: items(give) }, { bux: wb, items: items(want) }, note.value.trim()))) === null) { go.disabled = false; return; }
+    m.close(); toast(`Trade offered to ${who.name}. It waits for them to say yes.`); renderAll();
+  };
+  const go = el('button', { className: 'btn primary', onclick: offer }, 'Offer Trade');
+  const side = (title, sub, bux, box) => el('div', { className: 'dbx-side' }, el('h4', {}, title), el('small', { className: 'muted' }, sub),
+    el('div', { className: 'dbx-amt' }, icon('coin', 18), bux, el('span', {}, 'Datbux')), box);
+  const m = modal({ title: `Trade with ${who.name}`, sub: 'They get a moment to look it over: nothing changes hands until they accept.', cls: 'dbx-dlg wide-trade',
+    body: [el('div', { className: 'dbx-trade' }, side('You give', `You have ${fmtBux(Bux.wallet().balance)} Datbux.`, giveBux, giveBox), el('div', { className: 'dbx-swap' }, icon('swap', 22)),
+      side('You get', `From ${who.name}.`, wantBux, wantBox)), el('div', { className: 'field' }, el('label', {}, 'Note'), note)],
+    actions: [el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), go] });
+  draw();
+}
+// one trade, as you see it: who with, what you'd give and get, and what you can do about it
+function tradeCard(t) {
+  const mineFrom = t.from === Store.myId(), other = person(mineFrom ? t.to : t.from);
+  const give = mineFrom ? { bux: t.giveBux, items: t.giveItems } : { bux: t.wantBux, items: t.wantItems }, get = mineFrom ? { bux: t.wantBux, items: t.wantItems } : { bux: t.giveBux, items: t.giveItems };
+  const list = (x) => el('div', { className: 'dbx-items' }, x.bux ? buxTag(x.bux) : null, ...(x.items || []).map((o) => itemChip(o.k, o.i)), !x.bux && !(x.items || []).length ? el('small', { className: 'muted' }, 'Nothing') : null);
+  const act = async (fn, said) => { const r = await attempt(fn); if (r === null) return; toast(typeof said === 'function' ? said(r) : said); renderAll(); };
+  const STATUS = { done: ['Done', 'good'], declined: ['Declined', 'bad'], cancelled: ['Cancelled', ''], failed: ['Didn’t go through', 'bad'] };
+  const st = STATUS[t.status];
+  return el('div', { className: 'dbx-tc' + (t.status === 'open' ? ' open' : '') },
+    el('div', { className: 'dbx-tc-head' }, avatarEl(other, { size: 32 }), el('div', { className: 'grow' }, el('b', {}, t.status === 'open' ? (mineFrom ? `Your offer to ${other.name}` : `${other.name} offers you a trade`) : `Trade with ${other.name}`),
+      el('small', {}, when(t.decided || t.at, true))), st ? el('span', { className: 'chip ' + st[1] }, st[0]) : null),
+    t.note ? el('p', { className: 'dbx-note' }, '“' + t.note + '”') : null,
+    el('div', { className: 'dbx-tc-body' }, el('div', {}, el('small', {}, 'You give'), list(give)), icon('swap', 18), el('div', {}, el('small', {}, 'You get'), list(get))),
+    t.why ? el('p', { className: 'dbx-note bad' }, t.why) : null,
+    t.status === 'open' ? el('div', { className: 'dbx-tc-acts' }, ...(mineFrom ? [el('button', { className: 'btn small', onclick: () => act(() => Store.cancelTrade(t.id), 'Trade cancelled.') }, 'Cancel Offer')]
+      : [el('button', { className: 'btn small', onclick: () => act(() => Store.answerTrade(t.id, false), 'Trade declined.') }, 'Decline'),
+        el('button', { className: 'btn small green', onclick: () => act(() => Store.answerTrade(t.id, true), (r) => (r === 'done' ? 'Trade done!' : 'The trade didn’t go through: see why under it.')) }, 'Accept')])) : null);
+}
+// a line of your wallet's history
+function buxLine(h) {
+  const who = h.other ? person(h.other).name : '', [kind, item] = String(h.note || '').split(':');
+  const what = { welcome: 'Welcome to Datbux', task: `Task: ${(TASK[h.note] || {}).title || h.note}`, buy: `Bought ${itemName(kind, item)}`, send: `Sent to ${who}`, receive: `From ${who}`, trade: `Trade with ${who}` }[h.kind] || h.kind;
+  const said = (h.kind === 'send' || h.kind === 'receive') && h.note ? h.note : '';
+  return el('div', { className: 'dbx-log' }, el('span', { className: 'dbx-ld' }, icon(h.kind === 'buy' ? 'shop' : h.kind === 'task' ? 'check' : h.kind === 'trade' ? 'swap' : h.kind === 'welcome' ? 'gift' : 'send', 16)),
+    el('div', { className: 'grow' }, el('b', {}, what), said ? el('small', {}, '“' + said + '”') : null), el('time', {}, when(h.at, true)),
+    el('span', { className: 'dbx-amt2 ' + (h.amount >= 0 ? 'up' : 'down') }, (h.amount >= 0 ? '+' : '−') + fmtBux(Math.abs(h.amount))));
+}
+// the Datbux page (Direct Messages → Datbux): your balance, the tasks, your trades and what's happened
+function datbuxPage() {
+  const live = buxLive();
+  if (!buxReady()) return el('div', { className: 'dbx-page' }, el('div', { className: 'note-box' }, 'Datbux needs the newest supabase/setup.sql: run it again in Supabase.'));
+  const w = Bux.wallet();
+  const tasksBox = el('div', { className: 'dbx-tasks' }, el('div', { className: 'empty-note' }, 'Loading the tasks…'));
+  const logBox = el('div', { className: 'dbx-logs' }, el('div', { className: 'empty-note' }, 'Loading…'));
+  const card = (t) => {
+    const done = t.have >= t.goal;
+    const claim = async (b) => { b.disabled = true; const r = await Bux.claim(t); if (r === null) { b.disabled = false; return; } toast(`+${fmtBux(t.reward)} Datbux: ${t.title}.`); renderAll(); };
+    return el('div', { className: 'dbx-task' + (t.claimed ? ' claimed' : done ? ' ready' : '') },
+      el('div', { className: 'dbx-tt' }, el('b', {}, t.title), el('small', {}, t.how)),
+      el('div', { className: 'dbx-tp' }, el('div', { className: 'qs-bar' }, el('i', { style: `width:${Math.round(Math.min(1, t.have / (t.goal || 1)) * 100)}%` })), el('small', {}, `${fmtBux(t.have)}/${fmtBux(t.goal)}`)),
+      el('div', { className: 'dbx-tr' }, buxTag(t.reward, 'plus'),
+        t.claimed ? el('span', { className: 'chip good' }, icon('check', 13), 'Claimed') : t.signIn ? el('span', { className: 'chip' }, 'Sign in for this one')
+          : el('button', { className: 'btn small ' + (done ? 'green' : ''), disabled: !done, onclick: (e) => claim(e.currentTarget) }, done ? 'Claim' : 'Not Yet')),
+      el('small', { className: 'dbx-reset' }, icon('clock', 12), (t.claimed ? 'Back ' : 'Resets ') + resetsIn(t.resets)));
+  };
+  Bux.tasks().then((list) => {
+    const ready = list.filter((t) => !t.claimed && t.have >= t.goal && !t.signIn).length;
+    tasksBox.replaceChildren(...Object.entries(EVERY).flatMap(([every, label]) => { const mine = list.filter((t) => t.every === every); return mine.length ? [el('h3', { className: 'dbx-h3' }, label), el('div', { className: 'dbx-grid' }, ...mine.map(card))] : []; }));
+    if (ready) tasksBox.prepend(el('div', { className: 'note-box good' }, icon('gift', 16), ` ${plural(ready, 'task')} ready to claim.`));
+  }, (e) => tasksBox.replaceChildren(el('div', { className: 'note-box' }, String((e && e.message) || e))));
+  Bux.history().then((h) => logBox.replaceChildren(...(h.length ? h.slice(0, 30).map(buxLine) : [el('div', { className: 'empty-note' }, 'Nothing yet.')])), () => logBox.replaceChildren(el('div', { className: 'empty-note' }, 'Couldn’t load it.')));
+  const trades = live ? Store.trades() : [], me2 = live ? Store.myId() : null;
+  const waiting = trades.filter((t) => t.status === 'open' && t.to === me2), offered = trades.filter((t) => t.status === 'open' && t.from === me2), past = trades.filter((t) => t.status !== 'open').slice(0, 10);
+  const stat = (label, n) => el('div', { className: 'dbx-stat' }, el('small', {}, label), el('b', {}, fmtBux(n)));
+  return el('div', { className: 'dbx-page' },
+    el('div', { className: 'dbx-hero' }, el('div', { className: 'dbx-coin' }, icon('coin', 46)),
+      el('div', { className: 'grow' }, el('h1', {}, 'Datbux'), el('p', {}, 'Fluentdat’s own money. Earn it with daily, weekly, monthly and yearly tasks, spend it in the Shop on avatar decorations and name fonts, and send or trade it with people you know.'),
+        el('div', { className: 'shp-hero-acts' }, el('button', { className: 'btn', onclick: () => { homePage = 'shop'; renderAll(); } }, icon('shop', 16), 'Shop'),
+          el('button', { className: 'btn', onclick: () => sendBuxDialog() }, icon('send', 16), 'Send Datbux'), el('button', { className: 'btn', onclick: () => tradeDialog() }, icon('swap', 16), 'Trade'))),
+      el('div', { className: 'dbx-bal' }, el('small', {}, 'Your Datbux'), el('b', {}, icon('coin', 28), fmtBux(w.balance)), w.waiting ? el('small', {}, 'Your welcome Datbux, here with your first claim or buy') : null)),
+    el('div', { className: 'dbx-stats' }, stat('Earned', w.earned), stat('Spent', w.spent), stat('Sent', w.sent || 0), stat('Received', w.received || 0)),
+    el('h2', { className: 'shp-h' }, 'Tasks'), el('p', { className: 'shp-sub' }, 'Do them and claim them: daily ones come back each day, weekly ones each Monday, then monthly and yearly (in UTC).' + (live ? '' : ' Signed out, they count what you do in this browser.')),
+    tasksBox,
+    ...(live ? [el('h2', { className: 'shp-h' }, 'Trades'), el('p', { className: 'shp-sub' }, 'Offer Datbux and things from the Shop for theirs. Open someone’s profile (or Trade, up there) to start one.'),
+      waiting.length || offered.length || past.length ? el('div', { className: 'dbx-tcs' }, ...waiting.map(tradeCard), ...offered.map(tradeCard), ...past.map(tradeCard)) : el('div', { className: 'empty-note' }, 'No trades yet.')] : []),
+    el('h2', { className: 'shp-h' }, 'History'), logBox);
+}
+// the Shop (Discord's): avatar decorations and name fonts for Datbux; profile effects, frames and nameplates are free; a few
+// things unlock with a Quest
 function shopPage() {
-  const live = Store.kind === 'supabase', you = asMember(), canDeco = !live || (Store.canDecorate && Store.canDecorate());
+  const live = Store.kind === 'supabase', you = asMember(), canDeco = !live || (Store.canDecorate && Store.canDecorate()), w = buxReady() ? Bux.wallet() : null;
   const use = (patch, said) => {
     if (('decoration' in patch || 'effect' in patch) && !canDeco) return toast('The Shop needs the newest supabase/setup.sql: run it again in Supabase.');
     if ('frame' in patch && live && !Store.canFrame()) return toast('Profile frames need the newest supabase/setup.sql: run it again in Supabase.');
     Object.assign(me, patch); saveMe(); pushProfile(); renderAll(); toast(said);
   };
+  // (something with a price: bought first, then worn)
+  const buyUse = async (kind, id, patch, said) => { if (kind === 'deco' && !canDeco) return use(patch, said); if (await buyFlow(kind, id)) use(patch, said); };
   const lockBtn = (quest) => el('button', { className: 'btn small ghost', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('lock', 14), `Quest: ${(questInfo(quest) || {}).title || ''}`);
   const item = (preview, name, sub, action, on) => el('div', { className: 'shp-item' + (on ? ' on' : '') }, el('div', { className: 'shp-pv' }, preview), el('div', { className: 'shp-meta' }, el('b', {}, name), el('small', {}, sub)), action);
+  // what it costs, or that it's yours
+  const cost = (kind, id, quest) => {
+    if (quest) return unlocked(quest) ? 'Quest reward · yours' : 'Quest reward';
+    const p = Bux.price(kind, id);
+    return p > 0 ? (Bux.owns(kind, id) ? el('span', { className: 'bux-own' }, icon('check', 13), 'Yours') : buxTag(p)) : 'Free';
+  };
+  const buyBtn = (kind, id, patch, said) => el('button', { className: 'btn small primary', onclick: () => buyUse(kind, id, patch, said) }, icon('coin', 14), 'Buy · ' + fmtBux(Bux.price(kind, id)));
   const decos = DECORATIONS.map(([id, name, quest]) => {
     const on = me.decoration === id, ok = unlocked(quest);
-    return item(avatarEl({ ...you, decoration: id }, { size: 76 }), name, quest ? (ok ? 'Quest reward · yours' : 'Quest reward') : 'Free',
-      !ok ? lockBtn(quest) : on ? el('button', { className: 'btn small', onclick: () => use({ decoration: '' }, 'Decoration taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ decoration: id }, `${name} is on your avatar.`) }, 'Use'), on);
+    return item(avatarEl({ ...you, decoration: id }, { size: 76 }), name, cost('deco', id, quest),
+      !ok ? lockBtn(quest) : on ? el('button', { className: 'btn small', onclick: () => use({ decoration: '' }, 'Decoration taken off.') }, 'Remove')
+        : Bux.mayWear('deco', id) ? el('button', { className: 'btn small primary', onclick: () => use({ decoration: id }, `${name} is on your avatar.`) }, 'Use')
+        : buyBtn('deco', id, { decoration: id }, `${name} is on your avatar.`), on);
+  });
+  // (a name font shows on your name everywhere; its colours and effect are your Display Name Style)
+  const st = me.style || {};
+  const fonts = FONTS.filter(([id]) => id).map(([id, name]) => {
+    const on = st.font === id, pv = styleName(el('span', { className: 'shp-font' }, me.name || 'Your Name'), { ...st, font: id }, { fallback: safeColor(me.color, '#ffffff') });
+    const put = { style: { ...st, font: id } }, said = `Your name is in ${name} now.`;
+    return item(el('div', { className: 'shp-font-pv' }, pv), name, cost('font', id),
+      on ? el('button', { className: 'btn small', onclick: () => use({ style: { ...st, font: '' } }, 'Name font taken off.') }, 'Remove')
+        : Bux.mayWear('font', id) ? el('button', { className: 'btn small primary', onclick: () => use(put, said) }, 'Use') : buyBtn('font', id, put, said), on);
   });
   const mini = (id) => { const c = el('div', { className: 'shp-mini' }, el('div', { className: 'shp-mini-b' }), el('div', { className: 'shp-mini-av' }, avatarEl(you, { size: 38 })), el('b', {}, me.name)); setBanner(c.firstChild, me.banner, me.color); themeCard(c, you.theme); const fx = effectEl(id); if (fx) c.append(fx); return c; };
   const effects = PROFILE_EFFECTS.map(([id, name, quest]) => {
@@ -1182,12 +1495,16 @@ function shopPage() {
     return item(row, 'Nameplate ' + (i + 1), 'Free', on ? el('button', { className: 'btn small', onclick: () => use({ plate: '' }, 'Nameplate taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ plate: v }, 'Nameplate on.') }, 'Use'), on);
   });
   const sec = (title, sub, list, cls = '') => [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)];
+  const toBux = () => { homePage = 'datbux'; renderAll(); };
   return el('div', { className: 'shp-page' },
-    el('div', { className: 'shp-hero' }, el('div', {}, el('h1', {}, 'Shop'), el('p', {}, 'Everything here is free. A few things unlock when you finish a Quest.'),
-      el('div', { className: 'shp-hero-acts' }, el('button', { className: 'btn', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('quest', 16), 'Quests'),
-        el('button', { className: 'btn', onclick: () => nameStyleDialog(me.style, (st) => { me.style = st; saveMe(); pushProfile(); renderAll(); }, asMember) }, icon('brush', 16), 'Display Name Style'))),
+    el('div', { className: 'shp-hero' }, el('div', {}, el('h1', {}, 'Shop'),
+      el('p', {}, w ? 'Avatar decorations and name fonts cost Datbux (earn them with tasks). Profile effects, frames and nameplates are free, and a few things unlock with a Quest.' : 'Everything here is free. A few things unlock when you finish a Quest.'),
+      el('div', { className: 'shp-hero-acts' }, w ? el('button', { className: 'btn shp-bal', title: 'Your Datbux', onclick: toBux }, icon('coin', 16), fmtBux(w.balance)) : null,
+        el('button', { className: 'btn', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('quest', 16), 'Quests'),
+        el('button', { className: 'btn', onclick: () => nameStyleDialog(me.style, (s) => { me.style = s; saveMe(); pushProfile(); renderAll(); }, asMember) }, icon('brush', 16), 'Display Name Style'))),
       el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
     ...sec('Avatar Decorations', 'Shown around your avatar everywhere: in chats, the member list and your profile.', decos),
+    ...sec('Name Fonts', 'Your name, in a font of its own: in chats, the member list and your profile. Its colours and effect are your Display Name Style.', fonts, 'wide'),
     ...sec('Profile Effects', 'Played over your profile card when someone opens it.', effects, 'wide'),
     ...sec('Profile Frames', 'Drawn around your profile card, wherever someone opens it.', frames, 'frames'),
     ...sec('Nameplates', 'Behind your name in the member list and your DMs (when people have nameplates on).', plates, 'wide'),
@@ -1569,7 +1886,8 @@ function fillMessages(wrap, msgs, place, start) {
     const key = 'm:' + m.id + ':' + JSON.stringify([m.text, m.sticker && String(m.sticker.data || m.sticker.path || m.sticker).length, (m.files || []).map((f) => f.path || f.name), !!m.sending, cont, style,
       m.user.name, m.user.color, String(m.user.avatar || '').length, nameColor(m.user), to ? [to.user.name, to.text, !!to.files] : m.reply, m.forwarded, emojiIndex.size, bookmarked(m.id),
       m.user.style, m.user.tag, reactable, Store.pinned(place, m.id), view === 'server' && m.user.id ? Store.nickIn(serverId, m.user.id) : '',
-      view === 'server' ? (threadOf(m.id) || {}).name : '', view === 'server' ? (Store.threadInfo((threadOf(m.id) || {}).id) || {}).count : 0]);
+      view === 'server' ? (threadOf(m.id) || {}).name : '', view === 'server' ? (Store.threadInfo((threadOf(m.id) || {}).id) || {}).count : 0,
+      view === 'server' && m.user.id ? (Store.memberIcon(serverId, m.user.id) || {}).icon : '']);
     const [node, made] = put(key, () => messageNode(m, cont, to, all, ctx));
     if (made && !first && !wrap._seen.has(m.id)) node.classList.add('arrive');
     wrap._seen.add(m.id);
@@ -1589,7 +1907,8 @@ function messageNode(m, cont, to, all, ctx) {
     const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, nameIn(m.user));
     nm.style.setProperty('--who', nameColor(m.user));
     styledName(nm, m.user, { roleColored: view === 'server' && !!(serverId && m.user.id && Store.memberColor(serverId, m.user.id)) });
-    const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : '');
+    const ri = view === 'server' && serverId && m.user.id && !m.user.bot ? Store.memberIcon(serverId, m.user.id) : null;
+    const meta = el('div', { className: 'meta' }, nm, roleIconEl(ri, 18)); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : '');
     const tg = tagChipFor(m.user); if (tg) meta.append(tg);
     meta.append(el('span', { className: 'when', title: full }, when(m.ts, true)));
     if (Store.pinned(placeNow(), m.id)) meta.append(el('span', { className: 'pin-mark', title: 'Pinned' }, icon('pin', 12)));
@@ -1810,8 +2129,10 @@ function renderContent() {
     composer.hidden = true; return;
   }
   if (view === 'home' && !dmId && homePage) {
-    const key = homePage + ':' + JSON.stringify(homePage === 'shop' ? [me.decoration, me.effect, me.plate, me.name, me.avatar, me.color, questsDone()] : [questStats(), questsDone(), me.decoration]);
-    if (content.dataset.key !== key) { content.replaceChildren(homePage === 'shop' ? shopPage() : questsPage()); content.dataset.key = key; }
+    const bux = buxReady() ? [Bux.wallet().balance, Bux.owned().length] : null;
+    const key = homePage + ':' + JSON.stringify(homePage === 'shop' ? [me.decoration, me.effect, me.plate, me.frame, me.style, me.name, me.avatar, me.color, questsDone(), bux]
+      : homePage === 'datbux' ? [bux, buxLive() && Store.canBux() ? Store.trades().map((t) => t.id + t.status) : null, buxReady()] : [questStats(), questsDone(), me.decoration]);
+    if (content.dataset.key !== key) { content.replaceChildren(homePage === 'shop' ? shopPage() : homePage === 'datbux' ? datbuxPage() : questsPage()); content.dataset.key = key; }
     composer.hidden = true; return;
   }
   if (view === 'home' && !dmId) {
@@ -1979,16 +2300,25 @@ function renderMembers() {
       action: () => { Store.updateRole(r.id, { hoist: !r.hoist }); renderAll(); } })) : [{ label: 'No roles yet', disabled: true }]),
       '-', { label: 'Edit Roles', icon: 'gear', action: () => openServerSettings(serverId, 'roles') }], e.clientX, e.clientY);
   };
-  const grp = (title, list) => list.length ? [el('div', { className: 'mem-cat', oncontextmenu: groupMenu }, `${title} — ${list.length}`), ...list.map(member)] : [];
+  const grp = (title, list, role = null) => list.length ? [el('div', { className: 'mem-cat', oncontextmenu: groupMenu }, roleIconEl(role, 16), `${title} — ${list.length}`), ...list.map(member)] : [];
   const out = [];
   let rest = online;
   if (Store.kind === 'supabase' && prefs.memberGroups !== 'off')         // people with a role that's shown separately get their own group
-    for (const r of Store.roles(serverId).filter((x) => x.hoist)) { const ppl = rest.filter((m) => m.group && m.group.id === r.id); rest = rest.filter((m) => !ppl.includes(m)); out.push(...grp(r.name, ppl)); }
+    for (const r of Store.roles(serverId).filter((x) => x.hoist)) { const ppl = rest.filter((m) => m.group && m.group.id === r.id); rest = rest.filter((m) => !ppl.includes(m)); out.push(...grp(r.name, ppl, r)); }
   out.push(...grp('Online', rest));
   if (prefs.memberOffline) out.push(...grp('Offline', offline));
   box.replaceChildren(...out);
 }
 const roleMark = (ic, title) => { const s = el('span', { className: 'role-mark', title }); s.append(icon(ic, 13)); return s; };
+// a role's icon (the server's leaders choose it): an emoji, or a small picture
+function roleIconEl(r, size = 16) {
+  if (!r || !r.icon) return null;
+  const pic = /^data:image\//.test(r.icon) ? safeImg(r.icon) : '';
+  if (/^data:/.test(r.icon) && !pic) return null;
+  const s = el('span', { className: 'role-ic', title: r.name }, pic ? el('img', { src: pic, alt: '' }) : r.icon);
+  s.style.setProperty('--ri', size + 'px');
+  return s;
+}
 function renderAll() {
   indexEmoji(); ensureSelection(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner();
   const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null, groupOn = !!g && g.kind === 'group' && showMembers;
@@ -2006,6 +2336,8 @@ function renderAll() {
 function renderBanner() {
   const b = $('#banner'), st = Store.syncState(), acc = Store.account();
   b.replaceChildren();
+  // (all's well: "Live, signed in as @you" only shows when you've asked for it in Settings; trouble always shows)
+  b.classList.toggle('calm', !Store.resuming && !st.error && !!acc && !(Store.kind === 'supabase' && Store.needsSetup()));
   if (Store.resuming) b.append('Signing you in…');
   else if (Store.kind === 'supabase' && Store.needsSetup() && !st.error) { b.append('Run the newest supabase/setup.sql in Supabase to turn on reactions, server tags, profile themes and name styles (and emoji, stickers, blocking and one-time links if they’re off). '); b.append(el('a', { href: '#' }, 'How')); b.onclick = (e) => { e.preventDefault(); setupHelp(); }; return; }
   else if (Store.kind === 'supabase') b.append(st.error ? `Trouble: ${st.error}` : `Live, signed in as @${acc.login}`);
@@ -2207,7 +2539,7 @@ function showProfile(user, anchor) {
   if (live && sv && u.id && !u.bot) {
     const all = Store.roles(sv), can = Store.canManage(sv), has = all.filter((r) => ((Store.members(sv) || []).find((m) => m.id === u.id) || {}).roles?.includes(r.id));
     if (has.length || (can && all.length)) inner.append(el('div', { className: 'role-chips' },
-      ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), r.name,
+      ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), roleIconEl(r, 14), r.name,
         can ? el('button', { className: 'rchip-x', title: `Take ${r.name} away`, onclick: async (e) => { e.stopPropagation(); if ((await attempt(() => Store.giveRole(sv, u.id, r.id, false))) !== null) { toast(`${u.name} is no longer ${r.name}.`); closePop(); } } }, icon('x', 11)) : null)),
       can && all.length ? el('button', { className: 'rchip add', title: 'Give a role', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu(roleItems(sv, u), r.left, r.bottom + 4); } }, icon('plus', 13)) : null));
   }
@@ -2252,6 +2584,8 @@ function profileMenu(u, x, y, { full = false } = {}) {
     !full && { label: 'View Full Profile', icon: 'user', action: () => fullProfile(u) },
     live && u.login && !u.bot && { label: 'Share Profile', icon: 'share', action: () => copyText(profileLink(u), 'Profile link copied.') },
     invitable.length && { label: 'Invite to Server', sub: () => invitable.map((sv) => ({ label: sv.name, action: () => inviteTo(u, sv) })) },
+    live && !self && !u.bot && u.id && Store.canBux() && { label: 'Send Datbux', icon: 'coin', action: () => sendBuxDialog(u) },
+    live && !self && !u.bot && u.id && Store.canBux() && { label: 'Trade', icon: 'swap', action: () => tradeDialog(u) },
     st === 'friend' && { label: 'Remove Friend', action: () => unfriend(u) },
     !self && !u.bot && '-',
     !self && !u.bot && { label: ignored ? 'Unignore' : 'Ignore', icon: 'eyeOff', hint: ignored ? null : 'Tuck away their messages, no pings', action: () => setIgnored(u, !ignored) },
@@ -2597,7 +2931,8 @@ function showAccount(anchor) {
     row(el('span', { className: 'sdot ' + st }), (STATUSES.find((x) => x[0] === st) || [, 'Online'])[1],
       el('span', { className: 'acct-st' }, me.statusUntil && st !== 'online' ? el('small', {}, 'until ' + when(me.statusUntil, true)) : null, st === 'dnd' ? icon('bellOff', 15) : null, chev()), (e) => { e.stopPropagation(); statusMenu(e.currentTarget); }),
     row('medal', 'Badges', null, () => { closePop(); badgesDialog(u); }),
-    row('quest', 'Quests', el('span', { className: 'acct-st' }, ready ? el('span', { className: 'mbadge' }, String(ready)) : null, chev()), () => { closePop(); view = 'home'; dmId = null; homePage = 'quests'; renderAll(); }));
+    row('quest', 'Quests', el('span', { className: 'acct-st' }, ready ? el('span', { className: 'mbadge' }, String(ready)) : null, chev()), () => { closePop(); view = 'home'; dmId = null; homePage = 'quests'; renderAll(); }),
+    buxReady() ? row('coin', 'Datbux', el('span', { className: 'acct-st' }, buxTag(Bux.wallet().balance), chev()), () => { closePop(); view = 'home'; dmId = null; homePage = 'datbux'; renderAll(); }) : null);
   const card2 = el('div', { className: 'card' },
     row('users', 'Switch Accounts', chev(), (e) => { e.stopPropagation(); switchMenu(e.currentTarget); }),
     row('id', 'Copy User ID', null, () => { closePop(); copyText(String(live ? Store.myId() : me.id), 'User ID copied.'); }));
@@ -2960,6 +3295,8 @@ function leaveCall() {
 addEventListener('pagehide', () => { if (call) leaveCall(); });
 
 // someone's calling you (or a call you were rung for ended)
+// (a trade offered to you, as it arrives)
+if (Store.onTrade) Store.onTrade((t) => { toast(`${person(t.from).name} offered you a trade: see it in Datbux.`); renderAll(); });
 Store.onCall(({ call: c, started }) => {
   if (c.mine) {
     if (c.ended && call && call.callId === c.id && !call.met) { toast('They didn’t pick up.'); leaveCall(); }
@@ -3611,6 +3948,8 @@ function memberCtx(u, x, y) {
     { label: 'Profile', icon: 'user', action: () => profileAt(u, x, y) },
     !self && !u.bot && { label: 'Message', icon: 'message', action: () => openDM(normFriend(u)) },
     !self && !u.bot && live && friendState(u) === 'friend' && { label: 'Call', icon: 'phone', action: async () => { if (await openDM(normFriend(u))) startDMCall(false); } },
+    !self && !u.bot && live && u.id && Store.canBux() && { label: 'Send Datbux', icon: 'coin', action: () => sendBuxDialog(u) },
+    !self && !u.bot && live && u.id && Store.canBux() && { label: 'Trade', icon: 'swap', action: () => tradeDialog(u) },
     !self && !u.bot && friendItem(u),
     !self && !u.bot && { label: isIgnored(u.id) ? 'Unignore' : 'Ignore', icon: 'eyeOff', action: () => setIgnored(u, !isIgnored(u.id)) },
     live && !self && !u.bot && { label: Store.blocked(u.id) ? 'Unblock' : 'Block', icon: 'ban', action: () => (Store.blocked(u.id) ? unblockUser(u) : blockUser(u)) },
@@ -3631,6 +3970,8 @@ function dmCtx(d, x, y) {
     !group && { label: 'Profile', icon: 'user', action: () => profileAt(d.user, x, y) },
     live && { label: 'Call', icon: 'phone', action: () => { view = 'home'; dmId = d.id; renderAll(); startDMCall(false); } },
     !group && friendItem(d.user),
+    !group && live && d.user && d.user.id && !d.user.bot && Store.canBux() && { label: 'Send Datbux', icon: 'coin', action: () => sendBuxDialog(d.user) },
+    !group && live && d.user && d.user.id && !d.user.bot && Store.canBux() && { label: 'Trade', icon: 'swap', action: () => tradeDialog(d.user) },
     live && '-', muteItem(d.id, 'Conversation'),
     group && '-', group && { label: 'Change Icon', icon: 'image', action: () => changeGroupIcon(d) }, group && { label: 'Rename', icon: 'edit', action: () => renameGroup(d) },
     '-',
@@ -4001,7 +4342,7 @@ function loadPrefs() {
   return p;
 }
 // what a layout preset or reset leaves alone (they're not about layout)
-const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo', 'decorations', 'effects'];
+const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo', 'decorations', 'effects', 'liveBanner'];
 const keepOf = () => Object.fromEntries(KEEP.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
 function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
 function applyPrefs() {
@@ -4013,7 +4354,7 @@ function applyPrefs() {
   S('contrast', prefs.highContrast ? 'high' : 'normal');
   for (const [attr, val] of [['rail', prefs.rail], ['iconshape', prefs.iconShape],
     ['chanicons', prefs.chanIcons], ['cats', prefs.cats], ['sidehead', prefs.sideHead], ['userpanel', prefs.userPanel],
-    ['topbar', prefs.topbar], ['banner', prefs.banner], ['avatars', prefs.avatars],
+    ['topbar', prefs.topbar], ['banner', prefs.banner], ['livebanner', prefs.liveBanner], ['avatars', prefs.avatars],
     ['avatarshape', prefs.avatarShape], ['dividers', prefs.dividers], ['hover', prefs.hover],
     ['radius', prefs.radius], ['uifont', prefs.uiFont], ['btnlabels', prefs.btnLabels]]) S(attr, val);
   S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
@@ -4573,7 +4914,9 @@ function lookDialog(kind, current, onApply, who) {
   const [items, title, word] = LISTS[kind];
   let cur = current || '';
   const grid = el('div', { className: 'lk-grid lk-' + kind }), pv = el('div', { className: 'lk-pv' }), info = el('div', { className: 'lk-info' });
-  const apply = el('button', { className: 'btn primary', onclick: () => { onApply(cur); m.close(); } }, 'Apply');
+  // (something with a price that isn't yours yet is bought first)
+  const apply = el('button', { className: 'btn primary', onclick: async () => { if (!(await buyFlow(kind, cur))) return; onApply(cur); m.close(); } }, 'Apply');
+  const toBuy = (id) => { const p = Bux.price(kind, id); return p > 0 && !Bux.owns(kind, id) ? p : 0; };
   const face = (id) => {
     const u = who();
     if (kind === 'deco') return avatarEl({ ...u, decoration: id, me: false, status: '' }, { size: 52 });
@@ -4584,10 +4927,12 @@ function lookDialog(kind, current, onApply, who) {
   const draw = () => {
     grid.replaceChildren(
       el('button', { className: 'lk-tile lk-none' + (!cur ? ' on' : ''), title: 'None', onclick: () => { cur = ''; draw(); } }, icon('ban', 26), el('span', {}, 'None')),
-      el('button', { className: 'lk-tile lk-shop', title: 'Open the Shop', onclick: () => { m.close(); const ed = document.querySelector('.pe-dlg .fp-x'); toast('Everything in the Shop is free: pick one here, or have a look there after you save.'); if (!ed) { view = 'home'; dmId = null; homePage = 'shop'; renderAll(); } } }, icon('shop', 26), el('span', {}, 'Shop')),
+      el('button', { className: 'lk-tile lk-shop', title: 'Open the Shop', onclick: () => { m.close(); const ed = document.querySelector('.pe-dlg .fp-x'); toast('Pick one here, or have a look in the Shop after you save.'); if (!ed) { view = 'home'; dmId = null; homePage = 'shop'; renderAll(); } } }, icon('shop', 26), el('span', {}, 'Shop')),
       ...items.map(([id, name, quest]) => {
         const locked = quest && !unlocked(quest);
-        return el('button', { className: 'lk-tile' + (cur === id ? ' on' : '') + (locked ? ' locked' : ''), title: name, onclick: () => { cur = id; draw(); } }, face(id), locked ? el('span', { className: 'lk-lock' }, icon('lock', 12)) : null);
+        const p = toBuy(id);
+        return el('button', { className: 'lk-tile' + (cur === id ? ' on' : '') + (locked ? ' locked' : ''), title: name + (p ? ` (${fmtBux(p)} Datbux)` : ''), onclick: () => { cur = id; draw(); } }, face(id),
+          locked ? el('span', { className: 'lk-lock' }, icon('lock', 12)) : p ? el('span', { className: 'lk-price' }, icon('coin', 11), fmtBux(p)) : null);
       }));
     const u = { ...who() };
     if (kind === 'deco') {
@@ -4596,8 +4941,10 @@ function lookDialog(kind, current, onApply, who) {
         el('div', { className: 'lk-deco-sizes' }, ...[['online', 64], ['idle', 44], ['dnd', 34], ['offline', 26]].map(([st, sz]) => avatarEl({ ...d2, status: st }, { size: sz, status: st }))));
     } else pv.replaceChildren(mockCard(u, kind === 'effect' ? { effect: cur, frame: u.frame } : { effect: u.effect, frame: cur }));
     const it = items.find((x) => x[0] === cur), locked = !!(it && it[2] && !unlocked(it[2]));
-    info.replaceChildren(...(it ? [el('b', {}, it[1]), el('small', {}, it[2] ? (locked ? `Unlocks with the Quest “${(questInfo(it[2]) || {}).title || ''}”` : 'A Quest reward · yours') : 'Free')] : [el('b', {}, 'None'), el('small', {}, `No ${word.toLowerCase().replace(/s$/, '')}`)]));
-    apply.disabled = locked;
+    const price = it ? Bux.price(kind, it[0]) : null, buy = it ? toBuy(it[0]) : 0;
+    info.replaceChildren(...(it ? [el('b', {}, it[1]), el('small', {}, it[2] ? (locked ? `Unlocks with the Quest “${(questInfo(it[2]) || {}).title || ''}”` : 'A Quest reward · yours') : price > 0 ? (buy ? buxTag(price) : 'Yours') : 'Free')]
+      : [el('b', {}, 'None'), el('small', {}, `No ${word.toLowerCase().replace(/s$/, '')}`)]));
+    apply.disabled = locked; apply.textContent = buy ? `Buy and Apply · ${fmtBux(buy)}` : 'Apply';
   };
   const m = modal({ cls: 'lk-dlg', body: [el('div', { className: 'lk' }, el('div', { className: 'lk-left' }, el('h3', {}, title), el('h5', {}, 'Your ' + word), grid), el('div', { className: 'lk-right' }, pv, info))],
     actions: [el('span', { style: 'flex:1' }), el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), apply] });
@@ -4655,8 +5002,17 @@ function nameStyleDialog(start, onApply, who) {
   const pv = el('div', { className: 'ns-pv' });
   const two = () => ['gradient', 'pop', 'gummy', 'toon', 'glow'].includes(st.effect);
   const c2row = el('div', { className: 'ns-c2' }, el('h5', {}, 'Second Colour'), colors2);
+  // (a font with a price that isn't yours yet is bought first)
+  const applyBtn = el('button', { className: 'btn primary', onclick: async () => { if (!(await buyFlow('font', st.font))) return; if (!st.c1 && st.effect !== 'prism') st.c1 = '#ffffff'; onApply({ ...st }); w.close(); } }, 'Apply');
   function draw() {
-    fonts.replaceChildren(...FONTS.map(([id, label]) => { if (id) loadFont(id); const b = el('button', { className: 'ns-tile' + (st.font === id ? ' on' : ''), title: label, onclick: () => { st.font = id; draw(); } }, el('span', { style: id ? `font-family:${fontFamily(id)}` : '' }, 'Gg'), el('small', {}, label)); return b; }));
+    fonts.replaceChildren(...FONTS.map(([id, label]) => {
+      if (id) loadFont(id);
+      const p = Bux.price('font', id), buy = p > 0 && !Bux.owns('font', id);
+      return el('button', { className: 'ns-tile' + (st.font === id ? ' on' : ''), title: label + (buy ? ` (${fmtBux(p)} Datbux)` : ''), onclick: () => { st.font = id; draw(); } },
+        el('span', { style: id ? `font-family:${fontFamily(id)}` : '' }, 'Gg'), el('small', {}, label), buy ? el('span', { className: 'lk-price' }, icon('coin', 10), fmtBux(p)) : null);
+    }));
+    const p = Bux.price('font', st.font), buy = p > 0 && !Bux.owns('font', st.font);
+    applyBtn.textContent = buy ? `Buy and Apply · ${fmtBux(p)}` : 'Apply';
     effects.replaceChildren(...EFFECTS.map(([id, label]) => { const t = el('span', {}, label); styleName(t, { font: '', effect: id, c1: st.c1 || '#ffffff', c2: st.c2 || st.c1 || '#ffffff' }); return el('button', { className: 'ns-tile fx' + (st.effect === id ? ' on' : ''), onclick: () => { st.effect = id; draw(); } }, t); }));
     const swatches = (key, box) => {
       const custom = colorSwatch(st[key], (c) => { st[key] = c; drawPreview(); markColors(); }, { title: 'Any colour' });
@@ -4681,8 +5037,12 @@ function nameStyleDialog(start, onApply, who) {
       el('h5', {}, 'Choose Font'), fonts, el('h5', {}, 'Choose Effect'), effects, el('h5', {}, 'Choose Colour'), colors, c2row),
     el('div', { className: 'ns-right' }, pv, el('p', { className: 'hint' }, 'In a server, a role’s colour shows instead of these colours (your font stays).')))],
     actions: [el('button', { className: 'btn ghost', onclick: () => { onApply({ font: '', effect: '', c1: '', c2: '' }); w.close(); } }, 'Remove Style'), el('span', { style: 'flex:1' }),
-      el('button', { className: 'btn', onclick: () => { st = surprise(); draw(); } }, icon('sparkle', 16), 'Surprise Me'),
-      el('button', { className: 'btn primary', onclick: () => { if (!st.c1 && st.effect !== 'prism') st.c1 = '#ffffff'; onApply({ ...st }); w.close(); } }, 'Apply')], onClose: () => closeColor() });
+      el('button', { className: 'btn', onclick: () => {
+        st = surprise();
+        if (!Bux.mayWear('font', st.font)) { const ok = FONTS.filter(([id]) => id && Bux.mayWear('font', id)); st.font = ok.length ? ok[Math.floor(Math.random() * ok.length)][0] : ''; }
+        draw();
+      } }, icon('sparkle', 16), 'Surprise Me'),
+      applyBtn], onClose: () => closeColor() });
   draw();
 }
 
@@ -4999,6 +5359,7 @@ function appearancePane(redraw) {
     row2('Display', 'Cozy gives each message room. Compact fits more on screen.', sel(prefs.density, [['cozy', 'Cozy'], ['compact', 'Compact']], (v) => { prefs.density = v; savePrefs(); })),
     row2('Text size', 'Everything in the app scales with this.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })()),
     row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos under the messages that link to them.', sw(prefs.embeds !== 'off', (on) => { prefs.embeds = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
+    row2('“Live, signed in as @you”', 'The bar across the top when all is well. Off, it only shows when something needs you (trouble, or a newer setup.sql to run).', sw(prefs.liveBanner === 'on', (on) => { prefs.liveBanner = on ? 'on' : 'off'; savePrefs(); applyPrefs(); })),
     el('h3', {}, 'Decorations & Effects'),
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => { prefs.decorations = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
     row2('Profile effects and frames', 'Snow, sparkles, frames and more on people’s profile cards, from the Shop.', sw(prefs.effects !== 'off', (on) => { prefs.effects = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
@@ -5383,7 +5744,7 @@ function svRoles(sv, redraw, state) {
     const id = await attempt(() => Store.addRole(sv.id, { name: 'new role' })); if (id) { state.role = id; redraw(); }
   } }, 'Create Role');
   const list = el('div', { className: 'role-list' }, ...roles.map((x) => el('button', { className: 'role-pill' + (r && x.id === r.id ? ' on' : ''), onclick: () => { state.role = x.id; redraw(); } },
-    el('i', { style: `background:${safeColor(x.color, '#99aab5')}` }), el('span', {}, x.name), el('small', {}, String(count(x.id))))), create);
+    el('i', { style: `background:${safeColor(x.color, '#99aab5')}` }), roleIconEl(x, 16), el('span', {}, x.name), el('small', {}, String(count(x.id))))), create);
   const head = [el('h2', {}, 'Roles'), el('p', { className: 'sub' }, 'Use roles to group your server’s people and colour their names. (What people may do is set by owner, admin and member, in Members.)'), list];
   if (!r) return [...head, el('div', { className: 'note-box' }, 'No roles yet. Make one, like “Builders” or “Programmers”.')];
   const name = el('input', { type: 'text', value: r.name, maxLength: 40, className: 'wide-in' });
@@ -5395,12 +5756,23 @@ function svRoles(sv, redraw, state) {
   const holders = people.filter((m) => (m.roles || []).includes(r.id)), others = people.filter((m) => !(m.roles || []).includes(r.id));
   const giveMenu = (e) => { const b = e.currentTarget.getBoundingClientRect(); menu(others.length ? others.map((m) => ({ label: m.name, hint: m.login ? '@' + m.login : '', action: async () => { await attempt(() => Store.giveRole(sv.id, m.id, r.id, true)); redraw(); } })) : [{ label: 'Everyone has it already', disabled: true }], b.left, b.bottom + 4); };
   const preview = el('div', { className: 'role-pv' }, avatarEl({ name: holders[0] ? holders[0].name : 'Fluentdat', color: holders[0] ? holders[0].color : '#5b7fd6', avatar: holders[0] ? holders[0].avatar : '' }),
-    el('div', {}, el('div', { className: 'nm', style: `color:${safeColor(r.color, 'var(--bright)')}` }, holders[0] ? holders[0].name : 'Fluentdat'), el('div', {}, 'This is how names look with this role.')));
+    el('div', {}, el('div', { className: 'nm', style: `color:${safeColor(r.color, 'var(--bright)')}` }, holders[0] ? holders[0].name : 'Fluentdat', roleIconEl(r, 18)), el('div', {}, 'This is how names look with this role.')));
+  // (the role's icon: an emoji, or a picture made small; it shows beside their names in chat, and on the role's group)
+  const setIcon = (v) => { Store.updateRole(r.id, { icon: v }); redraw(); renderAll(); };
+  const iconOk = Store.kind === 'supabase' && Store.canBux();
+  const pickEmoji = (e) => { e.stopPropagation(); openPicker({ tab: 'emoji', emojiOnly: true, anchor: e.currentTarget, still: motionOff(),
+    servers: [], emojiOf: () => [], stickersOf: () => [], own: [], builtin: [], safeImg, canManage: () => false, manage: () => {}, onEmoji: (t, keep, custom) => { if (!custom) setIcon(t); }, onSticker: () => {} }); };
+  const upload = () => pickFile(async (f) => { const url = await attempt(() => shrink(f, 64, 64, 38000)); if (url) setIcon(url); });
+  const iconRow = el('div', { className: 'role-icon-row' }, el('div', { className: 'role-icon-pv' }, roleIconEl(r, 34) || icon('image', 22)),
+    el('div', { className: 'grow' }, el('b', {}, r.icon ? 'Role icon' : 'No icon yet'), el('small', {}, 'Shown beside the names of people with this role in chat, and on the role’s group in the member list.')),
+    el('button', { className: 'btn', onclick: pickEmoji }, icon('smile', 16), 'Emoji'), el('button', { className: 'btn', onclick: upload }, icon('image', 16), 'Upload'),
+    r.icon ? el('button', { className: 'btn ghost', onclick: () => setIcon('') }, 'Remove') : null);
   return [...head,
     el('div', { className: 'role-edit' },
       el('div', { className: 'role-edit-head' }, el('h3', {}, 'Edit role: ' + r.name), el('span', { style: 'flex:1' }), iconBtn('up', 'Move up (higher roles win the name colour)', () => move(-1)), iconBtn('down', 'Move down', () => move(1))),
       el('h4', { className: 'sub-h' }, 'Role name'), name,
       el('h4', { className: 'sub-h' }, 'Role colour'), el('div', { className: 'rswatches' }, swatch(''), ...ROLE_COLORS.map(swatch), custom),
+      el('h4', { className: 'sub-h' }, 'Role icon'), iconOk ? iconRow : el('div', { className: 'note-box' }, 'Role icons need the newest supabase/setup.sql: run it again in Supabase.'),
       row2('Display role members separately', 'People with this role get their own group in the member list.', sw(!!r.hoist, (on) => { Store.updateRole(r.id, { hoist: on }); renderAll(); })),
       preview,
       el('h4', { className: 'sub-h' }, `Members with this role — ${holders.length}`),
@@ -5603,7 +5975,7 @@ function svPeople(sv, redraw) {
       el('div', { className: 'who2' },
         el('div', { className: 'n' }, m.name, m.me ? el('span', { className: 'chip', style: 'margin-left:8px' }, 'you') : null),
         el('div', { className: 'h' }, el('span', { className: 'chip role ' + m.role }, m.role === 'owner' ? 'Owner' : m.role === 'admin' ? 'Admin' : 'Member'),
-          ...Store.roles(sv.id).filter((r) => (m.roles || []).includes(r.id)).map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), r.name)), m.login ? '@' + m.login : '')),
+          ...Store.roles(sv.id).filter((r) => (m.roles || []).includes(r.id)).map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), roleIconEl(r, 14), r.name)), m.login ? '@' + m.login : '')),
       ...acts));
   }
   return [el('h2', {}, 'Members'), el('p', { className: 'sub' }, `${people.length} ${people.length === 1 ? 'person' : 'people'} in ${sv.name}. ` +
@@ -6056,7 +6428,8 @@ function layoutStudio(redraw) {
     };
     const sideways = (key, all) => move(key, all, ['◀ Left', 'Right ▶']), updown = (key, all) => move(key, all, ['▲ Up', 'Down ▼']);
     const onoff = [['on', 'Shown'], ['off', 'Hidden']];
-    if (id === 'status') out.push(flag('banner', 'Show the status bar', 'The line saying whether you’re signed in and live.'), size('statusH'),
+    if (id === 'status') out.push(flag('banner', 'Show the status bar', 'The line saying whether you’re signed in and live.'),
+      flag('liveBanner', 'Say when all is well', '“Live, signed in as @you.” Off, the bar only shows when something needs you.'), size('statusH'),
       row2('Position', 'Across the top or the bottom of the window.', el('div', { className: 'btn-row' }, ...[['top', 'Top'], ['bottom', 'Bottom']].map(([v, l]) =>
         el('button', { className: 'btn small' + (prefs.statusPos === v || (v === 'top' && prefs.statusPos !== 'bottom') ? ' primary' : ''), onclick: () => { remember(); prefs.statusPos = v; commit(); } }, l)))));
     if (id === 'rail') out.push(flag('rail', 'Show the server rail', 'The strip of server icons.'), size('railW', 'Server icons grow with it.'), sideways('cols', COLS),

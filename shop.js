@@ -1,4 +1,4 @@
-// The Shop and Quests, like Discord's (everything is free here): avatar decorations drawn around an avatar, profile
+// The Shop and Quests, like Discord's: avatar decorations drawn around an avatar (most cost Datbux: datbux.js), profile
 // effects that play over a profile card, and Quests: things to do in Fluentdat that unlock some of them.
 // A decoration is an SVG a little bigger than the avatar (130 × 130, the avatar being the circle of radius 50 in the
 // middle); an effect is a layer of little pieces the page's CSS moves (index.html, "the Shop").

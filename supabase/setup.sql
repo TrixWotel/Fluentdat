@@ -332,6 +332,67 @@ create table if not exists public.event_interest (
   created_at timestamptz not null default now(),
   primary key (event_id, user_id)
 );
+-- Datbux, Fluentdat's own currency: earned with daily, weekly, monthly and yearly tasks, spent in the Shop, and sent or
+-- traded between people. Only the functions further down change any of this, so nobody can make Datbux up.
+create table if not exists public.wallets (
+  user_id uuid primary key references public.profiles (id) on delete cascade,
+  balance bigint not null default 0 check (balance >= 0),
+  earned bigint not null default 0,        -- from tasks (and the welcome)
+  spent bigint not null default 0,         -- in the Shop
+  sent bigint not null default 0,          -- to other people (and in trades)
+  received bigint not null default 0,
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.datbux_log (
+  id bigserial primary key,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  amount bigint not null,
+  kind text not null check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade')),
+  note text not null default '' check (char_length(note) <= 160),
+  other uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists datbux_log_by_user on public.datbux_log (user_id, created_at desc);
+create table if not exists public.task_claims (
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  task text not null check (task ~ '^[a-z0-9-]{1,32}$'),
+  period text not null check (period ~ '^[0-9W-]{4,10}$'),
+  claimed_at timestamptz not null default now(),
+  primary key (user_id, task, period)
+);
+-- what the Shop sells for Datbux, and the price (set here, so nobody can pay less); what isn't listed is free
+create table if not exists public.shop_items (
+  kind text not null check (kind in ('deco', 'font', 'effect', 'frame')),
+  item text not null check (item ~ '^[a-z0-9-]{1,24}$'),
+  price int not null check (price between 0 and 1000000),
+  primary key (kind, item)
+);
+create table if not exists public.owned_items (
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  kind text not null check (kind in ('deco', 'font', 'effect', 'frame')),
+  item text not null check (item ~ '^[a-z0-9-]{1,24}$'),
+  how text not null default 'buy' check (how in ('buy', 'trade', 'grant')),
+  got_at timestamptz not null default now(),
+  primary key (user_id, kind, item)
+);
+-- a trade between two people: Datbux and things from the Shop each way; the other person accepts or declines it
+create table if not exists public.trades (
+  id uuid primary key default gen_random_uuid(),
+  from_user uuid not null references public.profiles (id) on delete cascade,
+  to_user uuid not null references public.profiles (id) on delete cascade,
+  give_bux int not null default 0 check (give_bux between 0 and 1000000),
+  give_items jsonb not null default '[]'::jsonb,
+  want_bux int not null default 0 check (want_bux between 0 and 1000000),
+  want_items jsonb not null default '[]'::jsonb,
+  note text not null default '' check (char_length(note) <= 200),
+  status text not null default 'open' check (status in ('open', 'done', 'declined', 'cancelled', 'failed')),
+  why text not null default '',
+  created_at timestamptz not null default now(),
+  decided_at timestamptz,
+  check (from_user <> to_user)
+);
+create index if not exists trades_to on public.trades (to_user, status);
+create index if not exists trades_from on public.trades (from_user, status);
 
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
@@ -364,6 +425,9 @@ alter table public.profiles add column if not exists bubble_until timestamptz;
 -- by the database and only ever added to by it)
 alter table public.profile_extras add column if not exists badges jsonb not null default '{}'::jsonb;
 alter table public.profile_extras add column if not exists play_seconds bigint not null default 0;
+-- a role's icon (an emoji, or a small picture), shown beside its name, as on Discord; and when a channel (a thread) was made
+alter table public.roles add column if not exists icon text not null default '';
+alter table public.channels add column if not exists created_at timestamptz not null default now();
 -- what a server's sidebar offers above its channels (Browse Channels, Game Servers, Server Guide, Events), its Server
 -- Guide (a welcome, to-dos and resource pages), and the game servers its people play on
 alter table public.servers add column if not exists features jsonb not null default '{}'::jsonb;
@@ -429,6 +493,9 @@ alter table public.profiles drop constraint if exists profiles_cosmetics;
 alter table public.profiles add constraint profiles_cosmetics check (decoration ~ '^[a-z0-9-]{0,24}$' and effect ~ '^[a-z0-9-]{0,24}$' and frame ~ '^[a-z0-9-]{0,24}$');
 alter table public.profiles drop constraint if exists profiles_bubble;
 alter table public.profiles add constraint profiles_bubble check (char_length(bubble) <= 128 and bubble !~ '[[:cntrl:]]');
+alter table public.roles drop constraint if exists roles_icon;
+alter table public.roles add constraint roles_icon check (icon = '' or (char_length(icon) <= 16 and icon !~ '[[:space:][:cntrl:]<>/:.\\]')
+  or (length(icon) <= 40000 and icon ~ '^data:image/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$'));
 alter table public.channels drop constraint if exists channels_kind_check;
 alter table public.channels add constraint channels_kind_check check (kind in ('text', 'voice', 'thread'));
 alter table public.channels drop constraint if exists channels_thread_shape;
@@ -737,6 +804,26 @@ drop policy if exists "boost" on public.server_boosts;
 create policy "boost" on public.server_boosts for insert to authenticated with check (user_id = auth.uid() and is_member(server_id));
 drop policy if exists "stop boosting" on public.server_boosts;
 create policy "stop boosting" on public.server_boosts for delete to authenticated using (user_id = auth.uid());
+-- Datbux: you see your own wallet, history, tasks and trades, what the Shop costs, and what people you know have; only the
+-- functions change anything
+alter table public.wallets enable row level security;
+drop policy if exists "your wallet" on public.wallets;
+create policy "your wallet" on public.wallets for select to authenticated using (user_id = auth.uid());
+alter table public.datbux_log enable row level security;
+drop policy if exists "your Datbux history" on public.datbux_log;
+create policy "your Datbux history" on public.datbux_log for select to authenticated using (user_id = auth.uid());
+alter table public.task_claims enable row level security;
+drop policy if exists "your tasks" on public.task_claims;
+create policy "your tasks" on public.task_claims for select to authenticated using (user_id = auth.uid());
+alter table public.shop_items enable row level security;
+drop policy if exists "the Shop's prices" on public.shop_items;
+create policy "the Shop's prices" on public.shop_items for select to authenticated using (true);
+alter table public.owned_items enable row level security;
+drop policy if exists "what people you know have" on public.owned_items;
+create policy "what people you know have" on public.owned_items for select to authenticated using (knows(user_id));
+alter table public.trades enable row level security;
+drop policy if exists "your trades" on public.trades;
+create policy "your trades" on public.trades for select to authenticated using (from_user = auth.uid() or to_user = auth.uid());
 -- whoever started a thread can remove it (admins and channel managers can anyway)
 drop policy if exists "remove your threads" on public.channels;
 create policy "remove your threads" on public.channels for delete to authenticated using (kind = 'thread' and created_by = auth.uid());
@@ -1190,7 +1277,7 @@ begin
     raise exception 'Quests are the names of the ones you finished.';
   end if;
   if coalesce(jsonb_typeof(new.badges), '') <> 'object' or exists (select 1 from jsonb_object_keys(new.badges) k where k not in ('order', 'hidden'))
-     or exists (select 1 from jsonb_each(new.badges) e where coalesce(jsonb_typeof(e.value), '') <> 'array' or jsonb_array_length(e.value) > 40
+     or exists (select 1 from jsonb_each(new.badges) e where coalesce(jsonb_typeof(e.value), '') <> 'array' or jsonb_array_length(e.value) > 120
                 or exists (select 1 from jsonb_array_elements(e.value) b where coalesce(jsonb_typeof(b), '') <> 'string' or (b #>> '{}') !~ '^[a-z0-9-]{1,24}$')) then
     raise exception 'Your badges are kept by name: the order you show them in, and the ones you hide.';
   end if;
@@ -1428,17 +1515,256 @@ begin
   if not found then raise exception 'You aren''t in that server.'; end if;
 end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 8 $$;
+create or replace function public.setup_version() returns int language sql immutable as $$ select 9 $$;
+
+-- ===================== Datbux =====================
+-- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
+create or replace function public.wallet_open(p_user uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into wallets (user_id, balance, earned) values (p_user, 200, 200) on conflict (user_id) do nothing;
+  if found then insert into datbux_log (user_id, amount, kind, note) values (p_user, 200, 'welcome', 'Welcome to Datbux'); end if;
+end $$;
+-- the tasks: what, how often, how many Datbux, what's counted, and how many of it
+create or replace function public.datbux_tasks() returns table (task text, every text, reward int, counts text, goal int)
+language sql immutable set search_path = public as $$
+  values ('daily-checkin', 'day', 50, 'none', 1), ('daily-message', 'day', 30, 'messages', 1), ('daily-react', 'day', 20, 'reactions', 3),
+    ('weekly-messages', 'week', 200, 'messages', 50), ('weekly-react', 'week', 100, 'reactions', 20), ('weekly-thread', 'week', 120, 'threads', 1),
+    ('monthly-days', 'month', 600, 'days', 10), ('monthly-messages', 'month', 500, 'messages', 300),
+    ('yearly-checkin', 'year', 2500, 'none', 1), ('yearly-messages', 'year', 3000, 'messages', 2000)
+$$;
+-- this day's, week's, month's or year's name (2026-10-21, 2026-W43, 2026-10, 2026) and when it began (UTC)
+create or replace function public.task_period(p_every text, out key text, out since timestamptz)
+language sql stable set search_path = public as $$
+  select case p_every when 'day' then to_char(now() at time zone 'utc', 'YYYY-MM-DD') when 'week' then to_char(now() at time zone 'utc', 'IYYY-"W"IW')
+           when 'month' then to_char(now() at time zone 'utc', 'YYYY-MM') else to_char(now() at time zone 'utc', 'YYYY') end,
+         date_trunc(case p_every when 'day' then 'day' when 'week' then 'week' when 'month' then 'month' else 'year' end, now() at time zone 'utc') at time zone 'utc';
+$$;
+-- how much of a task someone has done since a time
+create or replace function public.task_count(p_user uuid, p_counts text, p_since timestamptz) returns int
+language sql stable security definer set search_path = public as $$
+  select (case p_counts
+    when 'none' then 1
+    when 'messages' then (select count(*) from messages where author = p_user and not bot and created_at >= p_since)
+      + (select count(*) from dm_messages where author = p_user and not bot and created_at >= p_since)
+    when 'reactions' then (select count(*) from reactions where user_id = p_user and active and created_at >= p_since)
+    when 'threads' then (select count(*) from channels where kind = 'thread' and created_by = p_user and created_at >= p_since)
+    when 'days' then (select count(distinct (x.t at time zone 'utc')::date) from (select created_at t from messages where author = p_user and not bot and created_at >= p_since
+      union all select created_at from dm_messages where author = p_user and not bot and created_at >= p_since) x)
+    else 0 end)::int;
+$$;
+-- your tasks: how far along each is, whether you've claimed it this time, and when it comes back
+create or replace function public.task_progress() returns table (task text, every text, reward int, goal int, have int, claimed boolean, resets timestamptz)
+language plpgsql stable security definer set search_path = public as $$
+declare t record; p record;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  for t in select * from datbux_tasks() loop
+    select * into p from task_period(t.every);
+    task := t.task; every := t.every; reward := t.reward; goal := t.goal;
+    have := least(t.goal, task_count(auth.uid(), t.counts, p.since));
+    claimed := exists (select 1 from task_claims c where c.user_id = auth.uid() and c.task = t.task and c.period = p.key);
+    resets := p.since + case t.every when 'day' then interval '1 day' when 'week' then interval '1 week' when 'month' then interval '1 month' else interval '1 year' end;
+    return next;
+  end loop;
+end $$;
+-- claim a task you've done (once each day, week, month or year): its Datbux go in your wallet
+create or replace function public.claim_task(p_task text) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare t record; p record; done int;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  select * into t from datbux_tasks() d where d.task = p_task;
+  if not found then raise exception 'There''s no such task.'; end if;
+  select * into p from task_period(t.every);
+  if exists (select 1 from task_claims c where c.user_id = auth.uid() and c.task = p_task and c.period = p.key) then
+    raise exception 'You''ve claimed that already. It comes back next %.', t.every;
+  end if;
+  done := task_count(auth.uid(), t.counts, p.since);
+  if done < t.goal then raise exception 'Not done yet: % of %.', done, t.goal; end if;
+  perform wallet_open(auth.uid());
+  insert into task_claims (user_id, task, period) values (auth.uid(), p_task, p.key);
+  update wallets set balance = balance + t.reward, earned = earned + t.reward, updated_at = now() where user_id = auth.uid();
+  insert into datbux_log (user_id, amount, kind, note) values (auth.uid(), t.reward, 'task', p_task);
+  return (select balance from wallets where user_id = auth.uid());
+end $$;
+-- buy something in the Shop: it's yours (to wear, or to trade)
+create or replace function public.buy_item(p_kind text, p_item text) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare cost int; bal bigint;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  select s.price into cost from shop_items s where s.kind = p_kind and s.item = p_item;
+  if not found then raise exception 'That isn''t in the Shop.'; end if;
+  if exists (select 1 from owned_items o where o.user_id = auth.uid() and o.kind = p_kind and o.item = p_item) then raise exception 'You have that already.'; end if;
+  perform wallet_open(auth.uid());
+  select balance into bal from wallets where user_id = auth.uid() for update;
+  if bal < cost then raise exception 'That costs % Datbux, and you have %.', cost, bal; end if;
+  update wallets set balance = balance - cost, spent = spent + cost, updated_at = now() where user_id = auth.uid();
+  insert into owned_items (user_id, kind, item, how) values (auth.uid(), p_kind, p_item, 'buy');
+  insert into datbux_log (user_id, amount, kind, note) values (auth.uid(), -cost, 'buy', p_kind || ':' || p_item);
+  return bal - cost;
+end $$;
+-- send someone you know some Datbux (up to 100,000 at a time)
+create or replace function public.send_datbux(p_to uuid, p_amount int, p_note text default '') returns bigint
+language plpgsql security definer set search_path = public as $$
+declare bal bigint; words text := left(trim(regexp_replace(coalesce(p_note, ''), '[[:cntrl:]]', ' ', 'g')), 160);
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  if p_to is null or p_to = auth.uid() then raise exception 'Send Datbux to someone else.'; end if;
+  if not knows(p_to) then raise exception 'You can only send Datbux to people you know.'; end if;
+  if blocked_with(p_to) then raise exception 'You can''t send them anything.'; end if;
+  if p_amount is null or p_amount < 1 or p_amount > 100000 then raise exception 'Send between 1 and 100,000 Datbux.'; end if;
+  perform wallet_open(auth.uid()); perform wallet_open(p_to);
+  perform 1 from wallets where user_id in (auth.uid(), p_to) order by user_id for update;
+  select balance into bal from wallets where user_id = auth.uid();
+  if bal < p_amount then raise exception 'You have % Datbux.', bal; end if;
+  update wallets set balance = balance - p_amount, sent = sent + p_amount, updated_at = now() where user_id = auth.uid();
+  update wallets set balance = balance + p_amount, received = received + p_amount, updated_at = now() where user_id = p_to;
+  insert into datbux_log (user_id, amount, kind, note, other) values (auth.uid(), -p_amount, 'send', words, p_to), (p_to, p_amount, 'receive', words, auth.uid());
+  return bal - p_amount;
+end $$;
+-- what a trade can hold each way: up to 10 things from the Shop (by kind and name), each once
+create or replace function public.trade_items_ok(p jsonb) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce(jsonb_typeof(p) = 'array' and jsonb_array_length(p) <= 10
+    and not exists (select 1 from jsonb_array_elements(p) x where jsonb_typeof(x) <> 'object' or coalesce(x->>'k', '') not in ('deco', 'font', 'effect', 'frame')
+      or coalesce(x->>'i', '') !~ '^[a-z0-9-]{1,24}$' or exists (select 1 from jsonb_object_keys(x) k where k not in ('k', 'i')))
+    and (select count(*) = count(distinct (x->>'k') || ':' || (x->>'i')) from jsonb_array_elements(p) x), false);
+$$;
+create or replace function public.owns_all(p_user uuid, p jsonb) returns boolean
+language sql stable security definer set search_path = public as $$
+  select not exists (select 1 from jsonb_array_elements(p) x where not exists (select 1 from owned_items o where o.user_id = p_user and o.kind = x->>'k' and o.item = x->>'i'));
+$$;
+create or replace function public.owns_any(p_user uuid, p jsonb) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from jsonb_array_elements(p) x join owned_items o on o.user_id = p_user and o.kind = x->>'k' and o.item = x->>'i');
+$$;
+-- offer someone you know a trade (it waits for them; at most 10 waiting from you)
+create or replace function public.offer_trade(p_to uuid, p_give_bux int, p_give_items jsonb, p_want_bux int, p_want_items jsonb, p_note text default '') returns uuid
+language plpgsql security definer set search_path = public as $$
+declare t_id uuid; bal bigint;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  if p_to is null or p_to = auth.uid() then raise exception 'Trade with someone else.'; end if;
+  if not knows(p_to) then raise exception 'You can only trade with people you know.'; end if;
+  if blocked_with(p_to) then raise exception 'You can''t trade with them.'; end if;
+  p_give_bux := coalesce(p_give_bux, 0); p_want_bux := coalesce(p_want_bux, 0);
+  p_give_items := coalesce(p_give_items, '[]'::jsonb); p_want_items := coalesce(p_want_items, '[]'::jsonb);
+  if p_give_bux < 0 or p_want_bux < 0 or p_give_bux > 100000 or p_want_bux > 100000 then raise exception 'Up to 100,000 Datbux each way.'; end if;
+  if not trade_items_ok(p_give_items) or not trade_items_ok(p_want_items) then raise exception 'A trade holds up to 10 things from the Shop each way.'; end if;
+  if p_give_bux = 0 and p_want_bux = 0 and jsonb_array_length(p_give_items) = 0 and jsonb_array_length(p_want_items) = 0 then raise exception 'Put something in the trade.'; end if;
+  if not owns_all(auth.uid(), p_give_items) then raise exception 'You can only offer things you have.'; end if;
+  if not owns_all(p_to, p_want_items) then raise exception 'They don''t have all of that.'; end if;
+  if owns_any(p_to, p_give_items) then raise exception 'They have some of that already.'; end if;
+  if owns_any(auth.uid(), p_want_items) then raise exception 'You have some of that already.'; end if;
+  perform wallet_open(auth.uid());
+  select balance into bal from wallets where user_id = auth.uid();
+  if bal < p_give_bux then raise exception 'You have % Datbux.', bal; end if;
+  if (select count(*) from trades where from_user = auth.uid() and status = 'open') >= 10 then raise exception 'You have 10 trades waiting already. Cancel one first.'; end if;
+  insert into trades (from_user, to_user, give_bux, give_items, want_bux, want_items, note)
+    values (auth.uid(), p_to, p_give_bux, p_give_items, p_want_bux, p_want_items, left(trim(regexp_replace(coalesce(p_note, ''), '[[:cntrl:]]', ' ', 'g')), 200))
+    returning id into t_id;
+  return t_id;
+end $$;
+-- something changing hands (taken off first, if its owner is wearing it)
+create or replace function public.move_item(p_from uuid, p_to uuid, p_kind text, p_item text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from owned_items where user_id = p_from and kind = p_kind and item = p_item;
+  insert into owned_items (user_id, kind, item, how) values (p_to, p_kind, p_item, 'trade') on conflict do nothing;
+  if p_kind = 'deco' then update profiles set decoration = '' where id = p_from and decoration = p_item;
+  elsif p_kind = 'font' then update profiles set name_font = '' where id = p_from and name_font = p_item;
+  elsif p_kind = 'effect' then update profiles set effect = '' where id = p_from and effect = p_item;
+  elsif p_kind = 'frame' then update profiles set frame = '' where id = p_from and frame = p_item; end if;
+end $$;
+-- the other person's answer: accepting checks both sides still have it all, then swaps everything at once
+create or replace function public.answer_trade(p_trade uuid, p_accept boolean) returns text
+language plpgsql security definer set search_path = public as $$
+declare t trades%rowtype; a bigint; b bigint; x jsonb;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  select * into t from trades where id = p_trade for update;
+  if not found or t.to_user <> auth.uid() then raise exception 'There''s no such trade for you.'; end if;
+  if t.status <> 'open' then raise exception 'That trade is over already.'; end if;
+  if not coalesce(p_accept, false) then update trades set status = 'declined', decided_at = now() where id = p_trade; return 'declined'; end if;
+  perform wallet_open(t.from_user); perform wallet_open(t.to_user);
+  perform 1 from wallets where user_id in (t.from_user, t.to_user) order by user_id for update;
+  select balance into a from wallets where user_id = t.from_user;
+  select balance into b from wallets where user_id = t.to_user;
+  if a < t.give_bux or b < t.want_bux or not owns_all(t.from_user, t.give_items) or not owns_all(t.to_user, t.want_items) then
+    update trades set status = 'failed', decided_at = now(), why = case when a < t.give_bux then 'They don''t have those Datbux any more.' when b < t.want_bux then 'You don''t have enough Datbux.'
+      when not owns_all(t.from_user, t.give_items) then 'They don''t have what they offered any more.' else 'You don''t have what they asked for any more.' end where id = p_trade;
+    return 'failed';
+  end if;
+  update wallets set balance = balance - t.give_bux + t.want_bux, sent = sent + t.give_bux, received = received + t.want_bux, updated_at = now() where user_id = t.from_user;
+  update wallets set balance = balance - t.want_bux + t.give_bux, sent = sent + t.want_bux, received = received + t.give_bux, updated_at = now() where user_id = t.to_user;
+  for x in select * from jsonb_array_elements(t.give_items) loop perform move_item(t.from_user, t.to_user, x->>'k', x->>'i'); end loop;
+  for x in select * from jsonb_array_elements(t.want_items) loop perform move_item(t.to_user, t.from_user, x->>'k', x->>'i'); end loop;
+  if t.give_bux <> t.want_bux then
+    insert into datbux_log (user_id, amount, kind, note, other) values (t.from_user, t.want_bux - t.give_bux, 'trade', 'Trade', t.to_user), (t.to_user, t.give_bux - t.want_bux, 'trade', 'Trade', t.from_user);
+  end if;
+  update trades set status = 'done', decided_at = now() where id = p_trade;
+  return 'done';
+end $$;
+create or replace function public.cancel_trade(p_trade uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update trades set status = 'cancelled', decided_at = now() where id = p_trade and from_user = auth.uid() and status = 'open';
+  if not found then raise exception 'There''s no trade of yours waiting like that.'; end if;
+end $$;
+-- you can wear something from the Shop that's free, or that you have
+create or replace function public.shop_ok(p_kind text, p_item text, p_user uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(p_item, '') = '' or not exists (select 1 from shop_items s where s.kind = p_kind and s.item = p_item and s.price > 0)
+    or exists (select 1 from owned_items o where o.user_id = p_user and o.kind = p_kind and o.item = p_item);
+$$;
+create or replace function public.guard_shop() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.decoration is distinct from old.decoration and not shop_ok('deco', new.decoration, new.id) then raise exception 'Get that decoration in the Shop first.'; end if;
+  if new.name_font is distinct from old.name_font and not shop_ok('font', new.name_font, new.id) then raise exception 'Get that font in the Shop first.'; end if;
+  if new.effect is distinct from old.effect and not shop_ok('effect', new.effect, new.id) then raise exception 'Get that effect in the Shop first.'; end if;
+  if new.frame is distinct from old.frame and not shop_ok('frame', new.frame, new.id) then raise exception 'Get that frame in the Shop first.'; end if;
+  return new;
+end $$;
+drop trigger if exists guard_shop on public.profiles;
+create trigger guard_shop before update on public.profiles for each row execute function public.guard_shop();
 -- what someone's badges are made of (earned by doing things, as on Discord), for whoever may see their profile: the
 -- messages they wrote, reactions, threads, friends, the biggest server they run, since when they boost, their events,
 -- Quests, connections, games on their Board, Game Time, and whether they help run Fluentdat
 create or replace function public.badge_stats(p_user uuid) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
-declare x profile_extras%rowtype;
+declare x profile_extras%rowtype; pr profiles%rowtype; wal wallets%rowtype;
 begin
   if auth.uid() is null or p_user is null or not knows(p_user) then raise exception 'You can only see the badges of people you know.'; end if;
   select * into x from profile_extras where id = p_user;
+  select * into pr from profiles where id = p_user;
+  select * into wal from wallets where user_id = p_user;
   return jsonb_build_object(
+    'servers', (select count(*) from server_members where user_id = p_user), 'owns', (select count(*) from servers where owner = p_user),
+    'files', (select count(*) from messages where author = p_user and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0)
+      + (select count(*) from dm_messages where author = p_user and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0),
+    'pins', (select count(*) from pins where pinned_by = p_user), 'calls', (select count(*) from calls where started_by = p_user),
+    'bot_cmds', (select count(*) from messages where author = p_user and bot),
+    'said42', exists (select 1 from messages where author = p_user and not bot and trim(text) = '42') or exists (select 1 from dm_messages where author = p_user and not bot and trim(text) = '42'),
+    'said_hello', exists (select 1 from messages where author = p_user and not bot and text ilike '%hello fluentdat%') or exists (select 1 from dm_messages where author = p_user and not bot and text ilike '%hello fluentdat%'),
+    'self_react', exists (select 1 from reactions r join messages m on m.id = r.message_id where r.user_id = p_user and r.active and m.author = p_user)
+      or exists (select 1 from reactions r join dm_messages m on m.id = r.message_id where r.user_id = p_user and r.active and m.author = p_user),
+    'emoji_kinds', (select count(distinct emoji) from reactions where user_id = p_user and active),
+    'night', (select count(*) from messages where author = p_user and not bot and extract(hour from created_at at time zone 'utc') < 4)
+      + (select count(*) from dm_messages where author = p_user and not bot and extract(hour from created_at at time zone 'utc') < 4),
+    'want', coalesce((select sum(jsonb_array_length(v->'g')) from jsonb_array_elements(x.widgets) v where v->>'t' = 'want'), 0),
+    'looks', jsonb_build_object('avatar', coalesce(pr.avatar, '') <> '', 'banner', coalesce(pr.banner, '') <> '', 'bio', coalesce(pr.about, '') <> '', 'pronouns', coalesce(pr.pronouns, '') <> '',
+      'theme', coalesce(pr.theme1, '') <> '' or coalesce(pr.theme2, '') <> '', 'style', coalesce(pr.name_font, '') <> '' or coalesce(pr.name_effect, '') <> '',
+      'deco', coalesce(pr.decoration, '') <> '', 'effect', coalesce(pr.effect, '') <> '', 'frame', coalesce(pr.frame, '') <> '', 'plate', coalesce(pr.plate, '') <> '',
+      'bubble', coalesce(pr.bubble, '') <> '', 'tag', coalesce(pr.tag, '') <> ''),
+    'bux_earned', coalesce(wal.earned, 0), 'bux_spent', coalesce(wal.spent, 0), 'bux_sent', coalesce(wal.sent, 0),
+    'sent_people', (select count(distinct other) from datbux_log where user_id = p_user and kind = 'send'),
+    'trades', (select count(*) from trades where status = 'done' and (from_user = p_user or to_user = p_user)),
+    'owned', (select count(*) from owned_items where user_id = p_user), 'tasks', (select count(*) from task_claims where user_id = p_user),
+    'streak', (select coalesce(max(n), 0) from (select count(*) n from (select d, d - (row_number() over (order by d))::int g
+      from (select period::date d from task_claims where user_id = p_user and task = 'daily-checkin') q) r group by g) z)) || jsonb_build_object(
     'since', (select created_at from profiles where id = p_user),
     'messages', (select count(*) from messages where author = p_user and not bot) + (select count(*) from dm_messages where author = p_user and not bot),
     'reactions', (select count(*) from reactions where user_id = p_user and active),
@@ -1843,6 +2169,12 @@ grant execute on function public.is_member(uuid), public.is_admin(uuid), public.
   public.threads_info(uuid), public.search_messages(uuid, text, uuid, text, uuid, timestamptz, int), public.search_dm(uuid, text, uuid, text, timestamptz, int),
   public.set_nick(uuid, uuid, text), public.set_server_privacy(uuid, boolean), public.badge_stats(uuid) to authenticated;
 grant execute on function public.setup_version() to anon, authenticated;
+revoke all on function public.wallet_open(uuid), public.task_count(uuid, text, timestamptz), public.move_item(uuid, uuid, text, text),
+  public.owns_all(uuid, jsonb), public.owns_any(uuid, jsonb), public.shop_ok(text, text, uuid) from public, anon, authenticated;
+revoke all on function public.task_progress(), public.claim_task(text), public.buy_item(text, text), public.send_datbux(uuid, int, text),
+  public.offer_trade(uuid, int, jsonb, int, jsonb, text), public.answer_trade(uuid, boolean), public.cancel_trade(uuid) from public, anon;
+grant execute on function public.task_progress(), public.claim_task(text), public.buy_item(text, text), public.send_datbux(uuid, int, text),
+  public.offer_trade(uuid, int, jsonb, int, jsonb, text), public.answer_trade(uuid, boolean), public.cancel_trade(uuid) to authenticated;
 revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text), public.verify_connection(uuid, jsonb) from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================
@@ -1858,9 +2190,24 @@ revoke all on public.profiles, public.servers, public.server_members, public.cat
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
   public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras,
   public.server_events, public.event_interest, public.pins, public.server_boosts from anon;
+-- (Datbux: looked at only; changed only by its functions)
+grant select on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades to authenticated;
+revoke insert, update, delete, truncate on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades from authenticated;
+revoke all on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
+
+-- the Shop's prices in Datbux: decorations and name fonts (a few free; a Quest's reward is free once you've done it)
+insert into public.shop_items (kind, item, price) values
+  ('deco', 'halo', 150), ('deco', 'flame', 300), ('deco', 'catears', 200), ('deco', 'leaves', 200), ('deco', 'gears', 250), ('deco', 'glitch', 300), ('deco', 'hearts', 250),
+  ('deco', 'sparkle', 0), ('deco', 'rainbow', 0), ('deco', 'neon', 0), ('deco', 'orbit', 0), ('deco', 'crown', 0),
+  ('font', 'tempo', 100), ('font', 'sakura', 100), ('font', 'jelly', 150), ('font', 'modern', 150), ('font', 'medieval', 200), ('font', 'pixel', 200),
+  ('font', 'vampyre', 250), ('font', 'chunky', 150), ('font', 'comic', 0), ('font', 'script', 200), ('font', 'type', 0), ('font', 'marker', 150), ('font', 'elegant', 250)
+on conflict (kind, item) do update set price = excluded.price;
+-- (what people wore before there was anything to pay with stays theirs)
+insert into public.owned_items (user_id, kind, item, how) select id, 'deco', decoration, 'grant' from public.profiles where decoration ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
+insert into public.owned_items (user_id, kind, item, how) select id, 'font', name_font, 'grant' from public.profiles where name_font ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
 
 -- ===================== live updates =====================
 do $$ begin
@@ -1887,6 +2234,9 @@ do $$ begin
     begin alter publication supabase_realtime add table public.event_interest; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.pins; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.server_boosts; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.wallets; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.owned_items; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.trades; exception when duplicate_object then null; end;
   end if;
 end $$;
 

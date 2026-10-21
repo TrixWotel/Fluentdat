@@ -12,10 +12,11 @@ let resuming = SupabaseStore.pending();      // picking up a Supabase sign-in: s
 let resumeError = '';
 const listeners = new Set();
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
-// new messages and calls (Supabase only): the app listens here from the start, before any sign-in is picked up
-const messageListeners = new Set(), callListeners = new Set();
+// new messages, calls and trades (Supabase only): the app listens here from the start, before any sign-in is picked up
+const messageListeners = new Set(), callListeners = new Set(), tradeListeners = new Set();
 SupabaseStore.onMessage((e) => { if (impl === SupabaseStore) for (const cb of messageListeners) try { cb(e); } catch {} });
 SupabaseStore.onCall((e) => { if (impl === SupabaseStore) for (const cb of callListeners) try { cb(e); } catch {} });
+SupabaseStore.onTrade((e) => { if (impl === SupabaseStore) for (const cb of tradeListeners) try { cb(e); } catch {} });
 for (const s of [LocalStore, GitHubStore, SupabaseStore]) s.onChange(() => {
   // signed out somewhere else (another tab), or the session ran out: back to this browser's own data
   if (s === SupabaseStore && impl === SupabaseStore && !SupabaseStore.account()) { impl = LocalStore; emit(); return; }
@@ -44,6 +45,7 @@ const fallback = {
   leaveServer: async () => {},
   // (these need people to share with, so they come with signing in)
   memberColor: () => '',
+  memberIcon: () => null,
   roles: () => [],
   addRole: async () => { throw new Error(SIGN_IN + 'make roles.'); },
   updateRole: () => {}, removeRole: () => {},
@@ -80,6 +82,11 @@ const fallback = {
   canDecorate: () => true,
   canFrame: () => true,
   canWikiGames: () => true,
+  // (Datbux signed out: the app keeps a wallet of its own in this browser; sending and trading come with signing in)
+  canBux: () => false, onTrade: () => () => {}, wallet: () => null, priceOf: () => null, owns: () => false, ownedList: () => [], trades: () => [],
+  ownedBy: async () => [], buxLog: async () => [],
+  sendBux: async () => { throw new Error(SIGN_IN + 'send Datbux.'); },
+  offerTrade: async () => { throw new Error(SIGN_IN + 'trade.'); },
   // (badges here are worked out by the app from what's in this browser)
   badgeStats: async () => null, badgeStatsNow: () => null,
   // a server's events: these come with signing in
@@ -194,6 +201,7 @@ export const Store = new Proxy({}, {
       case 'onChange': return (cb) => { listeners.add(cb); return () => listeners.delete(cb); };
       case 'onMessage': return (cb) => { messageListeners.add(cb); return () => messageListeners.delete(cb); };
       case 'onCall': return (cb) => { callListeners.add(cb); return () => callListeners.delete(cb); };
+      case 'onTrade': return (cb) => { tradeListeners.add(cb); return () => tradeListeners.delete(cb); };
       case 'kind': return impl === SupabaseStore ? 'supabase' : impl === GitHubStore ? 'github' : 'local';
       case 'signedIn': return impl !== LocalStore;
       case 'configured': return SupabaseStore.configured();
