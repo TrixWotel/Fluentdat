@@ -11,6 +11,9 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Profile connections (GitHub, Steam, TikTok, YouTube, Twitch, Spotify, X and more; the accounts you sign in with show as verified), a Board of game widgets with real covers, a Wishlist, and "Playing …" under your name
 * A Shop (free avatar decorations, profile effects and nameplates) and Quests that unlock some of them
 * Server extras like Discord's: Browse Channels, Game Servers (Minecraft ones say whether they're up), a Server Guide and Events, each switched on by the server's admins
+* Threads, pinned messages, and search for a whole server or DM (words, from:, in:, has: links, files, pictures or videos)
+* Text and code files shown in the chat (their first lines, which open out, wrap, or show the whole file)
+* Discord's server menu: Server Boost (free; levels hold more emoji and stickers), App Directory, Privacy Settings (DMs from a server's people), per-server nicknames, and choosing which roles show separately in the member list
 * Direct messages and group DMs (up to 10 people), with friend requests you accept or ignore
 * Voice and video calls in DMs and groups (they ring), voice channels you just join, and screen sharing
 * Voice messages, pictures and files (dragged in, pasted or picked, sent when you press Enter)

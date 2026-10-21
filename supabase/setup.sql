@@ -307,6 +307,21 @@ create table if not exists public.server_events (
   check (ends_at is null or ends_at > starts_at)
 );
 create index if not exists server_events_by_server on public.server_events (server_id, starts_at);
+-- pinned messages: in a channel (or thread) or a DM, up to 50 each
+create table if not exists public.pins (
+  place uuid not null,
+  message_id uuid not null,
+  pinned_by uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  pinned_at timestamptz not null default now(),
+  primary key (place, message_id)
+);
+-- who boosts a server (free here): 2 boosts make level 1, 7 level 2, 14 level 3, and each level holds more emoji and stickers
+create table if not exists public.server_boosts (
+  server_id uuid not null references public.servers (id) on delete cascade,
+  user_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (server_id, user_id)
+);
 -- who's interested in an event
 create table if not exists public.event_interest (
   event_id uuid not null references public.server_events (id) on delete cascade,
@@ -342,6 +357,17 @@ alter table public.profile_extras add column if not exists quests jsonb not null
 alter table public.servers add column if not exists features jsonb not null default '{}'::jsonb;
 alter table public.servers add column if not exists guide jsonb not null default '{}'::jsonb;
 alter table public.servers add column if not exists game_servers jsonb not null default '[]'::jsonb;
+-- threads (Discord's): a channel of its own under a text channel (maybe started from one of its messages), sharing its
+-- category, so its permissions are the channel's; archived ones leave the list until someone posts again
+alter table public.channels add column if not exists parent_id uuid references public.channels (id) on delete cascade;
+alter table public.channels add column if not exists starter uuid;
+alter table public.channels add column if not exists created_by uuid references public.profiles (id) on delete set null;
+alter table public.channels add column if not exists archived boolean not null default false;
+create index if not exists channels_by_parent on public.channels (parent_id);
+create unique index if not exists channels_one_thread_a_message on public.channels (starter) where starter is not null;
+-- your name in a server (Edit Per-server Profile), and whether its people can start DMs with you (Privacy Settings)
+alter table public.server_members add column if not exists nick text not null default '';
+alter table public.server_members add column if not exists allow_dms boolean not null default true;
 alter table public.servers add column if not exists tag text not null default '';
 alter table public.servers add column if not exists tag_badge text not null default '';
 alter table public.servers add column if not exists tag_color text not null default '';
@@ -389,6 +415,12 @@ alter table public.profiles add constraint profiles_style check ((theme1 = '' or
   and tag ~ '^[A-Za-z0-9]{0,4}$' and tag_badge ~ '^[a-z0-9]{0,20}$' and (tag_color = '' or tag_color ~ '^#[0-9a-fA-F]{6}$'));
 alter table public.profiles drop constraint if exists profiles_cosmetics;
 alter table public.profiles add constraint profiles_cosmetics check (decoration ~ '^[a-z0-9-]{0,24}$' and effect ~ '^[a-z0-9-]{0,24}$');
+alter table public.channels drop constraint if exists channels_kind_check;
+alter table public.channels add constraint channels_kind_check check (kind in ('text', 'voice', 'thread'));
+alter table public.channels drop constraint if exists channels_thread_shape;
+alter table public.channels add constraint channels_thread_shape check ((kind = 'thread') = (parent_id is not null));
+alter table public.server_members drop constraint if exists server_members_nick;
+alter table public.server_members add constraint server_members_nick check (char_length(nick) <= 32 and nick !~ '[[:cntrl:]]');
 alter table public.servers drop constraint if exists servers_shapes;
 alter table public.servers add constraint servers_shapes check ((img = '' or img ~ '^data:image/(png|jpeg|webp|gif);base64,')
   and (banner = '' or banner ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,'));
@@ -668,6 +700,33 @@ create policy "say you're interested" on public.event_interest for insert to aut
 drop policy if exists "take it back" on public.event_interest;
 create policy "take it back" on public.event_interest for delete to authenticated using (user_id = auth.uid());
 
+-- pinned messages: seen by whoever can read the place; pinned and unpinned by whoever may manage its messages (anyone
+-- in a DM)
+create or replace function public.pin_ok(p_place uuid, p_message uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select case when exists (select 1 from channels where id = p_place)
+    then exists (select 1 from messages where id = p_message and channel_id = p_place) and chan_can(p_place, 'manage_messages')
+    else in_dm(p_place) and exists (select 1 from dm_messages where id = p_message and dm_id = p_place) end;
+$$;
+alter table public.pins enable row level security;
+drop policy if exists "see the pins where you read" on public.pins;
+create policy "see the pins where you read" on public.pins for select to authenticated using (place_ok(place));
+drop policy if exists "pin" on public.pins;
+create policy "pin" on public.pins for insert to authenticated with check (pinned_by = auth.uid() and pin_ok(place, message_id));
+drop policy if exists "unpin" on public.pins;
+create policy "unpin" on public.pins for delete to authenticated using (pin_ok(place, message_id));
+-- boosts: the server's members see them; each boosts (and stops) for themselves
+alter table public.server_boosts enable row level security;
+drop policy if exists "members see the boosts" on public.server_boosts;
+create policy "members see the boosts" on public.server_boosts for select to authenticated using (is_member(server_id));
+drop policy if exists "boost" on public.server_boosts;
+create policy "boost" on public.server_boosts for insert to authenticated with check (user_id = auth.uid() and is_member(server_id));
+drop policy if exists "stop boosting" on public.server_boosts;
+create policy "stop boosting" on public.server_boosts for delete to authenticated using (user_id = auth.uid());
+-- whoever started a thread can remove it (admins and channel managers can anyway)
+drop policy if exists "remove your threads" on public.channels;
+create policy "remove your threads" on public.channels for delete to authenticated using (kind = 'thread' and created_by = auth.uid());
+
 -- a profile's Connections, widgets and activity: seen by whoever can see the profile, kept by its owner
 alter table public.profile_extras enable row level security;
 drop policy if exists "see the extras of people you know" on public.profile_extras;
@@ -857,8 +916,12 @@ begin
     end if;
     return new;
   end if;
-  if TG_TABLE_NAME = 'server_emoji' and (select count(*) from server_emoji where server_id = new.server_id) >= 50 then raise exception 'A server holds up to 50 emoji.'; end if;
-  if TG_TABLE_NAME = 'server_stickers' and (select count(*) from server_stickers where server_id = new.server_id) >= 30 then raise exception 'A server holds up to 30 stickers.'; end if;
+  if TG_TABLE_NAME = 'server_emoji' and (select count(*) from server_emoji where server_id = new.server_id) >= (array[50, 100, 150, 250])[boost_level(new.server_id) + 1] then
+    raise exception 'This server holds up to % emoji (boosting it holds more).', (array[50, 100, 150, 250])[boost_level(new.server_id) + 1];
+  end if;
+  if TG_TABLE_NAME = 'server_stickers' and (select count(*) from server_stickers where server_id = new.server_id) >= (array[30, 45, 60, 90])[boost_level(new.server_id) + 1] then
+    raise exception 'This server holds up to % stickers (boosting it holds more).', (array[30, 45, 60, 90])[boost_level(new.server_id) + 1];
+  end if;
   return new;
 end $$;
 drop trigger if exists guard_expression on public.server_emoji;
@@ -961,6 +1024,11 @@ create or replace function public.guard_place() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   if TG_OP = 'UPDATE' and new.server_id is distinct from old.server_id then raise exception 'A channel or category stays in its server.'; end if;
+  -- (a thread belongs to a text channel in the same server, and keeps that channel's category)
+  if TG_TABLE_NAME = 'channels' and to_jsonb(new) ->> 'kind' = 'thread' and not exists (select 1 from channels p
+     where p.id = (to_jsonb(new) ->> 'parent_id')::uuid and p.server_id = new.server_id and p.kind = 'text' and p.category_id is not distinct from (to_jsonb(new) ->> 'category_id')::uuid) then
+    raise exception 'A thread belongs to a text channel in its server.';
+  end if;
   -- (to_jsonb: a category has no category_id of its own, and plpgsql can't name a field a row doesn't have)
   if TG_TABLE_NAME = 'channels' and to_jsonb(new) ->> 'category_id' is not null
      and not exists (select 1 from categories where id = (to_jsonb(new) ->> 'category_id')::uuid and server_id = new.server_id) then
@@ -1008,6 +1076,7 @@ create or replace function public.drop_reactions() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   delete from reactions where message_id = old.id;
+  delete from pins where message_id = old.id;
   return old;
 end $$;
 drop trigger if exists drop_reactions on public.messages;
@@ -1205,8 +1274,122 @@ begin
 end $$;
 drop trigger if exists drop_tag_on_leave on public.server_members;
 create trigger drop_tag_on_leave after delete on public.server_members for each row execute function public.drop_tag_on_leave();
+-- leaving a server takes your boost with you
+create or replace function public.drop_boost_on_leave() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from server_boosts where server_id = old.server_id and user_id = old.user_id;
+  return old;
+end $$;
+drop trigger if exists drop_boost_on_leave on public.server_members;
+create trigger drop_boost_on_leave after delete on public.server_members for each row execute function public.drop_boost_on_leave();
+-- up to 50 pins in a place
+create or replace function public.guard_pin() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (select count(*) from pins where place = new.place) >= 50 then raise exception 'A conversation holds up to 50 pinned messages.'; end if;
+  new.pinned_at := now();
+  return new;
+end $$;
+drop trigger if exists guard_pin on public.pins;
+create trigger guard_pin before insert on public.pins for each row execute function public.guard_pin();
+-- a message in an archived thread brings it back
+create or replace function public.thread_wakes() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  update channels set archived = false where id = new.channel_id and archived;
+  return new;
+end $$;
+drop trigger if exists thread_wakes on public.messages;
+create trigger thread_wakes after insert on public.messages for each row execute function public.thread_wakes();
 
 -- ===================== actions (the only ways to do these) =====================
+-- a server's boost level: 2 boosts make level 1, 7 level 2, 14 level 3 (as on Discord)
+create or replace function public.boost_level(p_server uuid) returns int
+language sql stable security definer set search_path = public as $$
+  select case when n >= 14 then 3 when n >= 7 then 2 when n >= 2 then 1 else 0 end from (select count(*) n from server_boosts where server_id = p_server) x;
+$$;
+-- start a thread in a text channel (from one of its messages, or on its own): whoever may post there may
+create or replace function public.create_thread(p_parent uuid, p_message uuid, p_name text) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare c channels%rowtype; t uuid; nm text := left(trim(regexp_replace(coalesce(p_name, ''), '[[:cntrl:]]', '', 'g')), 60);
+begin
+  select * into c from channels where id = p_parent;
+  if not found or c.kind <> 'text' then raise exception 'Threads start in a text channel.'; end if;
+  if not chan_can(p_parent, 'send') then raise exception 'You can''t post in that channel.'; end if;
+  if nm = '' then raise exception 'Give the thread a name.'; end if;
+  if p_message is not null then
+    if not exists (select 1 from messages where id = p_message and channel_id = p_parent) then raise exception 'That message isn''t in this channel.'; end if;
+    select id into t from channels where starter = p_message;
+    if t is not null then return t; end if;
+  end if;
+  insert into channels (server_id, category_id, name, kind, position, parent_id, starter, created_by)
+    values (c.server_id, c.category_id, nm, 'thread', 0, p_parent, p_message, auth.uid()) returning id into t;
+  return t;
+end $$;
+-- rename or archive a thread: whoever started it, or whoever may manage its channels
+create or replace function public.edit_thread(p_thread uuid, p_name text, p_archived boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare c channels%rowtype;
+begin
+  select * into c from channels where id = p_thread and kind = 'thread';
+  if not found or not chan_can(p_thread, 'view') then raise exception 'There''s no such thread.'; end if;
+  if c.created_by is distinct from auth.uid() and not chan_can(p_thread, 'manage_channels') then
+    raise exception 'Only whoever started the thread, or someone who manages channels, can change it.';
+  end if;
+  update channels set name = coalesce(nullif(left(trim(regexp_replace(coalesce(p_name, ''), '[[:cntrl:]]', '', 'g')), 60), ''), name), archived = coalesce(p_archived, archived) where id = p_thread;
+end $$;
+-- a channel's threads: how many messages each has, and when the last came (only what you can read is counted)
+create or replace function public.threads_info(p_channel uuid) returns table (id uuid, messages bigint, last_at timestamptz)
+language sql stable set search_path = public as $$
+  select t.id, count(m.id), max(m.created_at) from channels t left join messages m on m.channel_id = t.id where t.parent_id = p_channel group by t.id;
+$$;
+-- searching a server's messages you can read (Search "<server>"): words in the text or a file's name, from someone,
+-- with a file, picture, video or link, in a channel (and its threads); newest first, 25 at a time (before a time, for more)
+create or replace function public.search_messages(p_server uuid, p_query text default '', p_from uuid default null, p_has text default '',
+  p_in uuid default null, p_before timestamptz default null, p_limit int default 25) returns setof public.messages
+language sql stable set search_path = public as $$
+  select m.* from messages m join channels c on c.id = m.channel_id,
+    (select '%' || replace(replace(replace(trim(coalesce(p_query, '')), '\', '\\'), '%', '\%'), '_', '\_') || '%' as pat) q
+  where c.server_id = p_server and (p_in is null or m.channel_id = p_in or c.parent_id = p_in) and (p_from is null or m.author = p_from)
+    and (trim(coalesce(p_query, '')) = '' or m.text ilike q.pat or exists (select 1 from jsonb_array_elements(case when jsonb_typeof(m.files) = 'array' then m.files else '[]'::jsonb end) f where f ->> 'name' ilike q.pat))
+    and (coalesce(p_has, '') = '' or (p_has = 'link' and m.text ~* 'https?://')
+      or (p_has in ('file', 'image', 'video') and exists (select 1 from jsonb_array_elements(case when jsonb_typeof(m.files) = 'array' then m.files else '[]'::jsonb end) f where p_has = 'file' or f ->> 'kind' = p_has)))
+    and (p_before is null or m.created_at < p_before)
+  order by m.created_at desc limit least(greatest(coalesce(p_limit, 25), 1), 50);
+$$;
+-- …and a DM's (or group's)
+create or replace function public.search_dm(p_dm uuid, p_query text default '', p_from uuid default null, p_has text default '',
+  p_before timestamptz default null, p_limit int default 25) returns setof public.dm_messages
+language sql stable set search_path = public as $$
+  select m.* from dm_messages m, (select '%' || replace(replace(replace(trim(coalesce(p_query, '')), '\', '\\'), '%', '\%'), '_', '\_') || '%' as pat) q
+  where m.dm_id = p_dm and (p_from is null or m.author = p_from)
+    and (trim(coalesce(p_query, '')) = '' or m.text ilike q.pat or exists (select 1 from jsonb_array_elements(case when jsonb_typeof(m.files) = 'array' then m.files else '[]'::jsonb end) f where f ->> 'name' ilike q.pat))
+    and (coalesce(p_has, '') = '' or (p_has = 'link' and m.text ~* 'https?://')
+      or (p_has in ('file', 'image', 'video') and exists (select 1 from jsonb_array_elements(case when jsonb_typeof(m.files) = 'array' then m.files else '[]'::jsonb end) f where p_has = 'file' or f ->> 'kind' = p_has)))
+    and (p_before is null or m.created_at < p_before)
+  order by m.created_at desc limit least(greatest(coalesce(p_limit, 25), 1), 50);
+$$;
+-- your name in one server (Edit Per-server Profile); admins can change members', and the owner anyone's
+create or replace function public.set_nick(p_server uuid, p_user uuid, p_nick text) returns void
+language plpgsql security definer set search_path = public as $$
+declare r text; me text;
+begin
+  select role into r from server_members where server_id = p_server and user_id = p_user;
+  if r is null then raise exception 'They aren''t in that server.'; end if;
+  if p_user is distinct from auth.uid() then
+    select role into me from server_members where server_id = p_server and user_id = auth.uid();
+    if not (me = 'owner' or (me = 'admin' and r = 'member')) then raise exception 'Only admins can change other people''s nicknames (and only the owner an admin''s).'; end if;
+  end if;
+  update server_members set nick = left(trim(regexp_replace(coalesce(p_nick, ''), '[[:cntrl:]]', '', 'g')), 32) where server_id = p_server and user_id = p_user;
+end $$;
+-- whether a server's people can start DMs with you (Privacy Settings)
+create or replace function public.set_server_privacy(p_server uuid, p_allow_dms boolean) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update server_members set allow_dms = coalesce(p_allow_dms, true) where server_id = p_server and user_id = auth.uid();
+  if not found then raise exception 'You aren''t in that server.'; end if;
+end $$;
 -- a new server: you own it, with a Text Channels category and #general
 create or replace function public.create_server(p_name text, p_icon text default '')
 returns uuid language plpgsql security definer set search_path = public as $$
@@ -1279,9 +1462,9 @@ begin
   select id into d from dms where user_a = a and user_b = b;
   if d is not null then return d; end if;
   if blocked_with(p_other) then raise exception 'You can''t message them.'; end if;
-  if not (exists (select 1 from server_members x join server_members y on x.server_id = y.server_id where x.user_id = auth.uid() and y.user_id = p_other)
+  if not (exists (select 1 from server_members x join server_members y on x.server_id = y.server_id where x.user_id = auth.uid() and y.user_id = p_other and y.allow_dms)
           or exists (select 1 from friends where owner = p_other and friend = auth.uid())) then
-    raise exception 'You can message people you share a server with, or who have added you as a friend.';
+    raise exception 'You can message people you share a server with (unless they''ve turned that off), or who have added you as a friend.';
   end if;
   insert into dms (user_a, user_b) values (a, b) returning id into d;
   return d;
@@ -1593,7 +1776,9 @@ grant execute on function public.is_member(uuid), public.is_admin(uuid), public.
   public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean),
   public.is_app_admin(), public.blocked_with(uuid), public.dm_blocked(uuid), public.expression_ok(text),
   public.place_ok(uuid), public.message_in(uuid, uuid), public.react_ok(uuid), public.react_with(uuid, uuid, text), public.cat_can(uuid, text), public.chan_can(uuid, text),
-  public.can_make_events(uuid) to authenticated;
+  public.can_make_events(uuid), public.pin_ok(uuid, uuid), public.boost_level(uuid), public.create_thread(uuid, uuid, text), public.edit_thread(uuid, text, boolean),
+  public.threads_info(uuid), public.search_messages(uuid, text, uuid, text, uuid, timestamptz, int), public.search_dm(uuid, text, uuid, text, timestamptz, int),
+  public.set_nick(uuid, uuid, text), public.set_server_privacy(uuid, boolean) to authenticated;
 revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text), public.verify_connection(uuid, jsonb) from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================
@@ -1603,12 +1788,12 @@ grant select, insert, update, delete on public.profiles, public.servers, public.
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
   public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras,
-  public.server_events, public.event_interest to authenticated;
+  public.server_events, public.event_interest, public.pins, public.server_boosts to authenticated;
 revoke all on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
   public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras,
-  public.server_events, public.event_interest from anon;
+  public.server_events, public.event_interest, public.pins, public.server_boosts from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
@@ -1636,6 +1821,8 @@ do $$ begin
     begin alter publication supabase_realtime add table public.category_perms; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.server_events; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.event_interest; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.pins; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.server_boosts; exception when duplicate_object then null; end;
   end if;
 end $$;
 

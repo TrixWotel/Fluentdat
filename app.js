@@ -116,7 +116,8 @@ const BUTTONS = {
   dms: ['Direct messages', [['findDM', 'Find or start a conversation', 'search'], ['newDM', 'New DM (+)', 'plus']]],
   dmNav: ['Direct messages list', [['friendsNav', 'Friends', 'users'], ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quests', 'quest']]],
   serverTop: ['Server sidebar', [['browse', 'Browse Channels', 'browse'], ['games', 'Game Servers', 'game'], ['guide', 'Server Guide', 'signpost'], ['events', 'Events', 'calendar']]],
-  top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['search', 'Search', 'search'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['saved', 'Bookmarks', 'bookmark']]],
+  top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['threads', 'Threads', 'thread'],
+    ['notify', 'Notification settings', 'bell'], ['pins', 'Pinned messages', 'pin'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['search', 'Search', 'search'], ['saved', 'Bookmarks', 'bookmark']]],
   composer: ['Message box', [['upload', 'Attach files and pictures', 'plusCircle'], ['input', 'The text box', 'edit', 1], ['emoji', 'Emoji', 'smile'], ['sticker', 'Stickers', 'sticker'], ['voice', 'Voice message', 'mic'], ['send', 'Send', 'send']]],
   panel: ['User panel', [['me', 'You (avatar and name)', 'user', 1], ['mic', 'Mute', 'mic'], ['deafen', 'Deafen', 'headphones'], ['settings', 'User Settings', 'gear', 1]]],
 };
@@ -207,14 +208,15 @@ const saveClosed = () => { try { localStorage.setItem('fluentdat.closedDMs', JSO
 function ensureSelection() {
   const svs = Store.servers();
   if (!serverId || !svs.some((s) => s.id === serverId)) serverId = svs[0] ? svs[0].id : null;
-  const chans = serverId ? Store.channels(serverId) : [];
-  if (!channelId || !chans.some((c) => c.id === channelId)) channelId = firstChannel(serverId);
+  if (!channelId || !openable(serverId, channelId)) channelId = firstChannel(serverId);
 }
+// (a place you can have open in a server: one of its channels, or a thread in one)
+const openable = (sv, id) => { const c = id && Store.channel(id); return !!c && Store.channels(sv).some((x) => x.id === (c.kind === 'thread' ? c.parent : c.id)); };
 const collapsed = new Set();
 function firstChannel(sv) { if (!sv) return null; const c = Store.channels(sv).find((x) => x.kind === 'text') || Store.channels(sv)[0]; return c ? c.id : null; }
 // the channel you last had open in each server (Discord takes you back there)
 const lastChan = (() => { try { return JSON.parse(localStorage.getItem('fluentdat.lastChannel')) || {}; } catch { return {}; } })();
-const lastChannel = (sv) => (lastChan[sv] && Store.channels(sv).some((c) => c.id === lastChan[sv] && c.kind !== 'voice') ? lastChan[sv] : firstChannel(sv));
+const lastChannel = (sv) => (lastChan[sv] && openable(sv, lastChan[sv]) && Store.channel(lastChan[sv]).kind !== 'voice' ? lastChan[sv] : firstChannel(sv));
 const rememberChannel = (sv, c) => { lastChan[sv] = c; try { localStorage.setItem('fluentdat.lastChannel', JSON.stringify(lastChan)); } catch {} };
 // what you're writing in each conversation: attachments waiting to go, and the message you're replying to
 const drafts = new Map();
@@ -289,11 +291,13 @@ function goToMessage(t) {
 // how much a place may tell you: its own setting, else its category's, else its server's, else everything ('all',
 // 'mentions' or 'none')
 const catOf = (place) => (Store.channel ? (Store.channel(place) || {}).category : null) || null;
+const parentOf = (place) => (Store.channel ? (Store.channel(place) || {}).parent : null) || null;
 function levelFor(place, sv) {
-  for (const p of [place, catOf(place), sv]) { const v = p ? Store.placeSettings(p).notify : 'default'; if (v && v !== 'default') return v; }
+  for (const p of [place, parentOf(place), catOf(place), sv]) { const v = p ? Store.placeSettings(p).notify : 'default'; if (v && v !== 'default') return v; }
   return 'all';
 }
-const mutedHere = (place, sv) => Store.placeSettings(place).muted || (!!catOf(place) && Store.placeSettings(catOf(place)).muted) || (!!sv && Store.placeSettings(sv).muted);
+const mutedHere = (place, sv) => Store.placeSettings(place).muted || (!!parentOf(place) && Store.placeSettings(parentOf(place)).muted)
+  || (!!catOf(place) && Store.placeSettings(catOf(place)).muted) || (!!sv && Store.placeSettings(sv).muted);
 // a server where you hide muted channels (right-click the channel list)
 const HIDE_MUTED = 'fluentdat.hideMuted';
 const hideMuted = new Set((() => { try { const v = JSON.parse(localStorage.getItem(HIDE_MUTED)); return Array.isArray(v) ? v : []; } catch { return []; } })());
@@ -301,12 +305,14 @@ function toggleHideMuted(sv) {
   if (hideMuted.has(sv)) hideMuted.delete(sv); else hideMuted.add(sv);
   try { localStorage.setItem(HIDE_MUTED, JSON.stringify([...hideMuted])); } catch {}
 }
+// someone's name where you are: their nickname in this server, if they set one
+const nameIn = (u, sv = view === 'server' ? serverId : null) => (sv && u && u.id && Store.nickIn(sv, u.id)) || (u && u.name) || '';
 // what you may do in a channel (a category's permissions; always yes outside servers and signed out)
 const mayIn = (perm, place = view === 'server' ? channelId : null) => !place || view !== 'server' || Store.can(place, perm);
 function serverUnread(sv) {
   let unread = 0, mentions = 0;
   if (Store.kind !== 'supabase') return { unread, mentions };
-  for (const c of Store.channels(sv)) {
+  for (const c of Store.channels(sv).flatMap((x) => [x, ...Store.threads(x.id)])) {
     const u = Store.unread(c.id);
     if (levelFor(c.id, sv) !== 'none') mentions += u.mentions;
     if (!mutedHere(c.id, sv)) unread += u.unread;
@@ -539,6 +545,15 @@ function renderSide() {
       }
       body.append(swapIn(rowc, k++));
       for (const v of voiceHere) body.append(swapIn(voiceMember(v, c), k++));
+      // (its threads: the ones going lately, ones with something new, and the one you're in; archived ones stay in Threads)
+      if (c.kind === 'text') for (const t of Store.threads(c.id)) {
+        const tu = Store.unread(t.id), on = t.id === channelId && !pageNow(), last = Math.max(tu.last || 0, (Store.threadInfo(t.id) || {}).last || 0);
+        const tping = !on && tu.mentions > 0 && levelFor(t.id, serverId) !== 'none', tfresh = !on && tu.unread > 0 && !mutedHere(t.id, serverId);
+        if (!on && !tfresh && !tping && (t.archived || isCollapsed || (last && Date.now() - last > 7 * 864e5))) continue;
+        body.append(swapIn(el('button', { className: 'chan thread-row' + (on ? ' on' : '') + (tfresh || tping ? ' unread' : ''), onclick: () => openChannel(t),
+          oncontextmenu: (e) => { e.preventDefault(); threadCtx(t, e.clientX, e.clientY); } }, el('span', { className: 'thread-branch' }), el('span', { className: 'nm' }, t.name),
+          tping ? el('span', { className: 'mbadge' }, tu.mentions > 99 ? '99+' : String(tu.mentions)) : null), k++));
+      }
     }
   }
 }
@@ -681,6 +696,13 @@ function renderTop() {
   else {
     const c = Store.channel(channelId);
     if (!c) parts.push(el('span', {}, Store.syncState().loading ? 'Loading…' : 'Fluentdat'));
+    else if (c.kind === 'thread') {
+      const up = Store.channel(c.parent);
+      parts.push(el('button', { className: 'thr-up', title: up ? `Back to #${up.name}` : 'Back', onclick: () => { if (up) openChannel(up); } }, icon('hash', 18), el('span', {}, up ? up.name : '')),
+        el('span', { className: 'thr-sep' }, icon('chevR', 14)), el('span', { className: 'hash' }, icon('thread')), el('span', { className: 'ttl' }, c.name),
+        ...(c.archived ? [el('span', { className: 'chip' }, 'Archived')] : []));
+      where = 'thread';
+    }
     else {
       parts.push(el('span', { className: 'hash' }, icon(c.kind === 'voice' ? 'volume' : 'hash')), el('span', { className: 'ttl' }, c.name));
       if (c.topic) parts.push(el('span', { className: 'topic-sep' }), el('button', { className: 'topic', title: plainText(c.topic, fmtCtx()), onclick: () => showTopic(c) }, plainText(c.topic, fmtCtx())));
@@ -688,22 +710,34 @@ function renderTop() {
     }
   }
   parts.push(el('span', { className: 'spacer' }));
-  const talk = where === 'dm' || where === 'group', inThis = call && call.place === dmId;
+  const talk = where === 'dm' || where === 'group', inThis = call && call.place === dmId, live = Store.kind === 'supabase', text = where && where !== 'voice';
   if (where) for (const id of ordered('top')) {
     if (!shown(id)) continue;
     if (id === 'call' && talk) { const b = act('phone', inThis ? 'In this call' : 'Start Voice Call', () => (inThis ? goToCall() : startDMCall(false)), inThis); b.classList.toggle('incall', !!inThis); parts.push(b); }
     else if (id === 'video' && talk) parts.push(act('video', 'Start Video Call', () => (inThis ? call.api.setCam(true) : startDMCall(true))));
     else if (id === 'addPeople' && talk && Store.kind === 'supabase') parts.push(act('usersPlus', 'Add Friends to DM', () => addPeopleFlow()));
-    else if (id === 'search') parts.push(searchOpen ? searchField : act('search', 'Search', () => { searchOpen = true; renderTop(); searchField.focus(); }));
+    else if (id === 'threads' && live && (where === 'channel' || where === 'thread')) { const b = act('thread', 'Threads', (e) => { e.stopPropagation(); showThreads(b); }, pop && pop.classList.contains('thr')); parts.push(b); }
+    else if (id === 'notify' && live && text) {
+      const pl = placeNow(), muted = talk ? Store.placeSettings(pl).muted : mutedHere(pl, serverId);
+      const b = act(muted ? 'bellOff' : 'bell', 'Notification Settings', (e) => { e.stopPropagation(); const r = b.getBoundingClientRect();
+        menu([muteItem(pl, talk ? 'Conversation' : where === 'thread' ? 'Thread' : 'Channel'), talk ? null : notifyItem(pl, false, where === 'thread' ? 'Channel' : (Store.channel(pl) || {}).category ? 'Category' : 'Server')], r.right - 230, r.bottom + 6); }, muted);
+      parts.push(b);
+    }
+    else if (id === 'pins' && live && text) { const b = act('pin', 'Pinned Messages', (e) => { e.stopPropagation(); showPins(b); }, pop && pop.classList.contains('pins')); parts.push(b); }
+    else if (id === 'search' && text) {
+      const sv = view === 'server' ? Store.server(serverId) : null;
+      searchField.placeholder = sv ? `Search ${sv.name}` : 'Search';
+      syncFind(); parts.push(findBox);
+    }
     else if (id === 'dmProfile' && where === 'dm') parts.push(act('user', prefs.dmPanel ? 'Hide User Profile' : 'Show User Profile', () => { prefs.dmPanel = !prefs.dmPanel; savePrefs(); renderAll(); }, prefs.dmPanel));
-    else if (id === 'members' && (where === 'channel' || where === 'voice' || where === 'group')) parts.push(act('users', showMembers ? 'Hide Member List' : 'Show Member List', () => { showMembers = !showMembers; renderAll(); }, showMembers));
-    else if (id === 'saved') { const b = act('bookmark', 'Bookmarks', (e) => { e.stopPropagation(); showBookmarks(b); }, pop && pop.classList.contains('bm')); b.classList.toggle('has', bookmarks().length > 0); parts.push(b); }
+    else if (id === 'members' && (where === 'channel' || where === 'voice' || where === 'group' || where === 'thread')) parts.push(act('users', showMembers ? 'Hide Member List' : 'Show Member List', () => { showMembers = !showMembers; renderAll(); }, showMembers));
+    else if (id === 'saved') { const b = act('bookmark', 'Bookmarks', (e) => { e.stopPropagation(); showBookmarks(b); }, pop && pop.classList.contains('saved')); b.classList.toggle('has', bookmarks().length > 0); parts.push(b); }
   }
   top.replaceChildren(...parts);
 }
 // your bookmarks (Bookmark Message), newest first: click one to go to it
 function showBookmarks(anchor) {
-  if (pop && pop.classList.contains('bm')) { closePop(); return renderTop(); }
+  if (pop && pop.classList.contains('saved')) { closePop(); return renderTop(); }
   closePop();
   const list = el('div', { className: 'bm-list' });
   const draw = () => {
@@ -716,18 +750,88 @@ function showBookmarks(anchor) {
       : [el('div', { className: 'bm-empty' }, el('div', { className: 'bm-empty-ic' }, icon('bookmark', 30)), el('b', {}, 'No bookmarks yet'), el('span', {}, 'Right-click a message (or its ⋯) and pick Bookmark Message to keep it here.'))]));
   };
   draw();
-  pop = el('div', { className: 'pop bm' }, el('div', { className: 'bm-title' }, icon('bookmark', 18), el('b', {}, 'Bookmarks'), el('small', {}, 'Kept in this browser')), list);
+  pop = el('div', { className: 'pop bm saved' }, el('div', { className: 'bm-title' }, icon('bookmark', 18), el('b', {}, 'Bookmarks'), el('small', {}, 'Kept in this browser')), list);
   document.body.append(pop);
   const r = anchor.getBoundingClientRect();
   pop.style.left = Math.max(12, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 12)) + 'px'; pop.style.top = r.bottom + 8 + 'px';
   renderTop();
 }
-// searching the conversation you're looking at (what's loaded of it)
-const searchField = el('input', { className: 'top-search', type: 'search', placeholder: 'Search' });
+// ---------- search (Search "<server>", like Discord's): Enter finds messages and files in everything you can read there,
+// listed beside the conversation. from:name, in:#channel and has:link|file|image|video narrow it ----------
+const searchField = el('input', { className: 'top-search', type: 'search', placeholder: 'Search', spellcheck: false });
 searchField.setAttribute('aria-label', 'Search messages');
-searchField.addEventListener('input', () => { searchQ = searchField.value.trim(); renderContent(); });
-searchField.addEventListener('keydown', (e) => { if (e.key === 'Escape') { searchField.value = ''; searchQ = ''; searchOpen = false; searchField.blur(); renderTop(); renderContent(); } });
-searchField.addEventListener('blur', () => { if (!searchField.value) { searchOpen = false; setTimeout(renderTop, 0); } });
+searchField.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); if (searchField.value.trim()) runFinder(searchField.value); }
+  if (e.key === 'Escape') { searchField.value = ''; searchField.blur(); closeFinder(); }
+});
+searchField.addEventListener('search', () => { if (!searchField.value) closeFinder(); });
+searchField.addEventListener('blur', () => setTimeout(renderTop, 0));
+// (the box keeps its place while you type: a magnifier, or a cross to clear the search while one's open)
+const findBox = el('label', { className: 'top-find' }, searchField, icon('search', 15),
+  el('button', { className: 'top-find-x', type: 'button', title: 'Clear Search', onmousedown: (e) => e.preventDefault(), onclick: (e) => { e.preventDefault(); searchField.value = ''; closeFinder(); } }, icon('x', 15)));
+const syncFind = () => findBox.classList.toggle('on', finder.open);
+const finder = { open: false, scope: null, raw: '', has: '', results: [], loading: false, error: '', more: false, seq: 0 };
+const finderScope = () => (view === 'server' && serverId ? 's:' + serverId : view === 'home' && dmId ? 'd:' + dmId : null);
+const finderOn = () => finder.open && finder.scope === finderScope();
+function parseFind(raw) {
+  const out = { q: [], from: null, in: null, has: '' };
+  for (const w of String(raw).trim().split(/\s+/)) {
+    const m = w.match(/^(from|in|has):(.+)$/i);
+    if (!m) { out.q.push(w); continue; }
+    const k = m[1].toLowerCase(), v = m[2].replace(/^[@#]/, '').toLowerCase();
+    if (k === 'has') out.has = { links: 'link', link: 'link', file: 'file', files: 'file', image: 'image', images: 'image', picture: 'image', video: 'video', videos: 'video' }[v] || '';
+    else if (k === 'in' && view === 'server') { const c = Store.channels(serverId).find((x) => x.name.toLowerCase() === v); if (c) out.in = c.id; else out.q.push(w); }
+    else if (k === 'from') {
+      const people = view === 'server' ? Store.members(serverId) || [] : ((Store.dmInfo && Store.dmInfo(dmId)) || {}).people || [];
+      const p = people.find((x) => [x.name, x.login, x.nick].some((n) => String(n || '').toLowerCase() === v)) || people.find((x) => [x.name, x.login, x.nick].some((n) => String(n || '').toLowerCase().startsWith(v)));
+      if (p) out.from = p.id; else out.q.push(w);
+    }
+  }
+  return { ...out, q: out.q.join(' ') };
+}
+async function runFinder(raw, { more = false } = {}) {
+  const scope = finderScope(); if (!scope) return;
+  const p = parseFind(raw), seq = ++finder.seq;
+  Object.assign(finder, { open: true, scope, raw, loading: true, error: '' });
+  if (!more) { finder.results = []; finder.more = false; if (p.has) finder.has = p.has; }
+  renderAll(); syncFind();
+  try {
+    const o = { q: p.q, from: p.from, in: p.in, has: finder.has || p.has, before: more && finder.results.length ? finder.results[finder.results.length - 1].ts : null };
+    const got = view === 'server' ? await Store.searchServer(serverId, o) : await Store.searchDM(dmId, o);
+    if (seq !== finder.seq) return;
+    finder.results = more ? finder.results.concat(got) : got; finder.more = got.length >= 25;
+  } catch (e) { if (seq === finder.seq) finder.error = String((e && e.message) || e); }
+  if (seq === finder.seq) { finder.loading = false; finder.q = p.q; renderAll(); }
+}
+function closeFinder() { if (!finder.open) return; finder.open = false; finder.results = []; finder.has = ''; finder.seq++; renderAll(); syncFind(); }
+// a word, lit up wherever it is in a bit of text
+function markText(text, q) {
+  const out = el('span'), k = String(q || '').trim().toLowerCase();
+  if (!k) { out.textContent = text; return out; }
+  const low = text.toLowerCase(); let i = 0, j;
+  while ((j = low.indexOf(k, i)) >= 0) { out.append(text.slice(i, j), el('mark', {}, text.slice(j, j + k.length))); i = j + k.length; }
+  out.append(text.slice(i));
+  return out;
+}
+function finderPanel() {
+  const n = finder.results.length, head = el('div', { className: 'fd-head' }, el('b', {}, finder.loading && !n ? 'Searching…' : `${n}${finder.more ? '+' : ''} Result${n === 1 ? '' : 's'}`),
+    el('span', { style: 'flex:1' }), el('button', { className: 'fd-x', title: 'Close (Esc)', onclick: () => { searchField.value = ''; closeFinder(); } }, icon('x', 16)));
+  const chips = el('div', { className: 'fd-chips' }, ...[['', 'All'], ['link', 'Links'], ['file', 'Files'], ['image', 'Images'], ['video', 'Videos']].map(([v, l]) =>
+    el('button', { className: 'fd-chip' + (finder.has === v ? ' on' : ''), onclick: () => { finder.has = v; runFinder(finder.raw); } }, l)));
+  const rows = []; let last = null;
+  for (const m of finder.results) {
+    if (m.place !== last) { last = m.place; const c = Store.channel(m.place); if (c) rows.push(el('div', { className: 'fd-place' }, icon(c.kind === 'thread' ? 'thread' : c.kind === 'voice' ? 'volume' : 'hash', 14), el('span', {}, c.name))); }
+    const files = (m.files || []).filter((f) => f && f.name);
+    rows.push(el('button', { className: 'fd-row', onclick: () => goToMessage({ dm: view === 'home', place: m.place, id: m.id }) }, avatarEl(m.user, { size: 32 }),
+      el('div', { className: 'fd-body' }, el('div', { className: 'fd-meta' }, el('b', {}, nameIn(m.user)), el('time', {}, when(m.ts, true))),
+        m.text ? el('div', { className: 'fd-text' }, markText(plainText(m.text, fmtCtx()).slice(0, 400), finder.q)) : null,
+        files.length ? el('div', { className: 'fd-files' }, ...files.map((f) => el('span', {}, icon(f.kind === 'image' ? 'image' : f.kind === 'video' ? 'video' : 'file', 13), markText(f.name, finder.q)))) : null)));
+  }
+  return el('div', { className: 'fd' }, head, chips, el('div', { className: 'fd-list' },
+    ...(finder.error ? [el('div', { className: 'fd-empty' }, finder.error)] : rows.length ? rows : [el('div', { className: 'fd-empty' }, el('div', { className: 'fp-empty-ic' }, icon('search', 30)),
+      finder.loading ? 'Searching…' : 'Nothing found. Try other words, or from:name, in:#channel, has:file.')]),
+    finder.more ? el('button', { className: 'btn small fd-more', disabled: finder.loading, onclick: () => runFinder(finder.raw, { more: true }) }, finder.loading ? 'Loading…' : 'Load More') : null));
+}
 
 
 
@@ -1136,6 +1240,80 @@ function svGameServers(sv, redraw) {
     box, el('div', { className: 'row', style: 'justify-content:flex-start;margin-top:18px' }, el('button', { className: 'btn primary', onclick: save }, 'Save Changes'))];
 }
 
+// ---------- threads (Discord's): a conversation of its own under a text channel, maybe started from one of its messages ----------
+const canThread = () => Store.kind === 'supabase' && view === 'server' && (Store.channel(channelId) || {}).kind === 'text' && mayIn('send');
+const threadOf = (id) => (view === 'server' ? Store.threads(channelId).find((t) => t.starter === id) : null) || null;
+async function threadFlow(m) {
+  const t = threadOf(m.id); if (t) return openChannel(t);
+  const name = await ask({ title: 'Create Thread', label: 'Thread Name', value: plainText(m.text || '', fmtCtx()).replace(/\s+/g, ' ').slice(0, 40) || 'New Thread', ok: 'Create Thread', max: 60 });
+  if (!name) return;
+  const id = await attempt(() => Store.createThread(channelId, m.id, name)); if (!id) return;
+  const nt = Store.channel(id); if (nt) openChannel(nt);
+}
+async function newThread(parent) {
+  const name = await ask({ title: 'Create Thread', label: 'Thread Name', placeholder: 'What’s it about?', ok: 'Create Thread', max: 60 }); if (!name) return;
+  const id = await attempt(() => Store.createThread(parent, null, name)); if (!id) return;
+  const nt = Store.channel(id); if (nt) openChannel(nt);
+}
+const canEditThread = (t) => Store.canManage(t.server) || t.by === Store.myId() || Store.can(t.id, 'manage_channels');
+function threadCtx(t, x, y) {
+  const can = canEditThread(t);
+  menu([markReadItem([t.id]), { label: 'Open Thread', icon: 'thread', action: () => openChannel(t) },
+    '-', muteItem(t.id, 'Thread'), notifyItem(t.id, false, 'Channel'),
+    can && '-', can && { label: 'Rename Thread', icon: 'edit', action: async () => { const n = await ask({ title: 'Rename Thread', label: 'Thread Name', value: t.name, max: 60 }); if (n) attempt(() => Store.editThread(t.id, { name: n })); } },
+    can && { label: t.archived ? 'Unarchive Thread' : 'Archive Thread', icon: 'folder', action: () => attempt(() => Store.editThread(t.id, { archived: !t.archived })) },
+    can && { label: 'Delete Thread', icon: 'trash', danger: true, action: async () => {
+      if (!(await confirmBox({ title: 'Delete Thread', text: `Delete “${t.name}” and its messages? This can’t be undone.`, ok: 'Delete Thread', danger: true }))) return;
+      const up = Store.channel(t.parent); Store.removeChannel(t.id); if (channelId === t.id && up) openChannel(up); else renderAll();
+    } },
+    '-', { label: 'Copy Link', icon: 'link', action: () => copyText(`${location.origin}${location.pathname}#channel=${t.id}`, 'Link copied.') },
+    { label: 'Copy Thread ID', icon: 'id', action: () => copyText(t.id, 'Thread ID copied.') }], x, y);
+}
+// the Threads button: this channel's threads (active, then archived), and starting one
+function showThreads(anchor) {
+  if (pop && pop.classList.contains('thr')) { closePop(); return renderTop(); }
+  closePop();
+  const here = Store.channel(channelId), parent = here && here.kind === 'thread' ? Store.channel(here.parent) : here; if (!parent) return;
+  const all = Store.threads(parent.id), last = (t) => Math.max((Store.threadInfo(t.id) || {}).last || 0, Store.unread(t.id).last || 0);
+  const row = (t) => { const info = Store.threadInfo(t.id); return el('div', { className: 'bm-row', role: 'button', tabIndex: 0, onclick: () => { closePop(); openChannel(t); },
+    oncontextmenu: (e) => { e.preventDefault(); threadCtx(t, e.clientX, e.clientY); } }, el('span', { className: 'thr-ic' }, icon('thread', 18)),
+    el('div', { className: 'bm-body' }, el('div', { className: 'bm-head' }, el('b', {}, t.name)),
+      el('div', { className: 'bm-text' }, [info ? plural(info.count, 'message') : '', last(t) ? 'last ' + when(last(t), true).toLowerCase() : '', t.by ? 'by ' + person(t.by).name : ''].filter(Boolean).join(' · ')))); };
+  const active = all.filter((t) => !t.archived).sort((a, b) => last(b) - last(a)), old = all.filter((t) => t.archived);
+  const list = el('div', { className: 'bm-list' }, ...(all.length ? [active.length ? el('div', { className: 'thr-h' }, 'Active Threads') : null, ...active.map(row),
+    old.length ? el('div', { className: 'thr-h' }, 'Archived') : null, ...old.map(row)].filter(Boolean)
+    : [el('div', { className: 'bm-empty' }, el('div', { className: 'bm-empty-ic' }, icon('thread', 30)), el('b', {}, 'No threads yet'), el('span', {}, 'Start one from a message (hover it, or right-click), or here.'))]));
+  pop = el('div', { className: 'pop bm thr' }, el('div', { className: 'bm-title' }, icon('thread', 18), el('b', {}, 'Threads'), el('small', {}, '#' + parent.name),
+    mayIn('send', parent.id) ? el('button', { className: 'btn small primary thr-new', onclick: () => { closePop(); newThread(parent.id); } }, 'Create') : null), list);
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.max(12, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 12)) + 'px'; pop.style.top = r.bottom + 8 + 'px';
+  Store.threadsInfo(parent.id); renderTop();
+}
+// the Pinned Messages button: the place's pins, newest first (click one to go to it)
+async function showPins(anchor) {
+  if (pop && pop.classList.contains('pins')) { closePop(); return renderTop(); }
+  closePop();
+  const place = placeNow(), dm = view === 'home', list = el('div', { className: 'bm-list' }, el('div', { className: 'bm-empty' }, 'Loading…'));
+  const box = el('div', { className: 'pop bm pins' }, el('div', { className: 'bm-title' }, icon('pin', 18), el('b', {}, 'Pinned Messages')), list);
+  pop = box; document.body.append(box);
+  const r = anchor.getBoundingClientRect();
+  box.style.left = Math.max(12, Math.min(r.right - box.offsetWidth, innerWidth - box.offsetWidth - 12)) + 'px'; box.style.top = r.bottom + 8 + 'px';
+  renderTop();
+  const draw = async () => {
+    const msgs = await Store.pinnedMessages(place).catch(() => []), can = Store.canPin(place);
+    if (!box.isConnected) return;
+    list.replaceChildren(...(msgs.length ? msgs.map((m) => el('div', { className: 'bm-row', role: 'button', tabIndex: 0, onclick: () => { closePop(); goToMessage({ dm, place, id: m.id }); } },
+      avatarEl(m.user, { size: 32 }),
+      el('div', { className: 'bm-body' }, el('div', { className: 'bm-head' }, el('b', {}, nameIn(m.user)), el('time', {}, when(m.ts, true))),
+        el('div', { className: 'bm-text' }, plainText(m.text || '', fmtCtx()) || ((m.files || []).length ? (m.files[0].name || 'An attachment') : '(a sticker)'))),
+      can ? el('button', { className: 'bm-x', title: 'Unpin', onclick: async (e) => { e.stopPropagation(); if ((await attempt(() => Store.pin(place, m.id, false))) !== null) { draw(); renderContent(); } } }, icon('x', 14)) : null))
+      : [el('div', { className: 'bm-empty' }, el('div', { className: 'bm-empty-ic' }, icon('pin', 30)), el('b', {}, 'No pinned messages yet'),
+        el('span', {}, can ? 'Right-click a message (or its ⋯) and pick Pin Message to keep it here.' : 'When someone pins a message, it shows up here.'))]));
+  };
+  draw();
+}
+
 // ---------- server tags beside names ----------
 function tagFor(u) { return u && u.tag && u.tag.text ? u.tag : null; }
 // the card that opens from someone's tag: its server, and wearing the tag yourself
@@ -1219,7 +1397,8 @@ function fillMessages(wrap, msgs, place, start) {
     const to = m.reply ? all.find((x) => x.id === m.reply) : null;
     const key = 'm:' + m.id + ':' + JSON.stringify([m.text, m.sticker && String(m.sticker.data || m.sticker.path || m.sticker).length, (m.files || []).map((f) => f.path || f.name), !!m.sending, cont, style,
       m.user.name, m.user.color, String(m.user.avatar || '').length, nameColor(m.user), to ? [to.user.name, to.text, !!to.files] : m.reply, m.forwarded, emojiIndex.size, bookmarked(m.id),
-      m.user.style, m.user.tag, reactable]);
+      m.user.style, m.user.tag, reactable, Store.pinned(place, m.id), view === 'server' && m.user.id ? Store.nickIn(serverId, m.user.id) : '',
+      view === 'server' ? (threadOf(m.id) || {}).name : '', view === 'server' ? (Store.threadInfo((threadOf(m.id) || {}).id) || {}).count : 0]);
     const [node, made] = put(key, () => messageNode(m, cont, to, all, ctx));
     if (made && !first && !wrap._seen.has(m.id)) node.classList.add('arrive');
     wrap._seen.add(m.id);
@@ -1236,12 +1415,13 @@ const STICKER_PATH = /^[0-9a-f-]{36}\/sticker\/[0-9a-f-]{36}\.(png|gif|webp|jpg)
 function messageNode(m, cont, to, all, ctx) {
   const body = el('div', { className: 'body' }), full = new Date(m.ts).toLocaleString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   if (!cont) {
-    const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, m.user.name);
+    const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, nameIn(m.user));
     nm.style.setProperty('--who', nameColor(m.user));
     styledName(nm, m.user, { roleColored: view === 'server' && !!(serverId && m.user.id && Store.memberColor(serverId, m.user.id)) });
     const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : '');
     const tg = tagChipFor(m.user); if (tg) meta.append(tg);
     meta.append(el('span', { className: 'when', title: full }, when(m.ts, true)));
+    if (Store.pinned(placeNow(), m.id)) meta.append(el('span', { className: 'pin-mark', title: 'Pinned' }, icon('pin', 12)));
     body.append(meta);
   }
   // (a forwarded message's own content sits in a box that says where it came from, as on Discord)
@@ -1275,12 +1455,16 @@ function messageNode(m, cont, to, all, ctx) {
     reacting ? el('button', { title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)) : null,
     !m.sending && mayIn('send') ? el('button', { title: 'Reply', onclick: (e) => { e.stopPropagation(); startReply(m); } }, icon('reply', 18)) : null,
     !m.sending && Store.kind === 'supabase' ? el('button', { title: 'Forward', onclick: (e) => { e.stopPropagation(); forwardFlow(m); } }, icon('forward', 18)) : null,
+    !m.sending && canThread() ? el('button', { title: threadOf(m.id) ? 'Open Thread' : 'Create Thread', onclick: (e) => { e.stopPropagation(); threadFlow(m); } }, icon('thread', 18)) : null,
     el('button', { title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); messageCtx(m, r.left - 200, r.bottom + 4); } }, icon('more', 18)));
   const node = el('div', { className: 'msg' + (cont ? ' cont' : '') + (pingsMe(m, all) ? ' pinged' : '') + (m.sending ? ' sending' : '') + (bookmarked(m.id) ? ' saved' : ''),
     oncontextmenu: (e) => { if (e.target.closest('a')) return; e.preventDefault(); messageCtx(m, e.clientX, e.clientY); } });
   node.dataset.id = m.id;
   if (m.reply) node.append(replyLine(m, to, ctx));
   node.append(cont ? el('span', { className: 'gut', title: full }, when(m.ts)) : av, body, tools);
+  const t = view === 'server' ? threadOf(m.id) : null;          // (a thread started from it: its name and how many messages)
+  if (t) { const info = Store.threadInfo(t.id); body.append(el('button', { className: 'thread-chip', onclick: (e) => { e.stopPropagation(); openChannel(t); } }, icon('thread', 16), el('b', {}, t.name),
+    el('span', {}, info ? plural(info.count, 'Message') : 'See Thread'), icon('chevR', 14))); }
   return node;
 }
 // the line above a reply: who it answers, and the start of what they said (click to jump there)
@@ -1342,7 +1526,37 @@ function videoNode(f) {
   Store.fileUrl(f.path).then((u) => { v.src = u; }, () => {});
   return el('div', { className: 'vid' }, v);
 }
+// a text or code file (Discord's): its first lines, which open out; wrap, the whole file, copy and download
+const TEXT_FILE = /\.(txt|md|markdown|py|js|mjs|cjs|ts|tsx|jsx|json|csv|tsv|log|html?|css|scss|c|h|cpp|hpp|cc|java|kts?|rs|go|rb|php|sh|bash|zsh|bat|ps1|ya?ml|toml|ini|cfg|conf|xml|sql|lua|cs|swift|r|ino|gcode|vue|dart|gradle)$/i;
+const isTextFile = (f) => TEXT_FILE.test(f.name || '') && (f.size || 0) <= 1048576 && (f.path || f.data);
+function textPreview(f) {
+  const code = el('pre', { className: 'tp-code' }, 'Loading…'), card = el('div', { className: 'tp' });
+  let text = null, open = false, wrap = false;
+  const toggle = el('button', { className: 'tp-btn tp-toggle', title: 'Show More', onclick: () => { open = !open; draw(); } }, icon('chevD', 18));
+  function draw() {
+    if (text == null) return;
+    const all = text.split('\n'), shown = open ? all.slice(0, 600) : all.slice(0, 6);
+    code.textContent = shown.join('\n') + ((open ? all.length > 600 : all.length > 6) ? '\n…' : '');
+    toggle.classList.toggle('open', open); toggle.title = open ? 'Show Less' : 'Show More'; toggle.hidden = all.length <= 6;
+    code.classList.toggle('wrap', wrap);
+  }
+  const get = async () => { const u = await attempt(() => Store.downloadUrl(f.path, f.name || 'file')); if (u) { const a = el('a', { href: u, download: f.name || '', rel: 'noopener' }); document.body.append(a); a.click(); a.remove(); } };
+  const whole = () => {
+    const pre = el('pre', { className: 'tp-full' + (wrap ? ' wrap' : '') }); pre.textContent = text || '';
+    const m = modal({ title: f.name || 'file', sub: fileSize(f.size || 0), cls: 'tp-dlg', body: [pre], actions: [el('button', { className: 'btn', onclick: () => copyText(text || '', 'Copied.') }, icon('copy', 15), 'Copy'),
+      f.path ? el('button', { className: 'btn', onclick: get }, icon('download', 15), 'Download') : null, el('span', { style: 'flex:1' }), el('button', { className: 'btn primary', onclick: () => m.close() }, 'Close')] });
+  };
+  card.append(code, el('div', { className: 'tp-foot' }, toggle, el('div', { className: 'tp-what' }, el('b', {}, f.name || 'file'), el('small', {}, fileSize(f.size || 0))),
+    el('button', { className: 'tp-btn', title: 'Wrap Long Lines', onclick: () => { wrap = !wrap; draw(); } }, icon('code', 18)),
+    el('button', { className: 'tp-btn', title: 'View Whole File', onclick: whole }, icon('expand', 18)),
+    el('button', { className: 'tp-btn', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu([f.path ? { label: 'Download', icon: 'download', action: get } : null,
+      { label: 'Copy Text', icon: 'copy', action: () => copyText(text || '', 'Copied.') }, { label: 'View Whole File', icon: 'expand', action: whole }], r.right - 190, r.bottom + 4); } }, icon('more', 18))));
+  (f.data ? fetch(f.data) : Store.fileUrl(f.path).then((u) => fetch(u, { credentials: 'omit' }))).then((r) => r.text())
+    .then((t) => { text = t.slice(0, 400000); draw(); }, () => { code.textContent = 'Couldn’t load a preview. Download it instead.'; });
+  return card;
+}
 function fileCard(f) {
+  if (isTextFile(f)) return textPreview(f);
   const get = async () => { const u = await attempt(() => Store.downloadUrl(f.path, f.name || 'file')); if (u) { const a = el('a', { href: u, download: f.name || '', rel: 'noopener' }); document.body.append(a); a.click(); a.remove(); } };
   return el('div', { className: 'filecard' }, el('span', { className: 'fc-ic' }, icon('file', 30)),
     el('div', { className: 'fc-what' }, el('button', { className: 'fc-name', onclick: get, title: 'Download' }, f.name || 'file'), el('div', { className: 'fc-size' }, fileSize(f.size || 0))),
@@ -1405,6 +1619,12 @@ function startHeader() {
         live ? el('button', { className: 'btn small', onclick: () => (blocked ? unblockUser(u) : blockUser(u)) }, blocked ? 'Unblock' : 'Block') : null)) };
   }
   const c = Store.channel(channelId); if (!c) return null;
+  if (c.kind === 'thread') {                    // (a thread: its name, who started it, and the message it started from)
+    const up = Store.channel(c.parent), st = c.starter ? (Store.messages(c.parent) || []).find((x) => x.id === c.starter) : null, by = c.by ? person(c.by) : null;
+    return { key: ['t', c.id, c.name, !!st, by && by.name].join(':'), make: () => el('div', { className: 'start thr-start' }, el('div', { className: 'start-ic' }, icon('thread', 40)), el('h2', {}, c.name),
+      el('p', {}, by ? ['Started by ', el('b', {}, by.name)] : 'A thread', up ? [' in ', el('button', { className: 'link-btn', onclick: () => openChannel(up) }, '#' + up.name)] : null, '.'),
+      st ? el('div', { className: 'thr-quote' }, avatarEl(st.user, { size: 24 }), el('b', {}, nameIn(st.user)), el('span', {}, plainText(st.text || '', fmtCtx()).slice(0, 300) || '(an attachment or sticker)')) : null) };
+  }
   const name = (c.kind === 'voice' ? '' : '#') + c.name;
   return { key: 'c:' + c.id + name, make: () => el('div', { className: 'start' }, el('div', { className: 'start-ic' }, icon(c.kind === 'voice' ? 'volume' : 'hash', 40)), el('h2', {}, `Welcome to ${name}!`), el('p', {}, `This is the start of the ${name} channel.`)) };
 }
@@ -1445,7 +1665,8 @@ function renderContent() {
   const msgs = view === 'home' ? Store.dm(dmId) : Store.messages(channelId);
   // stay where you were reading, unless you were at the bottom already or this is a different conversation
   const key = view + ':' + place, same = content.dataset.key === key;
-  if (key !== searchKey) { searchKey = key; if (searchQ || searchOpen) { searchQ = ''; searchOpen = false; searchField.value = ''; renderTop(); } }
+  if (key !== searchKey) { searchKey = key; if (searchQ || searchOpen) { searchQ = ''; searchOpen = false; renderTop(); } }
+  if (finder.open && finder.scope !== finderScope()) { finder.open = false; searchField.value = ''; }
   if (!same) newLine = { place, at: Store.kind === 'supabase' && Store.unread(place).unread ? Store.readAt(place) : 0 };      // (the red NEW line: where you'd read up to)
   if (!same && keepUnread && keepUnread !== place) keepUnread = null;
   const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 80, was = content.scrollTop;
@@ -1456,7 +1677,10 @@ function renderContent() {
   content.dataset.key = key;
   if (Store.kind === 'supabase' && document.visibilityState === 'visible' && document.hasFocus() && keepUnread !== place && Store.unread(place).unread) Store.markRead(place);
   const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
-  const name = view === 'home' ? (d ? (d.kind === 'group' ? dmName(d) : '@' + d.user.name) : '') : (ch.kind === 'voice' ? '' : '#') + ch.name;
+  const name = view === 'home' ? (d ? (d.kind === 'group' ? dmName(d) : '@' + d.user.name) : '') : (ch.kind === 'voice' || ch.kind === 'thread' ? '' : '#') + ch.name;
+  // (how many messages its threads have: fetched when you come to the channel, or it gets a new thread; kept up live after)
+  const tkey = view === 'server' && ch && ch.kind === 'text' ? ch.id + ':' + Store.threads(ch.id).map((t) => t.id).join() : '';
+  if (content.dataset.thr !== tkey) { content.dataset.thr = tkey; if (tkey) Store.threadsInfo(ch.id); }
   $('#input').placeholder = 'Message ' + name;
   composer.hidden = false;
   renderComposer();
@@ -1539,6 +1763,8 @@ function memberList() {
 }
 function renderMembers() {
   const box = $('#members');
+  box.classList.toggle('finding', finderOn());
+  if (finderOn()) { box.dataset.dmp = ''; box.replaceChildren(finderPanel()); return; }
   const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null;
   if (g && g.kind === 'group') {
     if (!showMembers) return box.replaceChildren();
@@ -1559,8 +1785,9 @@ function renderMembers() {
   const all = memberList(), isOn = (m) => m.status && m.status !== 'offline' && m.status !== 'invisible';
   const online = all.filter(isOn), offline = all.filter((m) => !isOn(m));
   const member = (m) => {
-    const nmText = el('span', { className: 'nmt' }, m.name);
-    const nm = el('div', { className: 'nm' }, nmText, tagChipFor(m), m.role === 'owner' ? roleMark('crown', 'Server owner') : m.role === 'admin' ? roleMark('shield', 'Admin') : null);
+    const nmText = el('span', { className: 'nmt' }, m.nick || m.name);
+    const nm = el('div', { className: 'nm' }, nmText, tagChipFor(m), m.role === 'owner' ? roleMark('crown', 'Server owner') : m.role === 'admin' ? roleMark('shield', 'Admin') : null,
+      m.booster ? el('span', { className: 'boost-gem', title: 'Server Booster' }, icon('gem', 13)) : null);
     nm.style.setProperty('--who', safeColor(m.roleColor || m.color, 'var(--text)'));
     styledName(nmText, m, { roleColored: !!m.roleColor });
     const who = el('div', { className: 'who' }, nm), pl = playingNow(m.playing) ? m.playing : null;
@@ -1571,7 +1798,15 @@ function renderMembers() {
       oncontextmenu: (e) => { e.preventDefault(); memberCtx(m, e.clientX, e.clientY); } }, avatarEl(m), who);
     return plateOn(row, m.plate);
   };
-  const grp = (title, list) => list.length ? [el('div', { className: 'mem-cat' }, `${title} — ${list.length}`), ...list.map(member)] : [];
+  // (admins: right-click a heading to choose which roles get their own group, as on Discord)
+  const groupMenu = (e) => {
+    if (!Store.canManage(serverId) || Store.kind !== 'supabase') return; e.preventDefault();
+    const roles = Store.roles(serverId);
+    menu([{ label: 'Display Role Members Separately', disabled: true }, ...(roles.length ? roles.map((r) => ({ label: r.name, color: safeColor(r.color, '#99aab5'), check: !!r.hoist,
+      action: () => { Store.updateRole(r.id, { hoist: !r.hoist }); renderAll(); } })) : [{ label: 'No roles yet', disabled: true }]),
+      '-', { label: 'Edit Roles', icon: 'gear', action: () => openServerSettings(serverId, 'roles') }], e.clientX, e.clientY);
+  };
+  const grp = (title, list) => list.length ? [el('div', { className: 'mem-cat', oncontextmenu: groupMenu }, `${title} — ${list.length}`), ...list.map(member)] : [];
   const out = [];
   let rest = online;
   if (Store.kind === 'supabase' && prefs.memberGroups !== 'off')         // people with a role that's shown separately get their own group
@@ -1585,8 +1820,9 @@ function renderAll() {
   indexEmoji(); ensureSelection(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner();
   const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null, groupOn = !!g && g.kind === 'group' && showMembers;
   const dmPanelOn = view === 'home' && !!dmId && prefs.dmPanel && !!Store.dmUser(dmId);
-  $('#app').classList.toggle('show-members', (showMembers && view === 'server') || dmPanelOn || groupOn);
-  $('#app').classList.toggle('dm-mode', dmPanelOn);
+  $('#app').classList.toggle('show-members', (showMembers && view === 'server') || dmPanelOn || groupOn || finderOn());
+  $('#app').classList.toggle('dm-mode', dmPanelOn && !finderOn());
+  $('#app').classList.toggle('finding', finderOn());
   applyLayout();
   // the tab's title counts what's waiting for you: pings, unread DMs and friend requests
   let n = Store.friendRequests().incoming.length;
@@ -1749,7 +1985,8 @@ function showProfile(user, anchor) {
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, u.banner, u.color);
   const toFull = () => fullProfile(user);
   const inner = el('div', { className: 'inner' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: toFull }, avatarEl(u, { size: 74 })),
-    el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null, tagChipFor(u)),
+    el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, styledName(el('span', {}, nameIn(u, sv)), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null, tagChipFor(u)),
+    sv && u.id && Store.nickIn(sv, u.id) ? el('div', { className: 'pr' }, u.name + ' · nickname in this server') : null,
     u.login && !u.bot ? el('div', { className: 'pr' }, u.login + (u.pronouns ? ' · ' + u.pronouns : '')) : u.pronouns ? el('div', { className: 'pr' }, u.pronouns) : null,
     u.bot && u.via ? el('div', { className: 'pr' }, 'Run by @' + u.via + ' (Flubot speaks for whoever types the command)') : null);
   const sec = (title, ...kids) => el('div', { className: 'psec' }, el('h4', {}, title), ...kids);
@@ -3008,20 +3245,102 @@ function serverItems(s, x, y) {
   if (!s) return;
   const can = Store.canManage(s.id), live = Store.kind === 'supabase', owner = Store.role(s.id) === 'owner';
   const chanCats = Store.categories(s.id).filter((c) => can || Store.can(c.id, 'manage_channels'));
+  const inviting = live ? Store.canAnywhere(s.id, 'invite') : true;
+  // (Discord's server menu, in its order)
   menu([
-    markReadItem(Store.channels(s.id).map((c) => c.id)),
-    (live ? Store.canAnywhere(s.id, 'invite') : true) && { label: 'Invite People', icon: 'personAdd', action: () => inviteFriends(s.id) },
-    '-',
-    muteItem(s.id, 'Server'), notifyItem(s.id, true),
+    live && { label: 'Server Boost', icon: 'gem', action: () => boostDialog(s.id) },
     live && '-',
+    inviting && { label: 'Invite to Server', icon: 'personAdd', action: () => inviteFriends(s.id) },
     { label: 'Server Settings', icon: 'gear', action: () => openServerSettings(s.id) },
-    (can || chanCats.length) && { label: 'Create Channel', icon: 'plusCircle', action: () => { if (serverId !== s.id) go(s.id); newChannelFlow(chanCats[0]?.id); } },
-    can && { label: 'Create Category', icon: 'plus', action: () => newCategory(s.id) },
+    (can || chanCats.length) && { label: 'Create Channel', icon: 'plusCircle', action: () => { if (serverId !== s.id) go(s.id); newChannelFlow(chanCats[0]?.id, s.id); } },
+    can && { label: 'Create Category', icon: 'folder', action: () => newCategory(s.id) },
+    live && featureOn(s, 'events') && Store.canMakeEvents(s.id) && { label: 'Create Event', icon: 'calendar', action: () => eventEditor(s.id, null) },
+    { label: 'App Directory', icon: 'apps', action: () => appDirectory(s.id) },
     '-',
-    { label: 'Copy Server ID', icon: 'id', action: () => copyText(s.id, 'Server ID copied.') },
+    markReadItem(cachedPlaces(s.id)),
+    muteItem(s.id, 'Server'), notifyItem(s.id, true),
+    live && { label: 'Privacy Settings', icon: 'shield', action: () => privacyDialog(s.id) },
+    live && '-',
+    live && { label: 'Edit Per-server Profile', icon: 'edit', action: () => serverProfileDialog(s.id) },
+    live && { label: 'Hide Muted Channels', check: hideMuted.has(s.id), action: () => { toggleHideMuted(s.id); renderSide(); } },
+    '-',
+    { label: 'Copy Server Info', sub: () => [
+      { label: 'Copy Server Name', action: () => copyText(s.name, 'Server name copied.') },
+      { label: 'Copy Server ID', icon: 'id', action: () => copyText(s.id, 'Server ID copied.') },
+      live && inviting && { label: 'Copy Invite Link', icon: 'link', action: async () => { const code = await attempt(() => Store.createInvite(s.id)); if (code) copyText(location.origin + location.pathname + '#invite=' + code, 'Invite link copied (it lasts 7 days).'); } }] },
     live && !owner && '-', live && !owner && { label: 'Leave Server', icon: 'logout', danger: true, action: () => leaveServer(s.id) },
   ], x, y);
 }
+// every place in a server that can have something new: its channels, and their threads
+const cachedPlaces = (sv) => Store.channels(sv).flatMap((c) => [c.id, ...Store.threads(c.id).map((t) => t.id)]);
+// Server Boost (free here): how many boosts, the level they make, what each level holds, and boosting it yourself
+const BOOST_STEPS = [2, 7, 14], EMOJI_SLOTS = [50, 100, 150, 250], STICKER_SLOTS = [30, 45, 60, 90];
+const emojiMax = (sv) => EMOJI_SLOTS[Store.boostLevel(sv)] || 50, stickerMax = (sv) => STICKER_SLOTS[Store.boostLevel(sv)] || 30;
+function boostDialog(svId) {
+  const sv = Store.server(svId); if (!sv) return;
+  const body = el('div', { className: 'bst' }), act = el('button', { className: 'btn primary' });
+  const draw = () => {
+    const who = Store.boosts(svId), n = who.length, lvl = Store.boostLevel(svId), mine = who.includes(Store.myId()), next = BOOST_STEPS[lvl];
+    const pct = Math.min(100, (n / 14) * 100);
+    body.replaceChildren(
+      el('div', { className: 'bst-hero' }, serverFace(sv, 56), el('div', {}, el('h3', {}, sv.name), el('p', {}, `${plural(n, 'Boost')} · Level ${lvl}`))),
+      el('div', { className: 'bst-track' }, el('i', { style: `width:${pct}%` }), ...BOOST_STEPS.map((b, i) => el('span', { className: 'bst-mark' + (n >= b ? ' on' : ''), style: `left:${(b / 14) * 100}%` }, el('b', {}, 'Level ' + (i + 1)), el('small', {}, plural(b, 'Boost'))))),
+      el('p', { className: 'bst-next' }, next ? `${plural(next - n, 'more boost')} to reach Level ${lvl + 1}.` : 'Level 3: the highest. Thank you, boosters!'),
+      el('div', { className: 'bst-perks' }, ...[['Emoji', EMOJI_SLOTS], ['Stickers', STICKER_SLOTS]].map(([what, slots]) => el('div', { className: 'bst-perk' }, el('b', {}, what),
+        el('div', { className: 'bst-lv' }, ...slots.map((v, i) => el('span', { className: i === lvl ? 'on' : i < lvl ? 'had' : '' }, el('small', {}, i ? 'Level ' + i : 'Now'), String(v))))))),
+      who.length ? el('div', { className: 'bst-who' }, el('h4', {}, 'Boosting this server'), el('div', { className: 'bst-faces' }, ...who.map((id) => { const p = person(id); const a = avatarEl(p, { size: 30 }); a.title = nameIn(p, svId); return a; }))) : null,
+      el('p', { className: 'hint' }, 'Boosting is free in Fluentdat: it shows you love a server, and every level holds more emoji and stickers. You can boost each server once, and stop any time.'));
+    act.textContent = mine ? 'Stop Boosting' : 'Boost This Server'; act.className = 'btn ' + (mine ? '' : 'primary boost-btn');
+    act.onclick = async () => { act.disabled = true; const ok = await attempt(() => Store.boost(svId, !mine)); act.disabled = false; if (ok !== null) { toast(mine ? 'You stopped boosting.' : `You boosted ${sv.name}!`); renderAll(); draw(); } };
+  };
+  draw();
+  const m = modal({ title: 'Server Boost', cls: 'bst-dlg', body: [body], actions: [el('button', { className: 'btn', onclick: () => m.close() }, 'Close'), act] });
+}
+// App Directory: what's built into every Fluentdat server (Flubot and its commands)
+function appDirectory(svId) {
+  const cmds = [['/me <action>', 'Say what you’re doing, in italics'], ['/shrug', 'Adds ¯\\_(ツ)_/¯'], ['/roll [n]', 'Rolls a die (6 sides, or n)'], ['/flip', 'Flips a coin'],
+    ['/nick <name>', 'Changes your display name'], ['/theme <name>', 'Switches your theme'], ['/clear', 'Clears this channel (admins)'], ['!ping', 'Flubot answers pong']];
+  const m = modal({ title: 'App Directory', cls: 'apps-dlg', body: [el('p', { className: 'dlg-sub' }, 'Apps that come with every Fluentdat server.'),
+    el('div', { className: 'app-card' }, el('div', { className: 'app-ic' }, icon('bot', 28)), el('div', { className: 'grow' }, el('b', {}, 'Flubot'), el('span', { className: 'chip' }, 'Built in'),
+      el('p', {}, 'Fluentdat’s own helper. Type / in any channel to see its commands; Flubot posts for whoever runs one, and says so.'),
+      el('div', { className: 'app-cmds' }, ...cmds.map(([c, d]) => el('button', { className: 'app-cmd', title: 'Put it in the message box', onclick: () => { m.close(); const i = $('#input'); i.value = c.split(' ')[0] + ' '; i.focus(); } }, el('code', {}, c), el('span', {}, d)))))),
+    el('p', { className: 'hint' }, 'More apps can come later. Want one? Ask whoever runs Fluentdat.')], actions: [el('button', { className: 'btn primary', onclick: () => m.close() }, 'Done')] });
+}
+// Privacy Settings for a server: whether its people can start DMs with you
+function privacyDialog(svId) {
+  const sv = Store.server(svId); if (!sv) return;
+  const m = modal({ title: 'Privacy Settings', sub: sv.name, cls: 'priv-dlg', body: [
+    row2('Direct Messages', 'Let people in this server start a direct message with you. Friends can always message you, and conversations you already have stay.',
+      sw(Store.serverDMs(svId), async (on) => { if ((await attempt(() => Store.setServerDMs(svId, on))) !== null) toast(on ? 'People here can message you.' : 'People here can’t start new DMs with you now.'); }))],
+    actions: [el('button', { className: 'btn primary', onclick: () => m.close() }, 'Done')] });
+}
+// Edit Per-server Profile (yours) or Change Nickname (an admin, for someone else): a name only in this server, which
+// everyone here sees instead of the person's own (empty: their own name)
+function serverProfileDialog(svId, who = null) {
+  const sv = Store.server(svId); if (!sv) return;
+  const mine = !who, person0 = mine ? asMember() : who, uid = mine ? Store.myId() : who.id, own = mine ? me.name : who.name;
+  const input = el('input', { type: 'text', maxLength: 32, value: Store.nickIn(svId, uid), placeholder: own });
+  const pv = el('div', { className: 'mem nick-pv' });
+  const draw = () => { pv.replaceChildren(avatarEl(person0), el('div', { className: 'who' }, el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, input.value.trim() || own), person0)))); };
+  input.oninput = draw; draw();
+  const save = el('button', { className: 'btn primary' }, 'Save');
+  save.onclick = async () => {
+    const n = input.value.trim(); save.disabled = true;
+    const ok = await attempt(() => Store.setNick(svId, uid, n)); save.disabled = false;
+    if (ok === null) return;
+    m.close(); renderAll();
+    toast(n ? (mine ? `You’re ${n} in ${sv.name}.` : `${own} is ${n} here now.`) : 'Nickname cleared.');
+  };
+  const m = modal({ title: mine ? 'Edit Per-server Profile' : 'Change Nickname', sub: mine ? sv.name : `${own} in ${sv.name}`, cls: 'nick-dlg', body: [
+    el('div', { className: 'field' }, el('label', {}, 'Server Nickname'), input),
+    el('p', { className: 'hint' }, 'Only in this server: everyone here sees it instead of ' + (mine ? 'your name' : 'their name') + '. Leave it empty to use ' + (mine ? 'yours' : 'theirs') + '.'),
+    el('div', { className: 'pe-label' }, 'In the member list'), pv],
+    actions: [el('button', { className: 'btn ghost', onclick: () => { input.value = ''; draw(); input.focus(); } }, 'Reset'), el('span', { style: 'flex:1' }),
+      el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), save] });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click(); });
+  setTimeout(() => input.focus(), 0);
+}
+const nickDialog = (svId, who) => serverProfileDialog(svId, who);
 const serverCtx = (s, x, y) => serverItems(s, x, y);
 function channelCtx(c, x, y) {
   const can = Store.canManage(serverId) || Store.can(c.id, 'manage_channels'), live = Store.kind === 'supabase';
@@ -3053,6 +3372,7 @@ function memberCtx(u, x, y) {
     groupOwner && !self && '-', groupOwner && !self && { label: 'Remove From Group', danger: true, action: async () => { if ((await attempt(() => Store.removeFromGroup(g.id, u.id))) !== null) renderAll(); } },
     '-',
     m && can && Store.roles(sv).length && { label: 'Roles', sub: () => roleItems(sv, u) },
+    m && (self || owner || (can && m.role === 'member')) && { label: self ? 'Edit Per-server Profile' : 'Change Nickname', icon: 'edit', action: () => (self ? serverProfileDialog(sv) : nickDialog(sv, m)) },
     m && owner && !self && m.role !== 'owner' && { label: m.role === 'admin' ? 'Remove Admin' : 'Make Admin', icon: 'shield', action: () => setAdmin(sv, m, m.role !== 'admin') },
     above && '-', above && { label: `Remove ${u.name}`, danger: true, action: () => kick(sv, m) },
     above && { label: `Ban ${u.name}`, icon: 'ban', danger: true, action: () => banFlow(sv, m) },
@@ -3085,6 +3405,9 @@ function messageCtx(m, x, y) {
     !m.sending && mayIn('react') && { label: 'Add Reaction', sub: () => [...quickReacts(8).map((q) => ({ label: emojiLabel(q), hint: null, action: () => toggleReact(m, q, true) })), '-',
       { label: 'View More', icon: 'smilePlus', action: () => { const anchor = document.querySelector(`.msg[data-id="${CSS.escape(m.id)}"] .msg-tools`) || $('#composer'); reactPicker(m, anchor); } }] },
     !m.sending && mayIn('send') && { label: 'Reply', icon: 'reply', action: () => startReply(m) },
+    !m.sending && canThread() && { label: threadOf(m.id) ? 'Open Thread' : 'Create Thread', icon: 'thread', action: () => threadFlow(m) },
+    live && !m.sending && Store.canPin(where.id) && { label: Store.pinned(where.id, m.id) ? 'Unpin Message' : 'Pin Message', icon: 'pin',
+      action: () => attempt(() => Store.pin(where.id, m.id, !Store.pinned(where.id, m.id))).then(() => renderAll()) },
     live && !m.sending && { label: 'Forward', icon: 'forward', action: () => forwardFlow(m) },
     m.text && { label: 'Copy Text', icon: 'copy', action: () => copyText(plainText(m.text, fmtCtx()), 'Copied.') },
     '-',
@@ -3464,7 +3787,8 @@ function applyLayout() {
   const app = $('#app'); if (!app) return;
   const cols = validOrder(prefs.cols, COLS);
   const membersOn = app.classList.contains('show-members') && innerWidth > 820;
-  const width = { rail: prefs.rail === 'off' ? 0 : prefs.railW, side: prefs.sideW, members: membersOn ? (app.classList.contains('dm-mode') ? Math.max(prefs.membersW, innerWidth >= 1200 ? 340 : 280) : prefs.membersW) : 0 };
+  const width = { rail: prefs.rail === 'off' ? 0 : prefs.railW, side: prefs.sideW, members: membersOn ? (app.classList.contains('finding') ? Math.max(prefs.membersW, innerWidth >= 1300 ? 440 : 340)
+    : app.classList.contains('dm-mode') ? Math.max(prefs.membersW, innerWidth >= 1200 ? 340 : 280) : prefs.membersW) : 0 };
   app.style.setProperty('--cols', cols.map((c) => (c === 'main' ? 'minmax(0, 1fr)' : width[c] + 'px')).join(' '));
   const node = { rail: $('#rail'), side: $('.side'), main: $('.main'), members: $('#members') };
   cols.forEach((c, i) => { node[c].style.gridColumn = String(i + 1); node[c].style.gridRow = '1'; });
@@ -4738,7 +5062,7 @@ function svRoles(sv, redraw, state) {
 }
 // banned people, and lifting a ban
 // ---------- a server's own emoji and stickers (Server Settings → Emoji, Stickers) ----------
-const EMOJI_MAX = 50, STICKER_MAX = 30;
+// (how many a server holds: more as it's boosted)
 const emojiName = (s) => String(s || '').replace(/\.[a-z0-9]+$/i, '').replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
 function dataBlob(url) {
   const [head, b64] = url.split(','), type = (head.match(/^data:([^;]+)/) || [])[1] || 'image/png', bin = atob(b64), out = new Uint8Array(bin.length);
@@ -4761,7 +5085,7 @@ async function expressionFile(file, { px, max, kind }) {
 }
 const reqBox = (...lines) => el('div', { className: 'ex-req' }, el('h5', {}, 'Upload Requirements'), el('ul', {}, ...lines.map((t) => el('li', {}, t))));
 function svEmoji(sv, redraw) {
-  const list = Store.serverEmoji(sv.id).sort((a, b) => a.name.localeCompare(b.name)), left = Math.max(0, EMOJI_MAX - list.length);
+  const list = Store.serverEmoji(sv.id).sort((a, b) => a.name.localeCompare(b.name)), left = Math.max(0, emojiMax(sv.id) - list.length);
   const up = el('button', { className: 'btn primary', disabled: !left }, 'Upload Emoji');
   up.onclick = () => pickFile(async (f) => {
     up.disabled = true; up.textContent = 'Uploading…';
@@ -4791,7 +5115,7 @@ function svEmoji(sv, redraw) {
       el('button', { className: 'ex-x', title: 'Delete', onclick: async () => { if ((await attempt(() => Store.removeEmoji(e.id))) !== null) { toast(`:${e.name}: was deleted.`); redraw(); } } }, icon('x', 16)));
   };
   return [el('h2', {}, 'Emoji'),
-    el('p', { className: 'sub' }, `Add up to ${EMOJI_MAX} custom emoji that anyone can use in Fluentdat, animated GIFs too. Type :name: in a message, or pick them in the emoji picker.`),
+    el('p', { className: 'sub' }, `Add up to ${emojiMax(sv.id)} custom emoji that anyone can use in Fluentdat, animated GIFs too. Type :name: in a message, or pick them in the emoji picker.`),
     reqBox('File type: PNG, GIF, WebP or JPEG', 'Max file size: 256 KB for a GIF (other pictures are made small for you)', 'Recommended dimensions: 128×128',
       'Naming: emoji names must be at least 2 characters long and can only contain letters, numbers and underscores'),
     el('div', { className: 'ex-up' }, up),
@@ -4800,7 +5124,7 @@ function svEmoji(sv, redraw) {
       : el('div', { className: 'ex-empty' }, el('div', { className: 'ex-empty-ic' }, icon('smilePlus', 40)), el('b', {}, 'No emoji'), el('span', {}, 'Get the party started by uploading an emoji.'))];
 }
 function svStickers(sv, redraw) {
-  const list = Store.serverStickers(sv.id), left = Math.max(0, STICKER_MAX - list.length);
+  const list = Store.serverStickers(sv.id), left = Math.max(0, stickerMax(sv.id) - list.length);
   const card = (s) => el('div', { className: 'stk-card' },
     el('div', { className: 'stk-pic' }, el('img', { src: safeImg(s.url), alt: s.name, loading: 'lazy', onerror: (ev) => ev.target.replaceWith(icon('sticker', 40)) })),
     el('b', {}, s.name), el('small', {}, [s.emoji, s.description].filter(Boolean).join(' ') || '\u00a0'),

@@ -13,7 +13,7 @@ const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
 
-let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, structure4 = null, structure5 = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
+let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, structure4 = null, structure5 = null, structure6 = null, pinsLive = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
 let styled = true;                  // (false on an older database: no profile themes, name styles or server tags there yet)
 let cache = blank();
 const pending = new Map();          // messages you've sent that the server hasn't confirmed yet (kept through reloads)
@@ -27,7 +27,7 @@ const listeners = new Set(), messageListeners = new Set(), callListeners = new S
 function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
-    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [] };
+    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [], pins: {}, boosts: [], threadInfo: {} };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -84,7 +84,8 @@ const rolesOf = (sv, uid) => cache.memberRoles.filter((x) => x.server_id === sv 
 const toExtras = (r) => ({ connections: Array.isArray(r && r.connections) ? r.connections : [], widgets: Array.isArray(r && r.widgets) ? r.widgets : [],
   activity: Array.isArray(r && r.activity) ? r.activity : [], quests: Array.isArray(r && r.quests) ? r.quests : [] });
 const toCategory = (r) => ({ id: r.id, server: r.server_id, name: r.name, position: r.position });
-const toChannel = (r) => ({ id: r.id, server: r.server_id, category: r.category_id, name: r.name, kind: r.kind, position: r.position, topic: r.topic || '' });
+const toChannel = (r) => ({ id: r.id, server: r.server_id, category: r.category_id, name: r.name, kind: r.kind, position: r.position, topic: r.topic || '',
+  parent: r.parent_id || null, starter: r.starter || null, by: r.created_by || null, archived: !!r.archived });
 const otherIn = (d) => (d.user_a === myId() ? d.user_b : d.user_a);
 const isGroup = (d) => d && d.kind === 'group';
 const groupPeople = (id) => cache.dmMembers.filter((m) => m.dm_id === id).map((m) => m.user_id);
@@ -143,20 +144,24 @@ async function profilesQ(q) {
 let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
-async function loadAll() {
+// a reload of everything. Only the newest one's answer is kept, and an older one still going waits for it, so whoever
+// waits for a reload sees what it brought
+let newestLoad = null;
+function loadAll() { const p = loadOnce(); newestLoad = p; return p; }
+async function loadOnce() {
   if (!session) return;
   const seq = ++loadSeq;
   state.loading = true; state.error = ''; emit();
   try {
     const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
-    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms, events, interest] = await Promise.all([
+    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms, events, interest, boosts] = await Promise.all([
       profilesQ(q),
       sb.from('profiles').select('*').eq('id', myId()).then(must),
       q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles'),
       soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null),
       soft(q('server_emoji'), []), soft(q('server_stickers'), []), soft(q('blocks'), []), soft(sb.rpc('is_app_admin').then(must), false),
-      soft(q('category_perms'), []), soft(q('server_events'), []), soft(q('event_interest'), [])]);
-    if (seq !== loadSeq) return;
+      soft(q('category_perms'), []), soft(q('server_events'), []), soft(q('event_interest'), []), soft(q('server_boosts'), [])]);
+    if (seq !== loadSeq) return newestLoad;
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
     cache.me = mine[0] || null;
     if (cache.me) cache.profiles[cache.me.id] = cache.me;
@@ -173,7 +178,7 @@ async function loadAll() {
     cache.friendRows = friends;
     cache.reads = Object.fromEntries(reads.map((r) => [r.place, r]));
     cache.emoji = emoji; cache.stickers = stickers; cache.blocks = blocks; cache.admin = admin === true; cache.perms = perms;
-    cache.events = events; cache.interest = interest;
+    cache.events = events; cache.interest = interest; cache.boosts = boosts;
     for (const [id, op] of interestOps) {
       if (Date.now() - op.at > 10000) { interestOps.delete(id); continue; }
       cache.interest = cache.interest.filter((i) => !(i.event_id === id && i.user_id === myId()));
@@ -196,6 +201,7 @@ async function loadMessages(a) {
   for (const p of pending.values()) if (p[col] === a.id && !rows.some((m) => m.id === p.id)) rows.push(p);
   (dm ? cache.dms : cache.msgs)[a.id] = rows;
   if (dm) cache.calls[a.id] = (await soft(sb.from('calls').select('*').eq('dm_id', a.id).order('created_at', { ascending: false }).limit(50).then(must), [])).reverse();
+  cache.pins[a.id] = await soft(sb.from('pins').select('*').eq('place', a.id).then(must), []);
   cache.reacts[a.id] = await soft(sb.from('reactions').select('message_id,place,user_id,emoji,active,created_at').eq('place', a.id).eq('active', true).then(must), []);
   cache.loaded.add(a.id);
 }
@@ -220,6 +226,7 @@ function watchMessages() {
     const mineToo = row.author === myId() && !row.bot;
     const u = (cache.unread[place] = cache.unread[place] || { unread: 0, mentions: 0, last: 0 });
     u.last = Date.parse(row.created_at) || Date.now();
+    const ti = !dm && cache.threadInfo[place]; if (ti) { ti.count++; ti.last = u.last; }       // (a thread's message count)
     const ping = !mineToo && (dm || pings(row, place));
     const here = looking(place);
     if (!mineToo && !here) { u.unread++; if (ping) u.mentions++; }
@@ -246,6 +253,14 @@ function watchMessages() {
       cache.reads[row.place] = row;
       const u = cache.unread[row.place];
       if (u && Date.parse(row.read_at) >= u.last) { u.unread = 0; u.mentions = 0; }
+      emit();
+    })
+    .subscribe();
+  pinsLive = sb.channel('fluentdat-pins')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'pins' }, ({ eventType, new: row, old }) => {
+      const r = eventType === 'DELETE' ? old : row; if (!r || !r.place || !cache.pins[r.place]) return;
+      cache.pins[r.place] = cache.pins[r.place].filter((x) => x.message_id !== r.message_id);
+      if (eventType !== 'DELETE') cache.pins[r.place].push(row);
       emit();
     })
     .subscribe();
@@ -333,6 +348,10 @@ function watchStructure() {
   structure5 = sb.channel('fluentdat-structure-5');
   for (const table of ['server_events', 'event_interest']) structure5.on('postgres_changes', { event: '*', schema: 'public', table }, again);
   structure5.subscribe();
+  // who boosts which server (its own channel too)
+  structure6 = sb.channel('fluentdat-structure-6');
+  structure6.on('postgres_changes', { event: '*', schema: 'public', table: 'server_boosts' }, again);
+  structure6.subscribe();
 }
 // signed in: load everything, keep it live, and notice if the session ends (signed out in another tab, or it ran out)
 async function start() {
@@ -528,8 +547,8 @@ export const SupabaseStore = {
     return found && found[0] ? { ...toUser(found[0]), id: found[0].id } : null;
   },
   async signOut() {
-    for (const ch of [feed, extras, structure, structure2, structure3, structure4, structure5, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
-    feed = extras = structure = structure2 = structure3 = structure4 = structure5 = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
+    for (const ch of [feed, extras, structure, structure2, structure3, structure4, structure5, structure6, pinsLive, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
+    feed = extras = structure = structure2 = structure3 = structure4 = structure5 = structure6 = pinsLive = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
     if (sb) await sb.auth.signOut({ scope: 'local' });   // (just this browser — your phone stays signed in)
     session = null; cache = blank(); active = null; pending.clear(); emit();
   },
@@ -551,7 +570,7 @@ export const SupabaseStore = {
   servers: () => cache.servers.slice(),
   server: (id) => cache.servers.find((s) => s.id === id) || null,
   categories: (sv) => cache.categories.filter((c) => c.server === sv),
-  channels: (sv) => cache.channels.filter((c) => c.server === sv),
+  channels: (sv) => cache.channels.filter((c) => c.server === sv && c.kind !== 'thread'),
   channel: (id) => cache.channels.find((c) => c.id === id) || null,
   role: (sv) => (cache.members.find((m) => m.server_id === sv && m.user_id === myId()) || {}).role || null,
   canManage: (sv) => ['owner', 'admin'].includes(SupabaseStore.role(sv)),
@@ -633,7 +652,8 @@ export const SupabaseStore = {
   // ---- members, roles, invites ----
   members: (sv) => cache.members.filter((m) => m.server_id === sv).map((m) => {
     const rs = rolesOf(sv, m.user_id);
-    return { ...toUser(cache.profiles[m.user_id]), id: m.user_id, role: m.role, me: m.user_id === myId(), roles: rs.map((r) => r.id),
+    return { ...toUser(cache.profiles[m.user_id]), id: m.user_id, role: m.role, me: m.user_id === myId(), roles: rs.map((r) => r.id), nick: m.nick || '',
+      booster: cache.boosts.some((b) => b.server_id === sv && b.user_id === m.user_id),
       roleColor: (rs.find((r) => r.color) || {}).color || '', group: rs.find((r) => r.hoist) ? toRole(rs.find((r) => r.hoist)) : null };
   }),
   memberColor: (sv, uid) => (rolesOf(sv, uid).find((r) => r.color) || {}).color || '',
@@ -793,7 +813,7 @@ export const SupabaseStore = {
   // when you'd read a place up to (for the red NEW line)
   readAt: (place) => Date.parse((cache.reads[place] || {}).read_at || '') || 0,
   markRead, markUnread,
-  async markServerRead(sv) { await markAllRead(SupabaseStore.channels(sv).map((c) => c.id)); emit(); },
+  async markServerRead(sv) { await markAllRead(cache.channels.filter((c) => c.server === sv).map((c) => c.id)); emit(); },
   // a place's settings: muted until when, and what it may tell you about ('default', 'all', 'mentions' or 'none')
   placeSettings: (place) => { const r = cache.reads[place]; return { muted: !!(r && r.muted_until && Date.parse(r.muted_until) > Date.now()), mutedUntil: r && r.muted_until ? Date.parse(r.muted_until) : 0, notify: (r && r.notify) || 'default' }; },
   setPlaceSettings(place, patch) {
@@ -893,6 +913,71 @@ export const SupabaseStore = {
       if (j >= 0) { if (before) list[j] = before; else list.splice(j, 1); }
       emit(); throw e;
     }
+  },
+  // ---- threads: channels of their own under a text channel ----
+  threads: (ch) => cache.channels.filter((c) => c.parent === ch),
+  threadInfo: (id) => cache.threadInfo[id] || null,
+  async threadsInfo(ch) {
+    const rows = await soft(sb.rpc('threads_info', { p_channel: ch }).then(must), []);
+    for (const r of rows || []) cache.threadInfo[r.id] = { count: Number(r.messages) || 0, last: r.last_at ? Date.parse(r.last_at) : 0 };
+    emit();
+  },
+  async createThread(ch, message, name) { const id = must(await sb.rpc('create_thread', { p_parent: ch, p_message: message || null, p_name: name })); await loadAll(); return id; },
+  async editThread(id, patch) {
+    const c = cache.channels.find((x) => x.id === id), had = c && { name: c.name, archived: c.archived }; if (c) Object.assign(c, patch); emit();
+    try { must(await sb.rpc('edit_thread', { p_thread: id, p_name: patch.name || '', p_archived: 'archived' in patch ? !!patch.archived : null })); }
+    catch (e) { if (c) Object.assign(c, had); emit(); throw e; }
+    await loadAll();
+  },
+  // ---- pins: a conversation's pinned messages ----
+  pins: (place) => (cache.pins[place] || []).slice().sort((a, b) => Date.parse(b.pinned_at) - Date.parse(a.pinned_at)),
+  pinned: (place, id) => (cache.pins[place] || []).some((x) => x.message_id === id),
+  canPin(place) {
+    const c = cache.channels.find((x) => x.id === place);
+    return c ? SupabaseStore.canManage(c.server) || SupabaseStore.can(place, 'manage_messages') : cache.dmIndex.some((d) => d.id === place);
+  },
+  async pin(place, id, on) {
+    const list = (cache.pins[place] = cache.pins[place] || []), had = list.slice();
+    cache.pins[place] = list.filter((x) => x.message_id !== id).concat(on ? [{ place, message_id: id, pinned_by: myId(), pinned_at: new Date().toISOString() }] : []); emit();
+    try {
+      if (on) must(await sb.from('pins').insert({ place, message_id: id, pinned_by: myId() }));
+      else took('You don’t have permission to unpin that.')(await sb.from('pins').delete().eq('place', place).eq('message_id', id).select('message_id'));
+    } catch (e) { cache.pins[place] = had; emit(); throw e; }
+  },
+  // the pinned messages themselves (fetching any that aren't loaded)
+  async pinnedMessages(place) {
+    const dm = !cache.channels.some((c) => c.id === place), have = (dm ? cache.dms : cache.msgs)[place] || [];
+    const out = [];
+    for (const p of SupabaseStore.pins(place)) {
+      let row = have.find((m) => m.id === p.message_id);
+      if (!row) row = (await soft(sb.from(dm ? 'dm_messages' : 'messages').select('*').eq('id', p.message_id).then(must), []))[0];
+      if (row) { if (!row.bot) meet(row.author); out.push({ ...toMessage(row), pinnedAt: Date.parse(p.pinned_at) || 0 }); }
+    }
+    return out;
+  },
+  // ---- boosts (free here): who boosts a server, its level, and boosting it yourself ----
+  boosts: (sv) => cache.boosts.filter((b) => b.server_id === sv).map((b) => b.user_id),
+  boostLevel(sv) { const n = SupabaseStore.boosts(sv).length; return n >= 14 ? 3 : n >= 7 ? 2 : n >= 2 ? 1 : 0; },
+  async boost(sv, on) {
+    if (on) must(await sb.from('server_boosts').insert({ server_id: sv, user_id: myId() }));
+    else must(await sb.from('server_boosts').delete().eq('server_id', sv).eq('user_id', myId()));
+    await loadAll();
+  },
+  // ---- your name in a server, and whether its people can start DMs with you ----
+  nickIn: (sv, uid) => (cache.members.find((m) => m.server_id === sv && m.user_id === uid) || {}).nick || '',
+  async setNick(sv, uid, nick) { must(await sb.rpc('set_nick', { p_server: sv, p_user: uid, p_nick: String(nick || '') })); await loadAll(); },
+  serverDMs: (sv) => (cache.members.find((m) => m.server_id === sv && m.user_id === myId()) || {}).allow_dms !== false,
+  async setServerDMs(sv, on) { must(await sb.rpc('set_server_privacy', { p_server: sv, p_allow_dms: !!on })); await loadAll(); },
+  // ---- search (Search "<server>"): words, from someone, with something, in a channel; newest first ----
+  async searchServer(sv, o = {}) {
+    const rows = must(await sb.rpc('search_messages', { p_server: sv, p_query: o.q || '', p_from: o.from || null, p_has: o.has || '', p_in: o.in || null,
+      p_before: o.before ? new Date(o.before).toISOString() : null, p_limit: 25 })) || [];
+    for (const r of rows) if (!r.bot) meet(r.author);
+    return rows.map((r) => ({ ...toMessage(r), place: r.channel_id }));
+  },
+  async searchDM(dm, o = {}) {
+    const rows = must(await sb.rpc('search_dm', { p_dm: dm, p_query: o.q || '', p_from: o.from || null, p_has: o.has || '', p_before: o.before ? new Date(o.before).toISOString() : null, p_limit: 25 })) || [];
+    return rows.map((r) => ({ ...toMessage(r), place: r.dm_id }));
   },
   // ---- a server's events (Discord's): upcoming and happening ones, soonest first, with who's interested ----
   events(sv) {

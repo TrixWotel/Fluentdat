@@ -85,6 +85,20 @@ const fallback = {
   updateEvent: async () => { throw new Error(SIGN_IN + 'change events.'); },
   removeEvent: async () => {},
   setInterested: async () => { throw new Error(SIGN_IN + 'say you’re interested.'); },
+  // threads, pins, boosts, server nicknames and DM privacy: these come with signing in
+  threads: () => [], threadInfo: () => null, threadsInfo: async () => {},
+  createThread: async () => { throw new Error(SIGN_IN + 'start threads.'); },
+  editThread: async () => {},
+  pins: () => [], pinned: () => false, canPin: () => false, pinnedMessages: async () => [],
+  pin: async () => { throw new Error(SIGN_IN + 'pin messages.'); },
+  boosts: () => [], boostLevel: () => 0,
+  boost: async () => { throw new Error(SIGN_IN + 'boost servers.'); },
+  nickIn: () => '', serverDMs: () => true,
+  setNick: async () => { throw new Error(SIGN_IN + 'set a nickname in a server.'); },
+  setServerDMs: async () => { throw new Error(SIGN_IN + 'change who can message you.'); },
+  // searching what's kept in this browser
+  searchServer: async (sv, o = {}) => localSearch(Store.channels(sv).map((c) => [c.id, Store.messages(c.id)]), o),
+  searchDM: async (dm, o = {}) => localSearch([[dm, Store.dm(dm)]], o),
   adoptTag: async () => { throw new Error(SIGN_IN + 'wear a server tag.'); },
   tagInfo: async () => null,
   findUser: async () => null,
@@ -132,6 +146,22 @@ const fallback = {
   },
 };
 const SIGN_IN = 'Sign in with Discord, GitHub or email to ';
+// search through messages kept here: [[place, messages]] → the newest 25 that match (words, from, has, in, before)
+function localSearch(places, o) {
+  const q = String(o.q || '').toLowerCase(), out = [];
+  for (const [place, list] of places) {
+    if (o.in && o.in !== place) continue;
+    for (const m of list || []) {
+      if (m.call || (o.before && m.ts >= o.before) || (o.from && (m.user || {}).id !== o.from)) continue;
+      const files = m.files || [], text = String(m.text || '');
+      if (q && !text.toLowerCase().includes(q) && !files.some((f) => String(f.name || '').toLowerCase().includes(q))) continue;
+      if (o.has === 'link' && !/https?:\/\//i.test(text)) continue;
+      if (['file', 'image', 'video'].includes(o.has) && !files.some((f) => o.has === 'file' || f.kind === o.has)) continue;
+      out.push({ ...m, place });
+    }
+  }
+  return out.sort((a, b) => b.ts - a.ts).slice(0, 25);
+}
 const EXTRAS = 'fluentdat.extras';
 const blankExtras = () => ({ connections: [], widgets: [], activity: [] });
 function localExtras() {

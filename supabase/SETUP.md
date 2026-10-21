@@ -113,7 +113,7 @@ The database checks these itself, so they hold even if someone changes the app:
 13. A call's private channel can only be joined by the people in that DM or group, or the members of that voice channel's server.
 14. What you've read and what you've muted is yours alone.
 15. Blocking someone stops them messaging you, calling you, starting a DM or sending a friend request, and ends your friendship. Only you can see who you blocked.
-16. A server's admins add, rename and remove its emoji (up to 50) and stickers (up to 30). Everyone signed in can see and use them.
+16. A server's admins add, rename and remove its emoji (up to 50) and stickers (up to 30, and more of both as the server's boost level goes up). Everyone signed in can see and use them.
 17. Only the people who run Fluentdat make one-time links. Each link makes one account, then stops working. They also see what people report, and who reported it.
 18. Anyone who may react where a message is can react to it (up to 20 different emoji a message), and anyone who can read it can join in with a reaction already there; only your own reactions come back off.
 19. A server's admins give it a tag. Its members can wear it on their profile; nobody can wear a tag from a server they aren't in, and leaving takes it off.
@@ -122,6 +122,12 @@ The database checks these itself, so they hold even if someone changes the app:
 22. A profile's Connections, Board widgets and recent games are seen by whoever can see the profile, and changed only by its owner. A connection is marked verified only when it's an account you sign in with (the database checks, and nobody can ask it about anyone else's). Game covers and logos are only ever a Steam number or the name of a picture on Wikimedia Commons, or a small picture of your own, never a web address. What you say you're playing is timed by the database.
 23. A server's events are seen by its members and made by its admins (and by its members, when the server allows it in Server Settings → Server Sidebar); whoever made one, or an admin, can change or cancel it, and everyone says for themselves whether they're interested. The Server Guide, the list of game servers and which sidebar extras show are set by the server's admins, and only take words, channel numbers and game servers' addresses, never web addresses.
 24. Avatar decorations and profile effects from the Shop are names from Fluentdat's own lists. Quests are counted in your browser and the ones you finish are kept on your profile; everything they unlock is free anyway.
+25. Anyone who may send in a text channel can start a thread there, from a message (one thread a message) or on its own. A thread follows its channel's category permissions, so whoever can't see the channel can't see its threads, their messages or their files. Whoever started a thread, or whoever may manage the channel, renames, archives or deletes it, and a new message brings an archived thread back.
+26. Whoever may delete others' messages in a channel (owners and admins always can) pins and unpins messages there. In a DM or a group, everyone in it can. A conversation holds up to 50 pinned messages, and everyone who can read it sees them.
+27. Server Boosts are free. Each member can boost a server once and stop any time, and leaving the server stops it. Everyone in the server sees who boosts it. Two, seven and fourteen boosts make levels 1, 2 and 3, which hold more emoji (100, 150, 250) and stickers (45, 60, 90).
+28. You choose your own nickname in each server (up to 32 characters). Admins can change members' nicknames, and the owner anyone's.
+29. In each server you choose whether its people can start a DM with you (Privacy Settings). Friends always can, and DMs you already have stay.
+30. Search only finds messages you can read: in servers you're in, without private categories you can't see or their threads, and in your own DMs and groups.
 
 ## If something goes wrong
 
