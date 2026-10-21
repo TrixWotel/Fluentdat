@@ -93,6 +93,7 @@ create table if not exists public.messages (
   created_at timestamptz not null default now()
 );
 create index if not exists messages_by_channel on public.messages (channel_id, created_at);
+create index if not exists messages_by_author on public.messages (author);
 
 create table if not exists public.invites (
   code text primary key,
@@ -124,6 +125,7 @@ create table if not exists public.dm_messages (
   created_at timestamptz not null default now()
 );
 create index if not exists dm_messages_by_dm on public.dm_messages (dm_id, created_at);
+create index if not exists dm_messages_by_author on public.dm_messages (author);
 
 create table if not exists public.friends (
   owner uuid not null references public.profiles (id) on delete cascade,
@@ -269,6 +271,7 @@ create table if not exists public.reactions (
   primary key (message_id, user_id, emoji)
 );
 create index if not exists reactions_place on public.reactions (place);
+create index if not exists reactions_by_user on public.reactions (user_id);
 
 -- a category's permissions for @everyone, a role ('role:<id>') or one member ('member:<id>'): what they're allowed and denied
 create table if not exists public.category_perms (
@@ -352,6 +355,15 @@ alter table public.profiles add column if not exists playing jsonb;
 alter table public.profiles add column if not exists decoration text not null default '';
 alter table public.profiles add column if not exists effect text not null default '';
 alter table public.profile_extras add column if not exists quests jsonb not null default '[]'::jsonb;
+-- a profile frame from the Shop (drawn around your profile card), and a status bubble (Discord's: what you're up to, in a
+-- bubble beside your picture), until a time or until you clear it
+alter table public.profiles add column if not exists frame text not null default '';
+alter table public.profiles add column if not exists bubble text not null default '';
+alter table public.profiles add column if not exists bubble_until timestamptz;
+-- your badges: which you show first and which you hide; and your Game Time (the hours you said you were playing, timed
+-- by the database and only ever added to by it)
+alter table public.profile_extras add column if not exists badges jsonb not null default '{}'::jsonb;
+alter table public.profile_extras add column if not exists play_seconds bigint not null default 0;
 -- what a server's sidebar offers above its channels (Browse Channels, Game Servers, Server Guide, Events), its Server
 -- Guide (a welcome, to-dos and resource pages), and the game servers its people play on
 alter table public.servers add column if not exists features jsonb not null default '{}'::jsonb;
@@ -414,7 +426,9 @@ alter table public.profiles add constraint profiles_style check ((theme1 = '' or
   and (name_color1 = '' or name_color1 ~ '^#[0-9a-fA-F]{6}$') and (name_color2 = '' or name_color2 ~ '^#[0-9a-fA-F]{6}$')
   and tag ~ '^[A-Za-z0-9]{0,4}$' and tag_badge ~ '^[a-z0-9]{0,20}$' and (tag_color = '' or tag_color ~ '^#[0-9a-fA-F]{6}$'));
 alter table public.profiles drop constraint if exists profiles_cosmetics;
-alter table public.profiles add constraint profiles_cosmetics check (decoration ~ '^[a-z0-9-]{0,24}$' and effect ~ '^[a-z0-9-]{0,24}$');
+alter table public.profiles add constraint profiles_cosmetics check (decoration ~ '^[a-z0-9-]{0,24}$' and effect ~ '^[a-z0-9-]{0,24}$' and frame ~ '^[a-z0-9-]{0,24}$');
+alter table public.profiles drop constraint if exists profiles_bubble;
+alter table public.profiles add constraint profiles_bubble check (char_length(bubble) <= 128 and bubble !~ '[[:cntrl:]]');
 alter table public.channels drop constraint if exists channels_kind_check;
 alter table public.channels add constraint channels_kind_check check (kind in ('text', 'voice', 'thread'));
 alter table public.channels drop constraint if exists channels_thread_shape;
@@ -1173,6 +1187,15 @@ begin
      or exists (select 1 from jsonb_array_elements(new.quests) q where coalesce(jsonb_typeof(q), '') <> 'string' or (q #>> '{}') !~ '^[a-z0-9-]{1,24}$') then
     raise exception 'Quests are the names of the ones you finished.';
   end if;
+  if coalesce(jsonb_typeof(new.badges), '') <> 'object' or exists (select 1 from jsonb_object_keys(new.badges) k where k not in ('order', 'hidden'))
+     or exists (select 1 from jsonb_each(new.badges) e where coalesce(jsonb_typeof(e.value), '') <> 'array' or jsonb_array_length(e.value) > 40
+                or exists (select 1 from jsonb_array_elements(e.value) b where coalesce(jsonb_typeof(b), '') <> 'string' or (b #>> '{}') !~ '^[a-z0-9-]{1,24}$')) then
+    raise exception 'Your badges are kept by name: the order you show them in, and the ones you hide.';
+  end if;
+  -- (Game Time only goes up when the database times a game you stopped playing)
+  if coalesce(current_setting('fluentdat.playtime', true), '') <> 'on' then
+    new.play_seconds := case when TG_OP = 'UPDATE' then old.play_seconds else 0 end;
+  end if;
   new.updated_at := now();
   return new;
 end $$;
@@ -1182,9 +1205,21 @@ create trigger guard_profile_extras before insert or update on public.profile_ex
 -- (the same game again keeps its start), and put at the top of your recent activity
 create or replace function public.guard_playing() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare secs bigint := 0;
 begin
   if new.playing is not null and jsonb_typeof(new.playing) = 'null' then new.playing := null; end if;
-  if new.playing is null or (TG_OP = 'UPDATE' and new.playing is not distinct from old.playing) then return new; end if;
+  if TG_OP = 'UPDATE' and new.playing is not distinct from old.playing then return new; end if;
+  -- (a game you stop, or swap for another, adds its time to your Game Time: up to 12 hours a game)
+  if TG_OP = 'UPDATE' and old.playing is not null and (new.playing is null or (old.playing - 'at') <> (new.playing - 'at')) then
+    begin secs := greatest(0, least(43200, extract(epoch from now() - (old.playing->>'at')::timestamptz)))::bigint;
+    exception when others then secs := 0; end;
+    if secs > 0 then
+      perform set_config('fluentdat.playtime', 'on', true);
+      insert into profile_extras (id, play_seconds) values (new.id, secs) on conflict (id) do update set play_seconds = profile_extras.play_seconds + secs;
+      perform set_config('fluentdat.playtime', '', true);
+    end if;
+  end if;
+  if new.playing is null then return new; end if;
   if not game_ok(new.playing - 'at', false) then raise exception 'That isn''t a game Fluentdat can show.'; end if;
   if TG_OP = 'UPDATE' and old.playing is not null and (old.playing - 'at') = (new.playing - 'at') then new.playing := old.playing; return new; end if;
   new.playing := (new.playing - 'at') || jsonb_build_object('at', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'));
@@ -1389,6 +1424,30 @@ language plpgsql security definer set search_path = public as $$
 begin
   update server_members set allow_dms = coalesce(p_allow_dms, true) where server_id = p_server and user_id = auth.uid();
   if not found then raise exception 'You aren''t in that server.'; end if;
+end $$;
+-- what someone's badges are made of (earned by doing things, as on Discord), for whoever may see their profile: the
+-- messages they wrote, reactions, threads, friends, the biggest server they run, since when they boost, their events,
+-- Quests, connections, games on their Board, Game Time, and whether they help run Fluentdat
+create or replace function public.badge_stats(p_user uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare x profile_extras%rowtype;
+begin
+  if auth.uid() is null or p_user is null or not knows(p_user) then raise exception 'You can only see the badges of people you know.'; end if;
+  select * into x from profile_extras where id = p_user;
+  return jsonb_build_object(
+    'since', (select created_at from profiles where id = p_user),
+    'messages', (select count(*) from messages where author = p_user and not bot) + (select count(*) from dm_messages where author = p_user and not bot),
+    'reactions', (select count(*) from reactions where user_id = p_user and active),
+    'threads', (select count(*) from channels where kind = 'thread' and created_by = p_user),
+    'friends', (select count(*) from friends f where f.owner = p_user and exists (select 1 from friends g where g.owner = f.friend and g.friend = p_user)),
+    'members', coalesce((select max(n) from (select count(*) n from servers s join server_members m on m.server_id = s.id where s.owner = p_user group by s.id) t), 0),
+    'boost_since', (select min(created_at) from server_boosts where user_id = p_user),
+    'events', (select count(*) from server_events where created_by = p_user),
+    'quests', coalesce(jsonb_array_length(x.quests), 0),
+    'connections', coalesce(jsonb_array_length(x.connections), 0),
+    'games', coalesce((select sum(jsonb_array_length(w->'g')) from jsonb_array_elements(x.widgets) w where w->>'t' = 'likes'), 0),
+    'play_seconds', coalesce(x.play_seconds, 0),
+    'staff', exists (select 1 from app_admins where user_id = p_user));
 end $$;
 -- a new server: you own it, with a Text Channels category and #general
 create or replace function public.create_server(p_name text, p_icon text default '')
@@ -1778,7 +1837,7 @@ grant execute on function public.is_member(uuid), public.is_admin(uuid), public.
   public.place_ok(uuid), public.message_in(uuid, uuid), public.react_ok(uuid), public.react_with(uuid, uuid, text), public.cat_can(uuid, text), public.chan_can(uuid, text),
   public.can_make_events(uuid), public.pin_ok(uuid, uuid), public.boost_level(uuid), public.create_thread(uuid, uuid, text), public.edit_thread(uuid, text, boolean),
   public.threads_info(uuid), public.search_messages(uuid, text, uuid, text, uuid, timestamptz, int), public.search_dm(uuid, text, uuid, text, timestamptz, int),
-  public.set_nick(uuid, uuid, text), public.set_server_privacy(uuid, boolean) to authenticated;
+  public.set_nick(uuid, uuid, text), public.set_server_privacy(uuid, boolean), public.badge_stats(uuid) to authenticated;
 revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text), public.verify_connection(uuid, jsonb) from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================

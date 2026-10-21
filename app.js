@@ -14,7 +14,8 @@ import { LOGOS, THEME_LOGO, logoEl, logoInfo, setFavicon } from './logo.js';
 import { openColor, colorSwatch, closeColor } from './color.js';
 import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily, loadFont } from './namestyle.js';
 import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
-import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, decoEl, effectEl, decoInfo, effectInfo, questInfo, questProgress } from './shop.js';
+import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, FRAMES, decoEl, effectEl, frameEl, decoInfo, effectInfo, frameInfo, questInfo, questProgress } from './shop.js';
+import { BADGES as PROFILE_BADGES, BADGE as PROFILE_BADGE, RARITY, badgesOf, badgeIcon, toNext, tierAt, fmt as fmtN } from './badges.js';
 import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (the test page hands in pretend cameras and microphones, and keeps everything quiet)
 const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
@@ -78,9 +79,170 @@ const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
 const stamp = () => { const u = { name: me.name, color: me.color }; if (me.avatar) u.avatar = me.avatar; if (me.pronouns) u.pronouns = me.pronouns; if (me.about) u.about = me.about; if (me.style) u.style = me.style; return u; };
 const myTag = () => (Store.kind === 'supabase' && Store.myProfile ? Store.myProfile().tag || null : null);
 const asMember = () => ({ id: 'me', name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, plate: me.plate || '', banner: me.banner || '',
-  theme: me.theme || null, style: me.style || null, tag: myTag(), playing: me.playing || null, decoration: me.decoration || '', effect: me.effect || '', me: true });
+  theme: me.theme || null, style: me.style || null, tag: myTag(), playing: me.playing || null, decoration: me.decoration || '', effect: me.effect || '', frame: me.frame || '',
+  bubble: myBubble(), me: true });
 // a profile effect over a card (when they have one, and effects are on)
 function withEffect(card, id) { if (id && prefs.effects !== 'off') { const fx = effectEl(id); if (fx) card.append(fx); } return card; }
+// a profile frame around a card (when they have one, and effects are on)
+function withFrame(card, id) { if (id && prefs.effects !== 'off') { const f = frameEl(id); if (f) { card.append(f); card.classList.add('framed'); } } return card; }
+
+// ---------- the status bubble (Discord's): what you're up to, in a bubble beside your picture on your profile ----------
+const BUBBLE_ASKS = ['What have you been reading?', 'What have you been listening to?', 'What are you up to?', 'What’s on your mind?', 'Just finished building…', 'Currently playing…'];
+const myBubble = () => (me.bubble && !(me.bubbleUntil && me.bubbleUntil <= Date.now()) ? me.bubble : '');
+// someone's bubble (yours, when you have none: a question to answer; click it to set one)
+function bubbleEl(u, { mine = false } = {}) {
+  const text = mine ? myBubble() : u.bubble || '';
+  if (!text && !mine) return null;
+  const b = el(mine ? 'button' : 'div', { className: 'p-bubble' + (text ? '' : ' ask') + (mine ? ' mine' : ''), title: mine ? (text ? 'Change your status' : 'Set a status') : '' },
+    el('i', { className: 'pb-d1' }), el('i', { className: 'pb-d2' }),
+    el('span', { className: 'pb-t' }, ...(text ? [text] : [icon('plusCircle', 15), BUBBLE_ASKS[Math.floor(Math.random() * BUBBLE_ASKS.length)]])));
+  if (mine) b.onclick = (e) => { e.stopPropagation(); bubbleDialog(); };
+  return b;
+}
+const CLEAR_AFTER = [['day', 'Today'], ['4h', '4 hours'], ['1h', '1 hour'], ['30m', '30 minutes'], ['never', 'Don’t clear']];
+const clearAt = (k) => { const now = Date.now(); if (k === 'day') { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); } return { '4h': now + 4 * 36e5, '1h': now + 36e5, '30m': now + 18e5 }[k] || 0; };
+// Set a Status: a line about what you're up to (an emoji too, if you like), and when it goes away
+function bubbleDialog() {
+  if (Store.kind === 'supabase' && !Store.canFrame()) return toast('Status bubbles need the newest supabase/setup.sql: run it again in Supabase.');
+  closePop();
+  const input = el('input', { type: 'text', maxLength: 128, value: myBubble(), placeholder: BUBBLE_ASKS[0] });
+  const put = (t) => { const a = input.selectionStart ?? input.value.length; input.value = (input.value.slice(0, a) + t + input.value.slice(input.selectionEnd ?? a)).slice(0, 128); input.focus(); draw(); };
+  const pick = el('button', { className: 'sb-emoji', type: 'button', title: 'Add an emoji', onclick: (e) => { e.stopPropagation(); openPicker({ tab: 'emoji', emojiOnly: true, anchor: pick, still: motionOff(),
+    servers: [], emojiOf: () => [], stickersOf: () => [], own: [], builtin: [], safeImg, canManage: () => false, manage: () => {}, onEmoji: (t, keep, custom) => { if (!custom) put(t); }, onSticker: () => {} }); } }, icon('smile', 20));
+  let after = me.bubble && me.bubbleUntil ? 'keep' : 'day';
+  const until = sel(after, [...(after === 'keep' ? [['keep', 'As it is (' + when(me.bubbleUntil, true) + ')']] : []), ...CLEAR_AFTER], (v) => { after = v; });
+  const pv = el('div', { className: 'sb-pv' });
+  const draw = () => { const u = { ...asMember(), bubble: input.value.trim() }; pv.replaceChildren(el('div', { className: 'sb-av' }, avatarEl(u, { size: 64 }), u.bubble ? bubbleEl(u) : null)); };
+  input.oninput = draw;
+  const save = (text) => {
+    me.bubble = text; me.bubbleUntil = text ? (after === 'keep' ? me.bubbleUntil : clearAt(after)) : 0;
+    saveMe(); pushProfile(); renderAll(); m.close();
+    toast(text ? 'Status set.' : 'Status cleared.');
+  };
+  const m = modal({ title: 'Set a Status', cls: 'sb-dlg', body: [pv, el('div', { className: 'field' }, el('label', {}, 'What are you up to?'), el('div', { className: 'sb-row' }, pick, input)),
+    el('div', { className: 'field' }, el('label', {}, 'Clear After'), until), el('p', { className: 'hint' }, 'It shows in a bubble beside your picture on your profile, and under your name in member lists.')],
+    actions: [myBubble() ? el('button', { className: 'btn ghost', onclick: () => save('') }, 'Clear Status') : null, el('span', { style: 'flex:1' }),
+      el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), el('button', { className: 'btn primary', onclick: () => save(input.value.trim()) }, 'Save')] });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(input.value.trim()); });
+  draw(); setTimeout(() => input.focus(), 0);
+}
+
+// ---------- badges (Discord's): earned by doing things; a row on profiles, and a window with the details ----------
+const FIRST_RUN = (() => { try { let t = +localStorage.getItem('fluentdat.firstRun'); if (!t) { t = Date.now(); localStorage.setItem('fluentdat.firstRun', String(t)); } return t; } catch { return Date.now(); } })();
+// (signed out: what's kept in this browser)
+function localStats() {
+  const x = Store.extrasNow('me') || {}, mine = (list) => (list || []).filter((m) => m.user && !m.user.bot && isMe(m.user)).length;
+  let messages = 0;
+  for (const sv of Store.servers()) for (const c of Store.channels(sv.id)) messages += mine(Store.messages(c.id));
+  for (const d of Store.dmList()) messages += mine(Store.dm(d.id));
+  const games = (Array.isArray(x.widgets) ? x.widgets : []).filter((w) => w && w.t === 'likes').reduce((n, w) => n + ((w.g || []).length), 0);
+  return { since: new Date(FIRST_RUN).toISOString(), messages, reactions: 0, threads: 0, friends: Store.friends().filter((f) => !f.bot).length, members: 0, boost_since: null,
+    events: 0, quests: (x.quests || []).length, connections: (x.connections || []).length, games, play_seconds: 0, staff: false };
+}
+const statsId = (u) => (!u || u.bot ? null : Store.kind === 'supabase' ? (isMe(u) ? Store.myId() : u.id) : isMe(u) ? 'me' : null);
+// what someone's badges are made of: the database counts (signed in), or this browser does (yours, signed out)
+async function statsOf(u) { if (Store.kind !== 'supabase') return isMe(u) ? localStats() : null; const id = statsId(u); return id ? Store.badgeStats(id) : null; }
+const statsNow = (u) => (Store.kind !== 'supabase' ? (isMe(u) ? localStats() : null) : statsId(u) ? Store.badgeStatsNow(statsId(u)) : null);
+const badgePrefs = (u) => { const id = statsId(u), x = id ? Store.extrasNow(id) : null; return (x && x.badges) || { order: [], hidden: [] }; };
+// a row of someone's badges (the ones they show, in their order), filled in when they're known; click one for its details
+function badgeRow(u, { max = 6 } = {}) {
+  const row = el('div', { className: 'p-badges' }); row.hidden = true;
+  const fill = (stats) => {
+    const list = stats ? badgesOf(stats, badgePrefs(u)).shown : [];
+    row.replaceChildren(...list.slice(0, max).map((b) => el('button', { className: 'p-badge', title: `${b.def.name}: ${b.name}`, onclick: (e) => { e.stopPropagation(); badgesDialog(u, b.id); } }, badgeIcon(b.id, b.tier, 22))),
+      ...(list.length > max ? [el('button', { className: 'p-badge more', title: 'See all the badges', onclick: (e) => { e.stopPropagation(); badgesDialog(u); } }, '+' + (list.length - max))] : []));
+    row.hidden = !list.length;
+  };
+  fill(statsNow(u));
+  const id = statsId(u);
+  Promise.all([statsOf(u), id && Store.kind === 'supabase' && !Store.extrasNow(id) ? Store.profileExtras(id).catch(() => null) : null]).then(([st]) => fill(st), () => {});
+  return row;
+}
+// Your badges (Discord's): the ones you have and the ones still to earn; one at a time, big, with its level, how far
+// along you are, and every level there is (someone else's: the ones they show)
+async function badgesDialog(u, focus = null) {
+  closePop();
+  const mine = isMe(u), title = mine ? 'Your badges' : `${u.name}’s badges`;
+  const left = el('div', { className: 'bg-left' }), right = el('div', { className: 'bg-right' });
+  let stats = statsNow(u), cur = focus;
+  const draw = () => {
+    if (!stats) { left.replaceChildren(el('h2', {}, title), el('p', { className: 'bg-sub' }, Store.kind === 'supabase' && !Store.canFrame() ? 'Badges need the newest supabase/setup.sql.' : 'Loading…')); right.replaceChildren(); return; }
+    const bp = badgePrefs(u), { shown, have, todo } = badgesOf(stats, { ...bp, all: mine }), list = mine ? have : shown, all = [...list, ...(mine ? todo : [])];
+    if (!all.some((b) => b.id === cur)) cur = (all[0] || {}).id || null;
+    const tile = (b) => el('button', { className: 'bg-tile' + (b.id === cur ? ' on' : '') + (b.tier < 0 ? ' todo' : '') + (mine && bp.hidden.includes(b.id) ? ' hid' : ''), title: b.def.name + (b.tier >= 0 ? ': ' + b.name : ''),
+      onclick: () => { cur = b.id; draw(); } }, badgeIcon(b.id, b.tier, 34), mine && bp.hidden.includes(b.id) ? el('span', { className: 'cb-eye' }, icon('eyeOff', 13)) : null);
+    left.replaceChildren(el('h2', {}, title),
+      el('p', { className: 'bg-sub' }, mine ? 'Browse your badges and discover new ones you can unlock.' : list.length ? `The badges ${u.name} shows on their profile.` : `${u.name} hasn’t shown any badges yet.`),
+      list.length ? el('div', { className: 'bg-grid' }, ...list.map(tile)) : null,
+      ...(mine && todo.length ? [el('h4', {}, 'Available to unlock'), el('div', { className: 'bg-grid' }, ...todo.map(tile))] : []),
+      mine ? el('div', { className: 'bg-foot' }, el('button', { className: 'btn', disabled: !have.length, onclick: () => customizeBadges(() => draw()) }, 'Customize Your Badges')) : null);
+    const b = all.find((x) => x.id === cur);
+    if (!b) { right.replaceChildren(el('div', { className: 'bg-empty' }, el('div', { className: 'fp-empty-ic' }, icon('medal', 34)), mine ? 'Do things in Fluentdat to earn badges.' : 'Nothing to see here yet.')); return; }
+    const d = b.def, bits = [b.tier >= 0 || b.value > 0 ? d.line(b.value) : '', b.unlocked ? 'Unlocked ' + new Date(b.unlocked).toLocaleDateString() : ''].filter(Boolean);
+    right.replaceChildren(
+      el('div', { className: 'bg-art' + (b.tier < 0 ? ' todo' : '') }, badgeIcon(b.id, Math.max(0, b.tier), 132)),
+      el('div', { className: 'bg-kind' }, d.name),
+      el('div', { className: 'bg-tier' }, b.tier >= 0 ? b.name : 'Not unlocked yet'),
+      el('div', { className: 'bg-line' }, ...bits.flatMap((t, i) => (i ? [' • ', t] : [t])),
+        b.tier >= 0 && d.id !== 'staff' ? el('span', { className: 'bg-rar', style: `--rc:${b.rarity[1]}` }, icon('up', 11), b.rarity[0].toUpperCase()) : null),
+      mine && b.next ? el('div', { className: 'bg-prog' }, el('h4', {}, 'Your progress'),
+        el('div', { className: 'bg-bar' }, badgeIcon(b.id, b.tier, 30), el('div', { className: 'bg-track' }, el('b', {}, toNext(b)), el('div', { className: 'bg-fill' }, el('i', { style: `width:${Math.round(b.progress * 100)}%` }))),
+          badgeIcon(b.id, b.tier + 1, 30)), el('p', {}, d.how)) : el('p', { className: 'bg-how' }, d.how),
+      d.tiers.length > 1 ? el('div', { className: 'bg-tiers' }, ...d.tiers.map(([at, tn], i) => el('div', { className: 'bg-t' + (i === b.tier ? ' on' : '') + (i > b.tier ? ' later' : '') },
+        badgeIcon(b.id, i, 34), el('b', {}, tn), el('small', {}, tierAt(d, at))))) : null);
+  };
+  const m = modal({ cls: 'bg-dlg', body: [el('div', { className: 'bg' }, left, right)] });
+  m.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: () => m.close() }, icon('x', 20)));
+  draw();
+  const id = statsId(u);
+  const [st] = await Promise.all([statsOf(u), id && Store.kind === 'supabase' ? Store.profileExtras(id).catch(() => null) : null]).catch(() => [null]);
+  if (m.scrim.isConnected) { stats = st || stats; draw(); }
+}
+// Customize Your Badges: drag them into the order you want, and click the ones nobody else should see
+async function customizeBadges(after) {
+  if (Store.kind === 'supabase' && !Store.canFrame()) return toast('Badges need the newest supabase/setup.sql: run it again in Supabase.');
+  const u = asMember(), stats = statsNow(u) || (await statsOf(u).catch(() => null));
+  if (!stats) return toast('Your badges aren’t known yet. Try again in a moment.');
+  const bp = badgePrefs(u), have = badgesOf(stats, { ...bp, all: true }).have;
+  if (!have.length) return toast('You haven’t earned a badge yet. Open Badges to see how.');
+  let order = have.map((b) => b.id), hidden = bp.hidden.filter((id) => order.includes(id)), dragId = null;
+  const grid = el('div', { className: 'cb-grid' }), pv = el('div', { className: 'cb-pv' });
+  const drawPv = () => { const shown = order.filter((id) => !hidden.includes(id)); pv.replaceChildren(el('span', {}, 'On your profile:'), ...shown.slice(0, 6).map((id) => badgeIcon(id, have.find((b) => b.id === id).tier, 22)),
+    shown.length > 6 ? el('span', { className: 'p-badge more' }, '+' + (shown.length - 6)) : null, shown.length ? null : el('i', {}, 'none')); };
+  const draw = () => { grid.replaceChildren(...order.map((id) => {
+    const b = have.find((x) => x.id === id), off = hidden.includes(id);
+    const t = el('button', { className: 'cb-tile' + (off ? ' hid' : ''), draggable: true, title: `${b.def.name}: ${b.name}. Click to ${off ? 'show' : 'hide'} it, drag to move it.`,
+      onclick: () => { hidden = off ? hidden.filter((x) => x !== id) : [...hidden, id]; draw(); } }, badgeIcon(id, b.tier, 34), off ? el('span', { className: 'cb-eye' }, icon('eyeOff', 14)) : null);
+    t.dataset.id = id;
+    t.addEventListener('dragstart', (e) => { dragId = id; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', id); } catch {} setTimeout(() => t.classList.add('drag'), 0); });
+    t.addEventListener('dragend', () => { dragId = null; draw(); });
+    t.addEventListener('dragover', (e) => {
+      if (!dragId) return; e.preventDefault();
+      if (dragId === id) return;
+      const from = order.indexOf(dragId), to = order.indexOf(id); order.splice(from, 1); order.splice(to, 0, dragId);
+      const moving = grid.querySelector(`[data-id="${dragId}"]`); if (moving) (from < to ? t.after(moving) : t.before(moving));
+    });
+    return t;
+  })); drawPv(); };
+  const save = async () => {
+    if ((await attempt(() => Store.setProfileExtras({ badges: { order, hidden } }))) === null) return;
+    m.close(); toast('Badges saved.'); if (after) after(); renderAll();
+  };
+  const m = modal({ title: 'Customize Your Badges', sub: 'Drag them into the order you want them shown in, and click the ones you don’t want others to see.', cls: 'cb-dlg', body: [grid, pv],
+    actions: [el('button', { className: 'btn ghost', onclick: () => { order = badgesOf(stats, {}).have.map((b) => b.id); hidden = []; draw(); } }, 'Reset'), el('span', { style: 'flex:1' }),
+      el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), el('button', { className: 'btn primary', onclick: save }, 'Save')] });
+  draw();
+}
+// Game Collection and Wishlist (Discord's rows): a few of the games, and how many more; click one for the Board
+function gameRows(x, onBoard) {
+  const ws = widgetsOf(x), out = [];
+  for (const [t, title, tab] of [['likes', 'Game Collection', 'board'], ['want', 'Wishlist', 'wishlist']]) {
+    const w = ws.find((v) => v && v.t === t && Array.isArray(v.g) && v.g.length); if (!w) continue;
+    out.push(el('button', { className: 'p-gc', title: tab === 'board' ? 'See the Board' : 'See the Wishlist', onclick: (e) => { e.stopPropagation(); onBoard(tab); } }, el('b', {}, title),
+      el('span', { className: 'p-gc-ic' }, ...w.g.slice(0, 3).map((g) => gameTile(g)), w.g.length > 3 ? el('span', { className: 'p-gc-n' }, '+' + (w.g.length - 3)) : null)));
+  }
+  return out;
+}
 
 // other people's profiles are theirs to fill in, so only colours and pictures of the expected shape are drawn
 // (a stray web address would let a stranger see who looked at their profile)
@@ -612,7 +774,7 @@ function dmSide(head, body) {
   for (const d of list) {
     if (closedDMs.has(d.id) && d.id !== dmId && !dmUnread(d.id)) continue;
     const n = dmUnread(d.id), group = d.kind === 'group', inCall = call && call.place === d.id;
-    const sub = group ? `${d.people.length} Member${d.people.length === 1 ? '' : 's'}` : inCall ? 'In a call' : d.user.about;
+    const sub = group ? `${d.people.length} Member${d.people.length === 1 ? '' : 's'}` : inCall ? 'In a call' : d.user.bubble || d.user.about;
     const row = el('button', { className: 'dm-row' + (dmId === d.id ? ' on' : '') + (n ? ' unread' : ''), onclick: () => { dmId = d.id; renderAll(); $('#app').classList.remove('show-side'); },
       oncontextmenu: (e) => { e.preventDefault(); dmCtx(d, e.clientX, e.clientY); } },
       dmAvatar(d, 32), el('div', { className: 'who' }, el('div', { className: 'nm2' }, dmName(d)), sub ? el('div', { className: 'sub2' + (inCall ? ' good' : '') }, sub) : null),
@@ -991,6 +1153,7 @@ function shopPage() {
   const live = Store.kind === 'supabase', you = asMember(), canDeco = !live || (Store.canDecorate && Store.canDecorate());
   const use = (patch, said) => {
     if (('decoration' in patch || 'effect' in patch) && !canDeco) return toast('The Shop needs the newest supabase/setup.sql: run it again in Supabase.');
+    if ('frame' in patch && live && !Store.canFrame()) return toast('Profile frames need the newest supabase/setup.sql: run it again in Supabase.');
     Object.assign(me, patch); saveMe(); pushProfile(); renderAll(); toast(said);
   };
   const lockBtn = (quest) => el('button', { className: 'btn small ghost', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('lock', 14), `Quest: ${(questInfo(quest) || {}).title || ''}`);
@@ -1006,6 +1169,13 @@ function shopPage() {
     return item(mini(id), name, quest ? (ok ? 'Quest reward · yours' : 'Quest reward') : 'Free',
       !ok ? lockBtn(quest) : on ? el('button', { className: 'btn small', onclick: () => use({ effect: '' }, 'Profile effect taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ effect: id }, `${name} is on your profile.`) }, 'Use'), on);
   });
+  // (a frame goes around a profile card: shown around an empty one, as on Discord)
+  const frames = FRAMES.map(([id, name]) => {
+    const on = me.frame === id, card = withFrame(el('div', { className: 'shp-skel' }, el('div', { className: 'shp-skel-b' }), el('div', { className: 'shp-skel-av' }), el('i', { className: 'l1' }), el('i', { className: 'l2' }), el('i', { className: 'l3' })), id);
+    return el('div', { className: 'shp-fr' + (on ? ' on' : '') }, el('div', { className: 'shp-fr-pv' }, card),
+      el('div', { className: 'shp-fr-meta' }, el('b', {}, name), el('small', {}, on ? 'Around your profile' : 'Free')),
+      on ? el('button', { className: 'btn small', onclick: () => use({ frame: '' }, 'Frame taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ frame: id }, `${name} is around your profile now.`) }, 'Use'));
+  });
   const plates = GRADS.map((_, i) => {
     const v = 'g:' + i, on = me.plate === v, row = el('div', { className: 'mem shp-plate plated' }, avatarEl(you, { size: 30 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, me.name)));
     row.style.setProperty('--plate', paint(v));
@@ -1019,6 +1189,7 @@ function shopPage() {
       el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
     ...sec('Avatar Decorations', 'Shown around your avatar everywhere: in chats, the member list and your profile.', decos),
     ...sec('Profile Effects', 'Played over your profile card when someone opens it.', effects, 'wide'),
+    ...sec('Profile Frames', 'Drawn around your profile card, wherever someone opens it.', frames, 'frames'),
     ...sec('Nameplates', 'Behind your name in the member list and your DMs (when people have nameplates on).', plates, 'wide'),
     prefs.decorations === 'off' || prefs.effects === 'off' ? el('div', { className: 'note-box' }, 'You’ve turned off decorations or effects for yourself (Settings → Appearance), so you won’t see them on other people.') : null);
 }
@@ -1791,7 +1962,9 @@ function renderMembers() {
     nm.style.setProperty('--who', safeColor(m.roleColor || m.color, 'var(--text)'));
     styledName(nmText, m, { roleColored: !!m.roleColor });
     const who = el('div', { className: 'who' }, nm), pl = playingNow(m.playing) ? m.playing : null;
+    const bub = isMe(m) ? myBubble() : m.bubble;            // (their status bubble, as Discord shows a custom status)
     if (pl) who.append(el('div', { className: 'mem-sub mem-play' }, 'Playing ', el('b', {}, pl.n)));
+    else if (bub) who.append(el('div', { className: 'mem-sub' }, bub));
     else if (prefs.memberStatusText) who.append(el('div', { className: 'mem-sub' }, m.about || (m.bot ? 'Bot' : (m.status || 'offline'))));
     const open = pop && pop.dataset.src === 'members' && pop.dataset.uid === String(m.id || m.name);
     const row = el('button', { className: 'mem' + (isOn(m) ? '' : ' off') + (open ? ' open' : ''), onclick: (e) => showProfile(m, e.currentTarget),
@@ -1965,13 +2138,26 @@ function closePop() {
   p.classList.add('out'); setTimeout(() => p.remove(), 170);
 }
 function placePop(anchor, h) {
-  const r = anchor.getBoundingClientRect(), w = pop.offsetWidth || 300, ph = h || pop.offsetHeight;
-  const beside = (x) => { pop.style.left = Math.max(12, Math.min(x, innerWidth - w - 12)) + 'px'; pop.style.top = Math.max(12, Math.min(r.top, innerHeight - ph - 12)) + 'px'; };
+  const r = anchor.getBoundingClientRect(), w = pop.offsetWidth || 300, ph = h || pop.offsetHeight, p = pop;
+  let above = false;
+  const beside = (x) => { p.style.left = Math.max(12, Math.min(x, innerWidth - w - 12)) + 'px'; p.style.top = Math.max(12, Math.min(r.top, innerHeight - ph - 12)) + 'px'; };
   const list = anchor.closest && anchor.closest('#members');
-  if (list && innerWidth > 720) { pop.classList.add('from-right'); return beside(list.getBoundingClientRect().left - w - 8); }     // (a member: to the left of the list)
-  if (anchor.closest && anchor.closest('#content .msg') && r.right + 8 + w <= innerWidth - 12) { pop.classList.add('from-left'); return beside(r.right + 8); }    // (a name in the chat: to its right)
-  pop.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px';
-  pop.style.top = (r.bottom + ph + 8 > innerHeight ? Math.max(12, r.top - ph - 8) : r.bottom + 8) + 'px';
+  if (list && innerWidth > 720) { p.classList.add('from-right'); beside(list.getBoundingClientRect().left - w - 8); }     // (a member: to the left of the list)
+  else if (anchor.closest && anchor.closest('#content .msg') && r.right + 8 + w <= innerWidth - 12) { p.classList.add('from-left'); beside(r.right + 8); }    // (a name in the chat: to its right)
+  else {
+    above = r.bottom + ph + 8 > innerHeight;
+    p.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px';
+    p.style.top = (above ? Math.max(12, r.top - ph - 8) : r.bottom + 8) + 'px';
+  }
+  // (what's in a card can arrive after it opens, its badges and games: it stays on the screen as it grows, upward
+  // when it opened above what you clicked)
+  if (!window.ResizeObserver) return;
+  const ro = new ResizeObserver(() => {
+    if (!p.isConnected) return ro.disconnect();
+    const hh = p.offsetHeight, t = above ? r.top - hh - 8 : parseFloat(p.style.top) || 12;
+    p.style.top = Math.max(12, Math.min(t, innerHeight - hh - 12)) + 'px';
+  });
+  ro.observe(p);
 }
 function showProfile(user, anchor) {
   // (clicking the same person again closes their card)
@@ -1981,35 +2167,54 @@ function showProfile(user, anchor) {
   if (again) return;
   const mine = isMe(user), sv = view === 'server' ? serverId : null, live = Store.kind === 'supabase';
   const u = mine ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, plate: me.plate,
-    decoration: me.decoration || '', effect: me.effect || '' } : user;
+    decoration: me.decoration || '', effect: me.effect || '', frame: me.frame || '', bubble: myBubble() } : user;
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, u.banner, u.color);
-  const toFull = () => fullProfile(user);
-  const inner = el('div', { className: 'inner' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: toFull }, avatarEl(u, { size: 74 })),
-    el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, styledName(el('span', {}, nameIn(u, sv)), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null, tagChipFor(u)),
+  const toFull = (tab) => { closePop(); fullProfile(user, tab || undefined); };
+  // (on the banner, as on Discord: befriending them, and the ⋯)
+  if (!mine && !u.bot) {
+    const st = friendState(u), tool = (ic, title, fn) => el('button', { className: 'p-tool', title, onclick: (e) => { e.stopPropagation(); fn(e); } }, icon(ic, 18));
+    banner.append(el('div', { className: 'p-tools' },
+      live && st === 'none' && !Store.blocked(u.id) ? tool('personAdd', 'Add Friend', () => befriend(u).then(() => closePop())) : null,
+      st === 'outgoing' ? tool('clock', 'Friend Request Sent (click to cancel)', async () => { await attempt(() => Store.cancelFriend(u.id)); closePop(); renderAll(); }) : null,
+      st === 'incoming' ? tool('check', 'Accept Friend Request', async () => { if ((await attempt(() => Store.acceptFriend(u.id))) !== null) toast(`You and ${u.name} are now friends!`); closePop(); renderAll(); }) : null,
+      st === 'friend' ? tool('userCheck', 'Friends', (e) => { const r = e.currentTarget.getBoundingClientRect(); menu([{ label: 'Remove Friend', danger: true, action: () => unfriend(u) }], r.left, r.bottom + 4); }) : null,
+      tool('more', 'More', (e) => openBeside(e.currentTarget, (r) => profileMenu(u, r.left, r.bottom + 4)))));
+  }
+  const handle = [u.login && !u.bot ? u.login : '', u.pronouns || ''].filter(Boolean);
+  const inner = el('div', { className: 'inner' },
+    el('div', { className: 'p-head' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: () => toFull() }, avatarEl(u, { size: 74 })), bubbleEl(u, { mine })),
+    el('button', { className: 'pn', title: 'View Full Profile', onclick: () => toFull() }, styledName(el('span', {}, nameIn(u, sv)), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
     sv && u.id && Store.nickIn(sv, u.id) ? el('div', { className: 'pr' }, u.name + ' · nickname in this server') : null,
-    u.login && !u.bot ? el('div', { className: 'pr' }, u.login + (u.pronouns ? ' · ' + u.pronouns : '')) : u.pronouns ? el('div', { className: 'pr' }, u.pronouns) : null,
-    u.bot && u.via ? el('div', { className: 'pr' }, 'Run by @' + u.via + ' (Flubot speaks for whoever types the command)') : null);
+    handle.length || tagFor(u) ? el('div', { className: 'p-handle' }, handle.length ? el('span', { className: 'pr' }, handle.join(' • ')) : null, tagChipFor(u)) : null,
+    u.bot && u.via ? el('div', { className: 'pr' }, 'Run by @' + u.via + ' (Flubot speaks for whoever types the command)') : null,
+    u.bot ? null : badgeRow(u, { max: 7 }));
   const sec = (title, ...kids) => el('div', { className: 'psec' }, el('h4', {}, title), ...kids);
-  if (live && !mine && !u.bot && u.id) {         // (what you have in common: click it for the whole profile)
-    const n = Store.mutualServers(u.id), line = el('button', { className: 'p-mutual', onclick: () => fullProfile(user, n ? 'servers' : 'friends') });
-    const say = (f) => { line.textContent = [n ? plural(n, 'Mutual Server') : '', f ? plural(f, 'Mutual Friend') : ''].filter(Boolean).join(' • '); line.hidden = !line.textContent; };
-    say(0); inner.append(line);
-    Store.mutualFriends(u.id).then((fr) => { if (line.isConnected) say(fr.length); }, () => {});
+  if (live && !mine && !u.bot && u.id) {         // (what you have in common, with their faces: click it for the whole profile)
+    const ms = Store.mutualServerList(u.id), line = el('button', { className: 'p-mutual', onclick: () => toFull(ms.length ? 'servers' : 'friends') });
+    const say = (fr) => {
+      const faces = fr.length ? fr.slice(0, 3).map((f) => avatarEl(face(f), { size: 18 })) : ms.slice(0, 3).map((x) => serverFace(x, 18));
+      const words = [fr.length ? plural(fr.length, 'Mutual Friend') : '', ms.length ? plural(ms.length, 'Mutual Server') : ''].filter(Boolean).join(' • ');
+      line.replaceChildren(el('span', { className: 'p-faces' }, ...faces), el('span', {}, words)); line.hidden = !words;
+    };
+    say([]); inner.append(line);
+    Store.mutualFriends(u.id).then((fr) => { if (line.isConnected) say(fr); }, () => {});
   }
   if (playingNow(u.playing)) inner.append(sec('Playing', playingRow(u.playing)));
-  if (u.about) inner.append(sec('About Me', el('div', { className: 'ab' }, u.about)));
+  const bio = u.about ? el('div', { className: 'ab p-bio' }, u.about) : null;
+  if (bio) inner.append(bio);
   if (u.since) inner.append(sec('Member Since', el('div', {}, new Date(u.since).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))));
-  // their roles in this server (admins can hand them out from here)
+  // their roles in this server (admins can hand them out, or take them back, from here)
   if (live && sv && u.id && !u.bot) {
-    const all = Store.roles(sv), has = all.filter((r) => ((Store.members(sv) || []).find((m) => m.id === u.id) || {}).roles?.includes(r.id));
-    if (has.length || (Store.canManage(sv) && all.length)) inner.append(sec('Roles', el('div', { className: 'role-chips' },
-      ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), r.name)),
-      Store.canManage(sv) && all.length ? el('button', { className: 'rchip add', title: 'Give a role', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu(roleItems(sv, u), r.left, r.bottom + 4); } }, icon('plus', 13)) : null)));
+    const all = Store.roles(sv), can = Store.canManage(sv), has = all.filter((r) => ((Store.members(sv) || []).find((m) => m.id === u.id) || {}).roles?.includes(r.id));
+    if (has.length || (can && all.length)) inner.append(el('div', { className: 'role-chips' },
+      ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), r.name,
+        can ? el('button', { className: 'rchip-x', title: `Take ${r.name} away`, onclick: async (e) => { e.stopPropagation(); if ((await attempt(() => Store.giveRole(sv, u.id, r.id, false))) !== null) { toast(`${u.name} is no longer ${r.name}.`); closePop(); } } }, icon('x', 11)) : null)),
+      can && all.length ? el('button', { className: 'rchip add', title: 'Give a role', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu(roleItems(sv, u), r.left, r.bottom + 4); } }, icon('plus', 13)) : null));
   }
-  // what they added to their profile (fetched now): their connections, and the first games on their Board
+  // what they added to their profile (fetched now): their games (Game Collection, Wishlist) and connections
   const xid = u.bot ? null : mine ? myXid() : live && u.id ? u.id : null;
   if (xid) {
-    const xbox = el('div', { className: 'p-extras' }), fill = (x) => xbox.replaceChildren(...extrasBits(x, sec, () => { closePop(); fullProfile(user, 'board'); }));
+    const xbox = el('div', { className: 'p-extras' }), fill = (x) => xbox.replaceChildren(...gameRows(x, (tab) => toFull(tab)), ...extrasBits({ ...(x || {}), widgets: [] }, sec, () => toFull('board')));
     fill(Store.extrasNow(xid)); inner.append(xbox);
     Store.profileExtras(xid).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
   }
@@ -2021,16 +2226,15 @@ function showProfile(user, anchor) {
       const text = say.value.trim(); closePop();
       if (await openDM(normFriend(u))) postMine({ text });
     };
-    const fb = friendState(u) === 'friend' ? null : friendButton(u);
-    if (fb) fb.addEventListener('click', closePop);
-    inner.append(el('div', { className: 'pmsg' }, say), el('div', { className: 'pacts' },
-      fb,
-      el('button', { className: 'btn small p-more', title: 'More', onclick: (e) => { e.stopPropagation(); openBeside(e.currentTarget, (r) => profileMenu(u, r.left, r.bottom + 4)); } }, icon('more', 16))));
+    const emo = el('button', { className: 'pmsg-emo', type: 'button', title: 'Add an emoji', onclick: (e) => { e.stopPropagation(); openPicker({ tab: 'emoji', emojiOnly: true, anchor: emo, still: motionOff(),
+      servers: [], emojiOf: () => [], stickersOf: () => [], own: [], builtin: [], safeImg, canManage: () => false, manage: () => {}, onEmoji: (t, keep, custom) => { if (!custom) { say.value += t; say.focus(); } }, onSticker: () => {} }); } }, icon('smile', 18));
+    inner.append(el('div', { className: 'pmsg' }, say, emo));
   }
   pop = el('div', { className: 'pop prof' }, banner, inner);
   pop.dataset.uid = String(user.id || user.name); pop.dataset.src = src;
-  themeCard(pop, u.theme); withEffect(pop, u.effect);
+  themeCard(pop, u.theme); withEffect(pop, u.effect); withFrame(pop, u.frame);
   document.body.append(pop); placePop(anchor);
+  if (bio && bio.scrollHeight > bio.clientHeight + 2) bio.after(el('button', { className: 'link-btn p-fullbio', onclick: () => toFull() }, 'View Full Bio'));
   if (anchor.classList && anchor.classList.contains('mem')) anchor.classList.add('open');
   if (!u.banner && u.id && !mine) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
 }
@@ -2084,7 +2288,8 @@ function dmPanel(u) {
   const av = el('button', { className: 'dmp-av', title: 'View Full Profile', onclick: () => fullProfile(u) }, avatarEl(u, { size: 80 }));
   const id = el('div', { className: 'dmp-id' },
     el('button', { className: 'dmp-name', title: 'View Full Profile', onclick: () => fullProfile(u) }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
-    el('div', { className: 'dmp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null));
+    el('div', { className: 'dmp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null),
+    u.bot ? null : badgeRow(u, { max: 7 }));
   const body = el('div', { className: 'dmp-body' });
   if (live && Store.blocked(u.id)) body.append(el('div', { className: 'dmp-card dmp-blocked' }, icon('ban', 16), el('span', {}, 'You blocked them. ', el('button', { className: 'link-btn', onclick: () => unblockUser(u) }, 'Unblock'))));
   if (playingNow(u.playing)) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Playing'), playingRow(u.playing)));
@@ -2105,13 +2310,14 @@ function dmPanel(u) {
   const note = noteOn(u.id);
   if (note) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Note'), el('div', { className: 'dmp-about' }, note)));
   if (live && u.id && !u.bot) {          // (their connections and Board, fetched now)
-    const xbox = el('div', { className: 'dmp-extras' }), fill = (x) => xbox.replaceChildren(...extrasBits(x, (t, ...k) => el('section', { className: 'dmp-card' }, el('h4', {}, t), ...k), () => fullProfile(u, 'board')));
+    const xbox = el('div', { className: 'dmp-extras' }), fill = (x) => xbox.replaceChildren(...gameRows(x, (tab) => fullProfile(u, tab)),
+      ...extrasBits({ ...(x || {}), widgets: [] }, (t, ...k) => el('section', { className: 'dmp-card' }, el('h4', {}, t), ...k), () => fullProfile(u, 'board')));
     fill(Store.extrasNow(u.id)); body.append(xbox);
     Store.profileExtras(u.id).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
   }
   if (!u.banner && u.id) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
-  return withEffect(themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, el('div', { className: 'dmp-top' }, banner, tools, av), id, body),
-    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'))), u.theme), u.effect);
+  return withFrame(withEffect(themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, el('div', { className: 'dmp-top' }, banner, tools, av, bubbleEl(u, { mine: isMe(u) })), id, body),
+    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'))), u.theme), u.effect), u.frame);
 }
 
 // the whole profile, in the middle of the screen (Discord's): their card on the left (message them, befriend them, their
@@ -2122,7 +2328,7 @@ function fullProfile(user, tab = null) {
   closePop(); if (fullOpen) fullOpen.close();
   const self = isMe(user), live = Store.kind === 'supabase';
   const u = self ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, playing: me.playing || null,
-    decoration: me.decoration || '', effect: me.effect || '', login: (Store.account() || {}).login || user.login } : user;
+    decoration: me.decoration || '', effect: me.effect || '', frame: me.frame || '', bubble: myBubble(), login: (Store.account() || {}).login || user.login } : user;
   const banner = el('div', { className: 'fp-banner' }); setBanner(banner, u.banner, u.color);
   const acts = el('div', { className: 'fp-acts' });
   const drawActs = () => {
@@ -2136,9 +2342,10 @@ function fullProfile(user, tab = null) {
   };
   drawActs();
   const sec = (title, ...kids) => el('section', { className: 'fp-sec' }, el('h4', {}, title), ...kids);
-  const left = el('div', { className: 'fp-left' }, el('div', { className: 'fp-top' }, banner, el('div', { className: 'fp-av' }, avatarEl(u, { size: 120 })), acts),
+  const left = el('div', { className: 'fp-left' }, el('div', { className: 'fp-top' }, banner, el('div', { className: 'fp-av' }, avatarEl(u, { size: 120 })), bubbleEl(u, { mine: self }), acts),
     el('div', { className: 'fp-id' }, el('h2', { className: 'fp-name' }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
-      el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null)));
+      el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null),
+      u.bot ? null : badgeRow(u, { max: 10 })));
   const card = el('div', { className: 'fp-card' });
   if (u.about) card.append(sec('About Me', el('div', { className: 'fp-about' }, u.about)));
   const since = [u.since && el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong(u.since)))].filter(Boolean);
@@ -2166,6 +2373,7 @@ function fullProfile(user, tab = null) {
   card.append(quiet); quiet.hidden = [...card.children].some((c) => c !== quiet && !c.hidden);
   left.append(card);
   themeCard(left, u.theme); withEffect(left, u.effect);
+  const leftBox = withFrame(el('div', { className: 'fp-lwrap' }, left), u.frame);          // (the frame stays put while the card scrolls)
   // the right side: their Board, Activity and Wishlist, and what you share
   const right = el('div', { className: 'fp-right' });
   const ms = live && !self ? Store.mutualServerList(u.id) : [];
@@ -2201,7 +2409,7 @@ function fullProfile(user, tab = null) {
     right.append(tabsEl, list); draw();
     if (!self && live && !u.bot) Store.mutualFriends(u.id).then((f) => { friends = f; if (fullOpen === w) draw(false); }, () => { friends = []; if (fullOpen === w) draw(false); });
   } else right.append(el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('users', 34)), u.bot ? 'Nothing to show here.' : 'Sign in to see what you have in common.'));
-  const w = modal({ cls: 'fp-dlg', body: [el('div', { className: 'fp' }, left, right)], onClose: () => { if (fullOpen === w) fullOpen = null; } });
+  const w = modal({ cls: 'fp-dlg', body: [el('div', { className: 'fp' }, leftBox, right)], onClose: () => { if (fullOpen === w) fullOpen = null; } });
   fullOpen = w;
   w.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: () => w.close() }, icon('x', 20)));
   if (!u.banner && u.id && !self) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
@@ -2367,33 +2575,61 @@ function pickGames({ title = 'Add Games', max = 20, have = [] } = {}) {
   });
 }
 
-// your own account popout (click your avatar in the user panel)
+// your own account popout (click your avatar in the user panel), as on Discord: your card (your status bubble, badges
+// and games), then Edit Profile, your status, Badges and Quests, then Switch Accounts and Copy User ID
 function showAccount(anchor) {
   closePop();
-  const row = (ic, label, extra, onclick) => el('button', { onclick }, icon(ic), el('span', {}, label), extra || null);
-  const card = el('div', { className: 'card' },
-    row('user', 'View Full Profile', null, () => { closePop(); fullProfile(asMember(), 'board'); }),
+  const u = asMember(), live = Store.kind === 'supabase', st = me.status || 'online', ready = questsReady();
+  const row = (ic, label, extra, onclick) => el('button', { onclick }, typeof ic === 'string' ? icon(ic) : ic, el('span', { className: 'grow' }, label), extra || null);
+  const chev = () => el('span', { className: 'chev' }, icon('chevR', 16));
+  const toFull = () => { closePop(); fullProfile(u, 'board'); };
+  const card1 = el('div', { className: 'card' },
     row('edit', 'Edit Profile', null, () => { closePop(); openProfileEditor(); }),
-    el('hr'), row('dot', 'Set Status', el('span', { className: 'chev' }, icon('chevR', 16)), (e) => { e.stopPropagation(); statusMenu(); }),
-    el('hr'), row('palette', 'Themes', el('span', { className: 'chev' }, icon('chevR', 16)), () => { closePop(); openThemes(); }),
-    el('hr'), Store.kind === 'supabase'
-      ? row('id', 'Copy My @handle', null, () => copyText('@' + (Store.account() || {}).login, 'Handle copied.'))
-      : row('id', 'Copy User ID', null, () => copyText(me.id, 'User ID copied.')));
+    row(el('span', { className: 'sdot ' + st }), (STATUSES.find((x) => x[0] === st) || [, 'Online'])[1],
+      el('span', { className: 'acct-st' }, me.statusUntil && st !== 'online' ? el('small', {}, 'until ' + when(me.statusUntil, true)) : null, st === 'dnd' ? icon('bellOff', 15) : null, chev()), (e) => { e.stopPropagation(); statusMenu(e.currentTarget); }),
+    row('medal', 'Badges', null, () => { closePop(); badgesDialog(u); }),
+    row('quest', 'Quests', el('span', { className: 'acct-st' }, ready ? el('span', { className: 'mbadge' }, String(ready)) : null, chev()), () => { closePop(); view = 'home'; dmId = null; homePage = 'quests'; renderAll(); }));
+  const card2 = el('div', { className: 'card' },
+    row('users', 'Switch Accounts', chev(), (e) => { e.stopPropagation(); switchMenu(e.currentTarget); }),
+    row('id', 'Copy User ID', null, () => { closePop(); copyText(String(live ? Store.myId() : me.id), 'User ID copied.'); }));
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, me.banner, me.color);
-  const xbox = el('div', { className: 'p-extras' });
+  const games = el('div', { className: 'p-gcs' });
   pop = el('div', { className: 'pop acct' }, banner,
-    el('div', { className: 'inner' }, avatarEl(asMember(), { size: 74 }),
-      el('div', { className: 'pn' }, styledName(el('span', {}, me.name), asMember()), tagChipFor(asMember())), el('div', { className: 'pr' }, me.pronouns || (STATUSES.find((s) => s[0] === me.status) || [, 'Online'])[1]),
-      me.about ? el('div', { className: 'ab' }, me.about) : null, xbox, card));
-  themeCard(pop, me.theme); withEffect(pop, me.effect);
-  const fill = (x) => xbox.replaceChildren(...extrasBits(x, (t, ...k) => el('div', { className: 'psec' }, el('h4', {}, t), ...k), () => { closePop(); fullProfile(asMember(), 'board'); }));
-  fill(Store.extrasNow(myXid())); Store.profileExtras(myXid()).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
+    el('div', { className: 'inner' }, el('div', { className: 'p-head' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: toFull }, avatarEl(u, { size: 74 })), bubbleEl(u, { mine: true })),
+      el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, styledName(el('span', {}, me.name), u), tagChipFor(u)),
+      el('div', { className: 'p-handle' }, el('span', { className: 'pr' }, [live ? (Store.account() || {}).login : '', me.pronouns].filter(Boolean).join(' • ') || (STATUSES.find((x) => x[0] === st) || [, 'Online'])[1]), badgeRow(u)),
+      me.about ? el('div', { className: 'ab p-bio' }, me.about) : null, games, card1, card2));
+  themeCard(pop, me.theme); withEffect(pop, me.effect); withFrame(pop, me.frame);
+  const fill = (x) => games.replaceChildren(...gameRows(x, (tab) => { closePop(); fullProfile(u, tab); }));
+  fill(Store.extrasNow(myXid())); Store.profileExtras(myXid()).then((x) => { if (games.isConnected) fill(x); }, () => {});
   document.body.append(pop); placePop(anchor);
 }
-function statusMenu() {
-  const inner = pop.querySelector('.inner'), card = inner.querySelector('.card');
-  card.replaceChildren(...STATUSES.map(([id, label]) => el('button', { onclick: () => { me.status = id; saveMe(); pushProfile(); renderMe(); renderMembers(); closePop(); } }, el('span', { className: 'dot ' + id, style: 'position:static;border:none;width:12px;height:12px' }), el('span', {}, label), me.status === id ? el('span', { className: 'chev' }, icon('check', 16)) : null)));
+// your status (Discord's): online, idle, Do Not Disturb or invisible, for a while or until you change it; and your bubble
+const STATUS_COLOR = { online: '#3ba55d', idle: '#faa81a', dnd: '#ed4245', invisible: '#747f8d' };
+const STATUS_FOR = [['For 15 Minutes', 9e5], ['For 1 Hour', 36e5], ['For 8 Hours', 288e5], ['For 24 Hours', 864e5], ['For 3 Days', 2592e5], ['Forever', 0]];
+function setStatus(id, ms = 0) { me.status = id; me.statusUntil = ms ? Date.now() + ms : 0; saveMe(); pushProfile(); closePop(); renderMe(); renderMembers(); }
+function statusMenu(anchor) {
+  const r = anchor.getBoundingClientRect();
+  menu([...STATUSES.map(([id, label]) => ({ label, color: STATUS_COLOR[id], hint: id === 'dnd' ? 'You won’t get desktop notifications' : id === 'invisible' ? 'You’ll look offline, but can use Fluentdat as usual' : null,
+      ...(id === 'online' ? { action: () => setStatus('online') } : { sub: () => STATUS_FOR.map(([l, ms]) => ({ label: l, action: () => setStatus(id, ms) })) }) })),
+    '-', { label: myBubble() ? 'Edit Custom Status' : 'Set Custom Status', icon: 'smile', action: () => bubbleDialog() },
+    myBubble() && { label: 'Clear Custom Status', icon: 'x', action: () => { me.bubble = ''; me.bubbleUntil = 0; saveMe(); pushProfile(); closePop(); renderAll(); } }], r.right + 8, r.top - 6);
 }
+// Switch Accounts: who you're signed in as, and signing in as someone else
+function switchMenu(anchor) {
+  const r = anchor.getBoundingClientRect(), live = Store.kind === 'supabase', acc = live ? Store.account() || {} : null;
+  menu([{ label: live ? '@' + (acc.login || 'you') : me.name, hint: live ? 'Signed in here' : 'Kept in this browser (not signed in)', check: true, action: () => {} },
+    '-', live ? { label: 'Log In to Another Account', icon: 'personAdd', action: async () => {
+      if (!(await confirmBox({ title: 'Log In to Another Account', text: 'You’ll be signed out here first. Sign back in as yourself any time.', ok: 'Sign Out and Continue' }))) return;
+      closePop(); await Store.signOut(); renderAll(); signInDialog(() => renderAll(), 'Sign in to Fluentdat');
+    } } : { label: 'Sign In', icon: 'personAdd', action: () => { closePop(); signInDialog(() => renderAll(), 'Sign in to Fluentdat'); } }], r.right + 8, r.top - 6);
+}
+// (a status or a bubble you set for a while goes back on its own)
+setInterval(() => {
+  const now = Date.now();
+  if (me.statusUntil && now >= me.statusUntil) { me.status = 'online'; me.statusUntil = 0; saveMe(); pushProfile(); renderMe(); renderMembers(); }
+  if (me.bubble && me.bubbleUntil && now >= me.bubbleUntil) { me.bubble = ''; me.bubbleUntil = 0; saveMe(); pushProfile(); renderMembers(); }
+}, 30000);
 
 // ---------- sending, commands, bot ----------
 function target() { return view === 'home' ? { send: (m) => Store.sendDM(dmId, m), bot: (Store.dmUser(dmId) || {}).bot } : { send: (m) => Store.send(channelId, m), bot: false }; }
@@ -4102,9 +4338,11 @@ function adoptProfile() {
   const p = Store.myProfile();
   if (p && p.name) {
     const next = { ...me, name: p.name, color: p.color || me.color, avatar: p.avatar || '', pronouns: p.pronouns || '', about: p.about || '', status: p.status || me.status,
+      statusUntil: p.status && p.status !== me.status ? 0 : me.statusUntil || 0,       // (a status changed elsewhere has no time limit here)
       banner: p.banner || '', plate: p.plate || '', ...(Store.styled && Store.styled() ? { theme: p.theme || null, style: p.style || null } : {}),
       ...(Store.canPlay && Store.canPlay() ? { playing: p.playing || null } : {}),
-      ...(Store.canDecorate && Store.canDecorate() ? { decoration: p.decoration || '', effect: p.effect || '' } : {}) };
+      ...(Store.canDecorate && Store.canDecorate() ? { decoration: p.decoration || '', effect: p.effect || '' } : {}),
+      ...(Store.canFrame && Store.canFrame() ? { frame: p.frame || '', bubble: p.bubble || '', bubbleUntil: p.bubble ? p.bubbleUntil || 0 : 0 } : {}) };
     if (p.id) next.id = p.id;
     if (JSON.stringify(next) !== JSON.stringify(me)) { me = next; saveMe(); }
   }
@@ -4124,7 +4362,7 @@ const pushProfile = () => {
   const t = me.theme || [], st = me.style || {};
   Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, banner: me.banner || '', plate: me.plate || '',
     theme1: t[0] || '', theme2: t[1] || '', name_font: st.font || '', name_effect: st.effect || '', name_color1: st.c1 || '', name_color2: st.c2 || '',
-    decoration: me.decoration || '', effect: me.effect || '' });
+    decoration: me.decoration || '', effect: me.effect || '', frame: me.frame || '', bubble: myBubble(), bubble_until: myBubble() && me.bubbleUntil ? new Date(me.bubbleUntil).toISOString() : null });
 };
 
 // choose a banner or nameplate: nothing, one of the gradients, or your own picture (made small enough to keep)
@@ -4164,111 +4402,122 @@ function picturePicker(value, onPick, { w = 960, h = 540, label = 'Upload a pict
 // ===================== the profile editor =====================
 // Its own window, like Discord's: what you can change down the left, and your profile as everyone sees it in the middle,
 // changing as you go. Nothing is saved until Save Changes; the bar that says so slides up, and shakes if you try to leave.
+// your profile editor, like Discord's: on the left, tiles that open their own windows (nameplate, avatar and decoration,
+// name style, theme and banner, effect and frame); in the middle, your profile as others see it, where you change your
+// words in place (name, pronouns, server tag, bio, connections); on the right, your Board, Activity and Wishlist.
+// What you change waits in the bar at the bottom until you save it (connections and the Board save as you go)
 function openProfileEditor() {
   closePop(); closeTagCard();
   if (document.querySelector('.pe-dlg')) return;
   const live = Store.kind === 'supabase';
   const fromMe = () => ({ name: me.name, pronouns: me.pronouns || '', about: me.about || '', color: me.color, avatar: me.avatar || '', banner: me.banner || '', plate: me.plate || '',
-    theme: me.theme ? [me.theme[0] || '', me.theme[1] || ''] : ['', ''], style: { font: '', effect: '', c1: '', c2: '', ...(me.style || {}) }, tag: (myTag() || {}).server || '' });
+    theme: me.theme ? [me.theme[0] || '', me.theme[1] || ''] : ['', ''], style: { font: '', effect: '', c1: '', c2: '', ...(me.style || {}) }, tag: (myTag() || {}).server || '',
+    decoration: me.decoration || '', effect: me.effect || '', frame: me.frame || '' });
   let base = fromMe(), d = JSON.parse(JSON.stringify(base));
   const dirty = () => JSON.stringify(d) !== JSON.stringify(base);
-  const asUser = () => ({ name: d.name || 'You', color: d.color, avatar: d.avatar, status: me.status, me: true, style: hasStyle(d.style) ? d.style : null, decoration: me.decoration || '',
-    login: (Store.account() || {}).login || '', pronouns: d.pronouns, theme: d.theme[0] || d.theme[1] ? d.theme : null,
+  const asUser = () => ({ name: d.name || 'You', color: d.color, avatar: d.avatar, status: me.status, me: true, style: hasStyle(d.style) ? d.style : null, decoration: d.decoration,
+    effect: d.effect, frame: d.frame, plate: d.plate, banner: d.banner, about: d.about, bubble: myBubble(), login: (Store.account() || {}).login || '', pronouns: d.pronouns,
+    theme: d.theme[0] || d.theme[1] ? d.theme : null,
     tag: live && d.tag ? (() => { const sv = Store.server(d.tag); return sv && sv.tag ? { text: sv.tag, badge: sv.tagBadge, color: sv.tagColor, server: sv.id } : null; })() : null });
-  // ---- the left: what you can change ----
-  const sec = (title, ...kids) => el('section', { className: 'pe-sec' }, el('h4', {}, title), ...kids);
-  const name = el('input', { type: 'text', value: d.name, maxLength: 32, placeholder: 'Your name' });
-  name.oninput = () => { d.name = name.value; update(); };
-  const pron = el('input', { type: 'text', value: d.pronouns, maxLength: 40, placeholder: 'Add your pronouns' });
-  pron.oninput = () => { d.pronouns = pron.value; update(); };
-  const about = el('textarea', { value: d.about, maxLength: 300, placeholder: 'Tell people a little about you', rows: 4 });
+  const later = (what) => toast(`${what} needs the newest supabase/setup.sql: run it again in Supabase.`);
+  // ---- the left: what you can change, each in a window of its own ----
+  const sec = (title, ...tiles) => el('section', { className: 'pe-sec' }, el('h4', {}, title), el('div', { className: 'pe-tiles' }, ...tiles));
+  const tile = (cls, title, onclick) => el('button', { className: 'pe-tile ' + cls, title, onclick });
+  const plateT = tile('wide', 'Change Nameplate', () => surfaceDialog('plate', d.plate, (v) => { d.plate = v; update(); }, asUser));
+  const avT = tile('sq', 'Change Avatar', (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    menu([{ label: 'Upload a Picture', icon: 'image', action: () => pickFile(async (f) => { try { d.avatar = await shrink(f, 256, 256, 150000); update(); } catch (er) { toast(String(er.message || er)); } }) },
+      d.avatar && { label: 'Remove Picture', icon: 'trash', action: () => { d.avatar = ''; update(); } },
+      { label: 'Colour Behind Your Initials', icon: 'palette', action: () => openColor({ anchor: avT, value: d.color, title: 'Avatar colour', onInput: (c) => { d.color = c; update(); }, onDone: (c) => { d.color = c; update(); } }) }], r.left, r.bottom + 6);
+  });
+  const decoT = tile('sq', 'Change Avatar Decoration', () => (live && !Store.canDecorate() ? later('The Shop') : lookDialog('deco', d.decoration, (v) => { d.decoration = v; update(); }, asUser)));
+  const styleT = tile('wide', 'Change Display Name Style', () => nameStyleDialog(d.style, (st) => { d.style = st; update(); }, asUser));
+  const themeT = tile('sq', 'Change Profile Theme', () => themeDialog(d.theme, (t) => { d.theme = t; update(); }, asUser));
+  const bannerT = tile('sq', 'Change Banner', () => surfaceDialog('banner', d.banner, (v) => { d.banner = v; update(); }, asUser));
+  const fxT = tile('sq', 'Change Profile Effect', () => (live && !Store.canDecorate() ? later('The Shop') : lookDialog('effect', d.effect, (v) => { d.effect = v; update(); }, asUser)));
+  const frameT = tile('sq', 'Change Profile Frame', () => (live && !Store.canFrame() ? later('Profile frames') : lookDialog('frame', d.frame, (v) => { d.frame = v; update(); }, asUser)));
+  const which = el('button', { className: 'pe-which', title: 'Which profile', onclick: (e) => {
+    const r = e.currentTarget.getBoundingClientRect(), mine = live ? Store.servers() : [];
+    menu([{ label: 'Main Profile', check: true, action: () => {} }, mine.length && '-', ...mine.map((sv) => ({ label: sv.name, hint: Store.nickIn(sv.id, Store.myId()) ? 'Nickname: ' + Store.nickIn(sv.id, Store.myId()) : 'A nickname just for this server',
+      action: () => serverProfileDialog(sv.id) }))], r.left, r.bottom + 6);
+  } }, el('b', {}, 'Main Profile'), icon('chevD', 16));
+  const side = el('div', { className: 'pe-side' }, which,
+    sec('Nameplate', plateT), sec('Avatar & Decoration', avT, decoT), sec('Display Name Style', styleT), sec('Theme & Banner', themeT, bannerT), sec('Profile Effect & Frame', fxT, frameT));
+  // ---- the middle: your profile, where your words change in place ----
+  const nameIn = el('input', { type: 'text', className: 'pe-name-in', maxLength: 32, placeholder: 'Your display name', value: d.name, hidden: true });
+  const nameView = el('button', { className: 'pe-name', title: 'Change your display name', onclick: () => { nameView.hidden = true; nameIn.hidden = false; nameIn.focus(); nameIn.select(); } });
+  nameIn.oninput = () => { d.name = nameIn.value; update(); };
+  nameIn.onblur = () => { nameIn.hidden = true; nameView.hidden = false; };
+  nameIn.onkeydown = (e) => { if (e.key === 'Enter' || e.key === 'Escape') { e.stopPropagation(); nameIn.blur(); } };
+  const pronIn = el('input', { type: 'text', className: 'pe-pron-in', maxLength: 40, placeholder: 'Add pronouns', value: d.pronouns });
+  pronIn.oninput = () => { d.pronouns = pronIn.value; update(); };
+  const tagSel = live ? (() => {
+    const tagged = Store.servers().filter((x) => x.tag);
+    return tagged.length ? sel(d.tag, [['', 'Server Tag'], ...tagged.map((x) => [x.id, `${x.tag} · ${x.name}`])], (v) => { d.tag = v; update(); }) : null;
+  })() : null;
+  if (tagSel) tagSel.classList.add('pe-tag-sel');
+  const bioIn = el('textarea', { className: 'pe-bio-in', maxLength: 300, rows: 2, placeholder: 'Tell people a little about you', value: d.about });
   const count = el('span', { className: 'pe-count' });
-  about.oninput = () => { d.about = about.value; update(); };
-  const avTile = el('button', { className: 'pe-tile pe-av', title: 'Change Avatar', onclick: () => pickFile(async (f) => { try { d.avatar = await shrink(f, 256, 256, 150000); update(); } catch (e) { toast(String(e.message || e)); } }) });
-  const avColor = colorSwatch(d.color, (c) => { d.color = c; update(); }, { title: 'Avatar colour (behind your initials)' });
-  const styleBtn = el('button', { className: 'pe-tile pe-style', title: 'Change Display Name Style', onclick: () => nameStyleDialog(d.style, (st) => { d.style = st; update(); }, asUser) });
-  const t1 = colorSwatch(d.theme[0], (c) => { d.theme[0] = c; update(); }, { title: 'Primary colour (the top of your profile)' });
-  const t2 = colorSwatch(d.theme[1], (c) => { d.theme[1] = c; update(); }, { title: 'Accent colour (the bottom of your profile)' });
-  const tagPick = live ? (() => {
-    const mine = Store.servers().filter((sv) => sv.tag);
-    if (!mine.length) return el('p', { className: 'hint' }, 'None of your servers has a tag yet. A server’s admins can make one in Server Settings → Server Tag.');
-    return sel(d.tag, [['', 'No tag'], ...mine.map((sv) => [sv.id, `${sv.tag} · ${sv.name}`])], (v) => { d.tag = v; update(); });
-  })() : el('p', { className: 'hint' }, 'Sign in to wear a server’s tag.');
-  // connections, the Board, and the Shop's decoration and effect: these save as you change them (not with the bar)
+  const fit = () => { bioIn.style.height = 'auto'; bioIn.style.height = bioIn.scrollHeight + 'px'; };
+  bioIn.oninput = () => { d.about = bioIn.value; fit(); update(); };
   const xid = myXid(), now = () => Store.extrasNow(xid) || { connections: [], widgets: [], activity: [] };
-  const connBox = el('div', { className: 'pe-conns' }), boardBox = el('div', { className: 'pe-board' }), shopBox = el('div', { className: 'pe-shop' });
   const saveX = async (patch) => { await attempt(() => Store.setProfileExtras(patch)); drawExtras(); };
+  const head = el('div', { className: 'pe-head' }), avBox = el('div', { className: 'pe-cav' }), badgesBox = el('div', { className: 'pe-badges', title: 'Customize your badges', onclick: () => customizeBadges(() => drawBadges()) });
+  const connBox = el('div', { className: 'pe-conns' });
+  const card = el('div', { className: 'pe-card' }, head, avBox,
+    el('div', { className: 'pe-cbody' }, nameView, nameIn,
+      el('div', { className: 'pe-handle' }, el('span', {}, (Store.account() || {}).login || (live ? '' : 'you')), el('span', { className: 'pe-dot' }, '•'), pronIn, tagSel),
+      badgesBox,
+      el('div', { className: 'pe-acts' }, el('span', { className: 'btn pe-fake' }, icon('message', 16), 'Message'),
+        el('button', { className: 'btn fp-icon', title: 'Shop', onclick: () => toShop() }, icon('shop', 18)), el('span', { className: 'btn fp-icon pe-fake' }, icon('more', 18))),
+      el('section', { className: 'pe-csec' }, el('h4', {}, 'Bio'), bioIn, count),
+      el('section', { className: 'pe-csec' }, el('h4', {}, 'Member Since'), el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong((Store.myProfile && Store.myProfile().since) || FIRST_RUN)))),
+      el('section', { className: 'pe-csec' }, el('h4', {}, 'Connections'), connBox)));
+  const drawBadges = () => badgesBox.replaceChildren(badgeRow(asMember(), { max: 8 }), el('span', { className: 'pe-badges-hint' }, icon('edit', 13), 'Customize'));
+  // ---- the right: your Board, Activity and Wishlist ----
+  let tab = 'board';
+  const tabsEl = el('nav', { className: 'fp-tabs pe-tabs', role: 'tablist' }), list = el('div', { className: 'fp-list pe-list' });
   function drawExtras() {
-    const list = now().connections;
-    connBox.replaceChildren(...list.map((c) => el('div', { className: 'pe-conn' }, brandIcon(c.s, 18, { tile: true }), el('span', { className: 'grow' }, connectionLabel(c)),
-      c.v ? el('span', { className: 'cx-v', title: 'Verified' }, icon('check', 11)) : null,
-      el('button', { className: 'cx-btn del', title: 'Remove', onclick: () => saveX({ connections: list.filter((y) => y !== c) }) }, icon('x', 14)))),
-      el('button', { className: 'btn small', onclick: () => pickService(drawExtras) }, icon('plus', 14), 'Add Connection'));
-    boardBox.replaceChildren(...boardView(now(), true, saveX));
-    const di = decoInfo(me.decoration), ei = effectInfo(me.effect), toShop = () => { if (dirty()) return leave(); w.close(); view = 'home'; dmId = null; homePage = 'shop'; renderAll(); };
-    shopBox.replaceChildren(
-      el('div', { className: 'pe-shoprow' }, el('span', { className: 'grow' }, el('b', {}, 'Avatar Decoration'), el('small', {}, di ? di[1] : 'None')),
-        di ? el('button', { className: 'btn small ghost', onclick: () => { me.decoration = ''; saveMe(); pushProfile(); drawExtras(); update(); renderAll(); } }, 'Remove') : null),
-      el('div', { className: 'pe-shoprow' }, el('span', { className: 'grow' }, el('b', {}, 'Profile Effect'), el('small', {}, ei ? ei[1] : 'None')),
-        ei ? el('button', { className: 'btn small ghost', onclick: () => { me.effect = ''; saveMe(); pushProfile(); drawExtras(); update(); renderAll(); } }, 'Remove') : null),
-      el('button', { className: 'btn small primary', onclick: toShop }, icon('shop', 14), 'Get More in the Shop'));
-    if (typeof update === 'function' && card.isConnected) update();
+    const x = now(), conns = x.connections || [];
+    connBox.replaceChildren(...conns.map((c) => el('div', { className: 'pe-conn' }, connectionRow(c),
+      el('button', { className: 'cx-btn del', title: 'Remove', onclick: () => saveX({ connections: conns.filter((y) => y !== c) }) }, icon('x', 14)))),
+      el('button', { className: 'fp-addconn', onclick: () => pickService(drawExtras) }, icon('plus', 15), 'Add Connection'));
+    tabsEl.replaceChildren(...[['board', 'Board'], ['activity', 'Activity'], ['wishlist', 'Wishlist']].map(([id, label]) =>
+      el('button', { className: id === tab ? 'on' : '', role: 'tab', onclick: () => { tab = id; drawExtras(); } }, label)));
+    list.replaceChildren(...(tab === 'board' ? boardView(x, true, saveX) : tab === 'activity' ? activityView(asMember(), x, true, () => drawExtras()) : wishlistView(x, true, saveX)));
   }
-  const side = el('div', { className: 'pe-side' },
-    el('div', { className: 'pe-title' }, icon('edit', 18), el('b', {}, 'Main Profile')),
-    sec('Display Name', name),
-    sec('Pronouns', pron),
-    sec('Avatar', el('div', { className: 'pe-row' }, avTile,
-      el('div', { className: 'pe-avbtns' },
-        el('button', { className: 'btn small', onclick: () => avTile.click() }, icon('image', 15), 'Change Avatar'),
-        el('button', { className: 'btn small ghost', onclick: () => { d.avatar = ''; update(); } }, 'Remove'),
-        el('label', { className: 'pe-inline' }, avColor, el('span', {}, 'Colour'))))),
-    sec('Display Name Style', styleBtn),
-    sec('Profile Theme', el('div', { className: 'pe-theme' }, el('label', {}, t1, el('span', {}, 'Primary')), el('label', {}, t2, el('span', {}, 'Accent')),
-      el('button', { className: 'link-btn', onclick: () => { d.theme = ['', '']; t1.set(''); t2.set(''); update(); } }, 'Reset'))),
-    sec('Banner', picturePicker(d.banner, (v) => { d.banner = v; update(); }, { w: 680, h: 240, label: 'Upload a banner' })),
-    sec('Nameplate', picturePicker(d.plate, (v) => { d.plate = v; update(); }, { w: 480, h: 96, label: 'Upload a nameplate' })),
-    sec('Server Tag', tagPick),
-    sec('About Me', about, count),
-    sec('Avatar Decoration & Profile Effect', shopBox),
-    sec('Connections', connBox),
-    sec('Widgets', el('p', { className: 'hint' }, 'Your Board, on your full profile. Saved as you change it.'), boardBox));
-  // ---- the middle: your profile, as others see it ----
-  const card = el('div', { className: 'pe-card' }), chat = el('div', { className: 'pe-chat' }), memRow = el('div', { className: 'mem pe-mem' });
-  const preview = el('div', { className: 'pe-main' }, el('div', { className: 'pe-label' }, 'Preview'), card,
-    el('div', { className: 'pe-label' }, 'In a conversation'), chat, el('div', { className: 'pe-label' }, 'In the member list'), memRow);
+  const right = el('div', { className: 'pe-right' }, tabsEl, list);
   const bar = el('div', { className: 'pe-bar' }, el('span', {}, 'Careful — you have unsaved changes!'),
     el('button', { className: 'btn ghost', onclick: () => { d = JSON.parse(JSON.stringify(base)); refill(); update(); } }, 'Reset'),
     el('button', { className: 'btn primary', onclick: save }, 'Save Changes'));
-  function refill() { name.value = d.name; pron.value = d.pronouns; about.value = d.about; avColor.set(d.color); t1.set(d.theme[0]); t2.set(d.theme[1]); }
+  function refill() { nameIn.value = d.name; pronIn.value = d.pronouns; bioIn.value = d.about; fit(); if (tagSel) tagSel.value = d.tag; }
   function update() {
     const u = asUser();
-    avTile.replaceChildren(avatarEl(u, { size: 72 }), el('span', { className: 'pe-cam' }, icon('image', 16)));
-    styleBtn.replaceChildren(styledName(el('span', { className: 'pe-sname' }, d.name || 'You'), u), el('span', { className: 'pe-chg' }, 'Change'));
-    count.textContent = `${d.about.length}/300`;
-    // the card
+    // (the tiles: what each looks like now)
+    const row = el('div', { className: 'mem pe-plate-row' }, avatarEl(u, { size: 26 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, u.name), u))));
+    plateT.replaceChildren(plateOn(row, d.plate));
+    avT.replaceChildren(avatarEl({ ...u, decoration: '', me: false, status: '' }, { size: 64 }), el('span', { className: 'pe-tile-ic' }, icon('image', 14)));
+    decoT.replaceChildren(d.decoration ? avatarEl({ ...u, me: false, avatar: '', color: '#3f4248', name: ' ', status: '' }, { size: 54 }) : el('span', { className: 'pe-plus' }, icon('plusCircle', 30)));
+    styleT.replaceChildren(styledName(el('span', { className: 'pe-sname' }, u.name), u));
+    themeT.replaceChildren(el('span', { className: 'pe-th', style: `background:${d.theme[0] || '#4e5058'}` }), el('span', { className: 'pe-th', style: `background:${d.theme[1] || '#2b2d31'}` }));
+    bannerT.replaceChildren(d.banner ? el('span', { className: 'pe-bn', style: `background:${paint(d.banner)}` }) : el('span', { className: 'pe-plus' }, icon('plusCircle', 30)));
+    fxT.replaceChildren(d.effect ? el('span', { className: 'pe-mini' }, effectEl(d.effect)) : el('span', { className: 'pe-plus' }, icon('plusCircle', 30)));
+    frameT.replaceChildren(d.frame ? el('span', { className: 'pe-mini' }, frameEl(d.frame)) : el('span', { className: 'pe-plus' }, icon('plusCircle', 30)));
+    // (the card)
     const banner = el('div', { className: 'pe-banner' }); setBanner(banner, d.banner, d.color);
-    card.replaceChildren(banner, el('div', { className: 'pe-cav' }, avatarEl(u, { size: 92 })),
-      el('div', { className: 'pe-cbody' },
-        el('h2', { className: 'pe-cname' }, styledName(el('span', {}, d.name || 'You'), u)),
-        el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, d.pronouns ? el('span', { className: 'dmp-pro' }, d.pronouns) : null, u.tag ? el('span', { className: 'dmp-tagwrap' }, tagChip(u.tag)) : null),
-        d.about ? el('section', { className: 'pe-csec' }, el('h4', {}, 'About Me'), el('div', { className: 'fp-about' }, d.about)) : null,
-        el('section', { className: 'pe-csec' }, el('h4', {}, 'Member Since'), el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong((Store.myProfile && Store.myProfile().since) || Date.now())))),
-        ...extrasBits(now(), (t, ...k) => el('section', { className: 'pe-csec' }, el('h4', {}, t), ...k), () => {})));
-    themeCard(card, u.theme); withEffect(card, me.effect);
-    // a message, and a member-list row
-    const nm = styledName(el('span', { className: 'nm' }, d.name || 'You'), u); nm.style.setProperty('--who', safeColor(d.color));
-    chat.replaceChildren(el('div', { className: 'msg' }, avatarEl(u), el('div', { className: 'body' },
-      el('div', { className: 'meta' }, nm, u.tag ? tagChip(u.tag) : null, el('span', { className: 'when' }, 'Today at ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))),
-      el('div', { className: 'text' }, 'Hey! This is how my messages look.'))));
-    const mnm = el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, d.name || 'You'), u), u.tag ? tagChip(u.tag) : null); mnm.style.setProperty('--who', safeColor(d.color));
-    memRow.replaceChildren(avatarEl(u), el('div', { className: 'who' }, mnm)); plateOn(memRow, d.plate);
+    head.replaceChildren(banner);
+    avBox.replaceChildren(avatarEl(u, { size: 92 }), bubbleEl(u, { mine: true }));
+    nameView.replaceChildren(styledName(el('span', {}, d.name || 'You'), u), el('span', { className: 'pe-pen' }, icon('edit', 14)));
+    count.textContent = `${d.about.length}/300`;
+    for (const n of [...card.querySelectorAll(':scope > .pfx, :scope > .pframe')]) n.remove();
+    card.classList.remove('framed');
+    themeCard(card, u.theme); withEffect(card, d.effect); withFrame(card, d.frame);
     bar.classList.toggle('on', dirty());
   }
   async function save() {
     const st = d.style, theme = d.theme[0] || d.theme[1] ? [d.theme[0], d.theme[1]] : null;
     me = { ...me, name: d.name.trim().slice(0, 32) || 'You', pronouns: d.pronouns.trim(), about: d.about.trim(), color: d.color, avatar: d.avatar, banner: d.banner, plate: d.plate,
-      theme, style: hasStyle(st) ? { font: st.font, effect: st.effect, c1: st.c1, c2: st.c2 } : null };
+      theme, style: hasStyle(st) ? { font: st.font, effect: st.effect, c1: st.c1, c2: st.c2 } : null, decoration: d.decoration, effect: d.effect, frame: d.frame };
     saveMe(); pushProfile();
     if (live && d.tag !== base.tag && (await attempt(() => Store.adoptTag(d.tag || null))) === null) return;
     base = fromMe(); d = JSON.parse(JSON.stringify(base)); refill(); update(); renderAll();
@@ -4278,17 +4527,100 @@ function openProfileEditor() {
     if (!dirty()) return w.close();
     bar.classList.remove('shake'); void bar.offsetWidth; bar.classList.add('shake');
   };
-  const w = modal({ cls: 'pe-dlg', body: [el('div', { className: 'pe' }, side, preview), bar], onClose: () => closeColor() });
+  const toShop = () => { if (dirty()) return leave(); w.close(); view = 'home'; dmId = null; homePage = 'shop'; renderAll(); };
+  const w = modal({ cls: 'pe-dlg', body: [el('div', { className: 'pe' }, side, el('div', { className: 'pe-main' }, card), right), bar], onClose: () => closeColor() });
   // (Escape and the backdrop only close it when nothing is unsaved; otherwise the bar shakes)
-  const guard = (e) => { if (e.key === 'Escape' && document.querySelector('.pe-dlg') && dirty() && !document.querySelector('.cp, .ns-dlg, .ctx')) { e.stopImmediatePropagation(); leave(); } };
+  const guard = (e) => { if (e.key === 'Escape' && document.querySelector('.pe-dlg') && dirty() && !document.querySelector('.cp, .ns-dlg, .lk-dlg, .ctx, .sf-dlg, .th-dlg')) { e.stopImmediatePropagation(); leave(); } };
   addEventListener('keydown', guard, true);
   const off = new MutationObserver(() => { if (!w.scrim.isConnected) { removeEventListener('keydown', guard, true); off.disconnect(); } });
   off.observe(document.body, { childList: true });
   w.scrim.addEventListener('mousedown', (e) => { if (e.target === w.scrim && dirty()) { e.stopImmediatePropagation(); leave(); } }, true);
   w.scrim.addEventListener('click', (e) => { if (e.target === w.scrim && dirty()) e.stopImmediatePropagation(); }, true);
   w.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: leave }, icon('x', 20)));
-  update(); drawExtras();
-  Store.profileExtras(xid).then(() => { if (w.scrim.isConnected) drawExtras(); }, () => {});
+  update(); drawExtras(); drawBadges(); setTimeout(fit, 0);
+  Store.profileExtras(xid).then(() => { if (w.scrim.isConnected) { drawExtras(); drawBadges(); } }, () => {});
+}
+// a small profile card to try a look on (Discord's previews): banner, picture, name, a few words and a button
+function mockCard(u, { effect = u.effect, frame = u.frame } = {}) {
+  const c = el('div', { className: 'mock-card' }, el('div', { className: 'mock-b' }), el('div', { className: 'mock-av' }, avatarEl(u, { size: 64 })),
+    el('div', { className: 'mock-body' }, el('b', { className: 'mock-n' }, styledName(el('span', {}, u.name), u)), el('small', {}, u.login || 'you'),
+      el('p', {}, u.about || 'A few words about you go here.'), el('span', { className: 'mock-btn' }, 'Example Button')));
+  setBanner(c.firstChild, u.banner, u.color); themeCard(c, u.theme); withEffect(c, effect); withFrame(c, frame);
+  return c;
+}
+// Discord's "Change Avatar Decoration", "Change Profile Effect" and "Change Profile Frame": None, the Shop, and every
+// one there is (a few unlock with a Quest), beside a preview of how it looks on you; Apply puts it on (save to keep it)
+function lookDialog(kind, current, onApply, who) {
+  const LISTS = { deco: [DECORATIONS, 'Change Avatar Decoration', 'Decorations'], effect: [PROFILE_EFFECTS, 'Change Profile Effect', 'Effects'], frame: [FRAMES, 'Change Profile Frame', 'Frames'] };
+  const [items, title, word] = LISTS[kind];
+  let cur = current || '';
+  const grid = el('div', { className: 'lk-grid lk-' + kind }), pv = el('div', { className: 'lk-pv' }), info = el('div', { className: 'lk-info' });
+  const apply = el('button', { className: 'btn primary', onclick: () => { onApply(cur); m.close(); } }, 'Apply');
+  const face = (id) => {
+    const u = who();
+    if (kind === 'deco') return avatarEl({ ...u, decoration: id, me: false, status: '' }, { size: 52 });
+    const box = el('span', { className: 'lk-mini' }, el('span', { className: 'lk-mini-b' }), el('span', { className: 'lk-mini-av' }));
+    setBanner(box.firstChild, u.banner, u.color); themeCard(box, u.theme);
+    return kind === 'effect' ? withEffect(box, id) : withFrame(box, id);
+  };
+  const draw = () => {
+    grid.replaceChildren(
+      el('button', { className: 'lk-tile lk-none' + (!cur ? ' on' : ''), title: 'None', onclick: () => { cur = ''; draw(); } }, icon('ban', 26), el('span', {}, 'None')),
+      el('button', { className: 'lk-tile lk-shop', title: 'Open the Shop', onclick: () => { m.close(); const ed = document.querySelector('.pe-dlg .fp-x'); toast('Everything in the Shop is free: pick one here, or have a look there after you save.'); if (!ed) { view = 'home'; dmId = null; homePage = 'shop'; renderAll(); } } }, icon('shop', 26), el('span', {}, 'Shop')),
+      ...items.map(([id, name, quest]) => {
+        const locked = quest && !unlocked(quest);
+        return el('button', { className: 'lk-tile' + (cur === id ? ' on' : '') + (locked ? ' locked' : ''), title: name, onclick: () => { cur = id; draw(); } }, face(id), locked ? el('span', { className: 'lk-lock' }, icon('lock', 12)) : null);
+      }));
+    const u = { ...who() };
+    if (kind === 'deco') {
+      const d2 = { ...u, decoration: cur };
+      pv.replaceChildren(el('div', { className: 'lk-deco-big' }, avatarEl({ ...d2, me: false, status: '' }, { size: 128 })),
+        el('div', { className: 'lk-deco-sizes' }, ...[['online', 64], ['idle', 44], ['dnd', 34], ['offline', 26]].map(([st, sz]) => avatarEl({ ...d2, status: st }, { size: sz, status: st }))));
+    } else pv.replaceChildren(mockCard(u, kind === 'effect' ? { effect: cur, frame: u.frame } : { effect: u.effect, frame: cur }));
+    const it = items.find((x) => x[0] === cur), locked = !!(it && it[2] && !unlocked(it[2]));
+    info.replaceChildren(...(it ? [el('b', {}, it[1]), el('small', {}, it[2] ? (locked ? `Unlocks with the Quest “${(questInfo(it[2]) || {}).title || ''}”` : 'A Quest reward · yours') : 'Free')] : [el('b', {}, 'None'), el('small', {}, `No ${word.toLowerCase().replace(/s$/, '')}`)]));
+    apply.disabled = locked;
+  };
+  const m = modal({ cls: 'lk-dlg', body: [el('div', { className: 'lk' }, el('div', { className: 'lk-left' }, el('h3', {}, title), el('h5', {}, 'Your ' + word), grid), el('div', { className: 'lk-right' }, pv, info))],
+    actions: [el('span', { style: 'flex:1' }), el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), apply] });
+  m.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: () => m.close() }, icon('x', 20)));
+  draw();
+}
+// Change Nameplate and Change Banner: a gradient, a colour (or two) or your own picture, with a preview
+function surfaceDialog(kind, current, onApply, who) {
+  let cur = current || '';
+  const pv = el('div', { className: 'sf-pv' });
+  const draw = () => {
+    const u = { ...who(), [kind]: cur };
+    if (kind === 'plate') {
+      const rows = [0, 1, 2, 3, 4].map((i) => i === 2 ? plateOn(el('div', { className: 'mem sf-row me' }, avatarEl(u, { size: 32 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, u.name), u)))), cur)
+        : el('div', { className: 'sf-row ghost' }, el('i', { className: 'sf-dot' }), el('i', { className: 'sf-line' })));
+      pv.replaceChildren(el('div', { className: 'sf-list' }, ...rows));
+    } else pv.replaceChildren(mockCard(u));
+  };
+  const m = modal({ cls: 'sf-dlg', title: kind === 'plate' ? 'Change Nameplate' : 'Change Banner', sub: kind === 'plate' ? 'Behind your name in member lists and DMs.' : 'Across the top of your profile.',
+    body: [el('div', { className: 'sf' }, el('div', { className: 'sf-left' }, picturePicker(cur, (v) => { cur = v; draw(); }, kind === 'plate' ? { w: 480, h: 96, label: 'Upload a nameplate' } : { w: 680, h: 240, label: 'Upload a banner' })), pv)],
+    actions: [el('span', { style: 'flex:1' }), el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), el('button', { className: 'btn primary', onclick: () => { onApply(cur); m.close(); } }, 'Apply')] });
+  draw();
+}
+// Change Profile Theme: two colours (the top of your profile and its bottom), with ready-made pairs and a preview
+const THEME_PAIRS = [['#5865f2', '#eb459e'], ['#0f2027', '#2c5364'], ['#232526', '#414345'], ['#ff7e5f', '#feb47b'], ['#134e5e', '#71b280'], ['#41295a', '#2f0743'],
+  ['#c94b4b', '#4b134f'], ['#1e3c72', '#2a5298'], ['#fbd3e9', '#bb377d'], ['#000000', '#434343']];
+function themeDialog(current, onApply, who) {
+  let t = [current[0] || '', current[1] || ''];
+  const pv = el('div', { className: 'th-pv' }), pairs = el('div', { className: 'th-pairs' });
+  const s1 = colorSwatch(t[0], (c) => { t[0] = c; draw(); }, { title: 'Primary (the top of your profile)' }), s2 = colorSwatch(t[1], (c) => { t[1] = c; draw(); }, { title: 'Accent (the bottom)' });
+  const draw = () => {
+    pv.replaceChildren(mockCard({ ...who(), theme: t[0] || t[1] ? t : null }));
+    pairs.replaceChildren(...THEME_PAIRS.map(([a, b]) => el('button', { className: 'th-pair' + (t[0] === a && t[1] === b ? ' on' : ''), title: `${a} → ${b}`, style: `background:linear-gradient(${a}, ${b})`,
+      onclick: () => { t = [a, b]; s1.set(a); s2.set(b); draw(); } })));
+  };
+  const m = modal({ cls: 'th-dlg', title: 'Change Profile Theme', sub: 'Two colours: your profile fades from one to the other.',
+    body: [el('div', { className: 'th' }, el('div', { className: 'th-left' }, el('div', { className: 'th-sw' }, el('label', {}, s1, el('span', {}, 'Primary')), el('label', {}, s2, el('span', {}, 'Accent'))),
+      el('h5', {}, 'Ready-made'), pairs), pv)],
+    actions: [el('button', { className: 'btn ghost', onclick: () => { t = ['', '']; s1.set(''); s2.set(''); draw(); } }, 'Reset'), el('span', { style: 'flex:1' }),
+      el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), el('button', { className: 'btn primary', onclick: () => { onApply([t[0], t[1]]); m.close(); } }, 'Apply')], onClose: () => closeColor() });
+  draw();
 }
 // pick a service to add (from inside a window, where Settings would open underneath)
 function pickService(after) {
@@ -4651,7 +4983,7 @@ function appearancePane(redraw) {
     row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos under the messages that link to them.', sw(prefs.embeds !== 'off', (on) => { prefs.embeds = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
     el('h3', {}, 'Decorations & Effects'),
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => { prefs.decorations = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
-    row2('Profile effects', 'Snow, sparkles and more over people’s profile cards, from the Shop.', sw(prefs.effects !== 'off', (on) => { prefs.effects = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
+    row2('Profile effects and frames', 'Snow, sparkles, frames and more on people’s profile cards, from the Shop.', sw(prefs.effects !== 'off', (on) => { prefs.effects = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
     row2('Formatting bar', 'Bold, italics, code and more above the message box when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => { prefs.formatBar = on ? 'on' : 'off'; savePrefs(); }))];
 }
 

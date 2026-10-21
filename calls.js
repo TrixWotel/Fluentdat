@@ -5,6 +5,28 @@
 // negotiates the "perfect negotiation" way, so either side may change what it sends at any time without clashing.
 const AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 const VIDEO = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+// a screen: at most 1080p and 15 pictures a second (a Retina screen at full size, 30 times a second, is more than a
+// computer can squeeze for everyone in a call, and it all goes laggy, voices too)
+const SCREEN = { video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { ideal: 15, max: 30 } }, audio: false };
+// how much each copy of a picture may use: everyone in a call gets their own copy, so the more people, the smaller each
+// (the camera's picture shrinks; a screen keeps its sharpness and sends fewer pictures instead)
+const QUALITY = {
+  cam: (n) => (n <= 1 ? { maxBitrate: 1500000, maxFramerate: 30, scaleResolutionDownBy: 1 } : n <= 3 ? { maxBitrate: 800000, maxFramerate: 24, scaleResolutionDownBy: 1.5 }
+    : { maxBitrate: 450000, maxFramerate: 20, scaleResolutionDownBy: 2 }),
+  screen: (n) => (n <= 1 ? { maxBitrate: 2500000, maxFramerate: 15 } : n <= 3 ? { maxBitrate: 1500000, maxFramerate: 12 } : { maxBitrate: 900000, maxFramerate: 10 }),
+};
+async function tune(sender, kind, n) {
+  if (!sender || !sender.track || !sender.getParameters) return;
+  try {
+    const p = sender.getParameters();
+    if (!p.encodings || !p.encodings.length) return;          // (not negotiated yet: done again once it's connected)
+    const want = QUALITY[kind](n), e = p.encodings[0];
+    if (Object.keys(want).every((k) => e[k] === want[k])) return;
+    Object.assign(e, want);
+    if (kind === 'screen') p.degradationPreference = 'maintain-resolution';
+    await sender.setParameters(p);
+  } catch (err) { console.warn('call: quality', err); }
+}
 
 // what went wrong with the camera or microphone, in words
 export function mediaTrouble(e, what = 'microphone') {
@@ -21,9 +43,10 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
   const self = { pid: 'p' + crypto.randomUUID().replace(/-/g, '').slice(0, 16), uid: me.id, mic, deaf, cam: false, screen: false, speaking: false, warning: '' };
   const peers = new Map();
   // (your screen goes out in a stream of its own that keeps its name between shares, so the others can tell it from your camera)
-  let local = null, screen = null, ended = false, ch = null;
+  let local = null, screen = null, ended = false, ch = null, api = null;
   const screenBox = new MediaStream();
-  const update = () => { if (!ended) try { onUpdate(api); } catch (e) { console.error(e); } };
+  const update = () => { if (!ended && api) try { onUpdate(api); } catch (e) { console.error(e); } };     // (nothing to say until the call is made)
+  const tuneAll = () => { const n = Math.max(1, peers.size); for (const p of peers.values()) { tune(p.senders.cam, 'cam', n); tune(p.senders.screen, 'screen', n); } };
 
   // your microphone (and camera): a call still works without them, just listening
   try { local = await media({ audio: AUDIO, video: video ? VIDEO : false }); }
@@ -33,6 +56,7 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
   }
   if (!local) { local = new MediaStream(); self.mic = false; }
   self.cam = local.getVideoTracks().length > 0;
+  for (const t of local.getVideoTracks()) t.contentHint = 'motion';
   const micTrack = () => local.getAudioTracks()[0] || null;
   const camTrack = () => local.getVideoTracks()[0] || null;
   const applyMic = () => { const t = micTrack(); if (t) t.enabled = self.mic && !self.deaf; };
@@ -98,7 +122,7 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
       else if (pc.iceConnectionState === 'disconnected') p.stuck = setTimeout(() => { if (pc.iceConnectionState === 'disconnected') pc.restartIce(); }, 4000);
       update();
     };
-    pc.onconnectionstatechange = update;
+    pc.onconnectionstatechange = () => { if (pc.connectionState === 'connected') tuneAll(); update(); };
     return p;
   }
   function drop(pid) {
@@ -106,7 +130,7 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
     peers.delete(pid);
     try { p.pc.close(); } catch {}
     if (p.audio) { p.audio.srcObject = null; p.audio.remove(); }
-    update();
+    tuneAll(); update();
   }
   // each person's signals are handled one after another, in the order they came (an offer's candidates can arrive
   // while the offer is still being taken in, and must wait for it)
@@ -140,7 +164,7 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
       p.seen = true; p.meta = metas[metas.length - 1] || {}; p.uid = p.meta.uid || p.uid;
     }
     for (const [pid, p] of peers) if (!here.has(pid) && (p.seen || Date.now() - p.born > 15000)) drop(pid);
-    update();
+    tuneAll(); update();
   }
   ch.on('broadcast', { event: 'signal' }, onSignal);
   ch.on('presence', { event: 'sync' }, onPresence);
@@ -176,11 +200,11 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
   function sendTrack(kind, track, stream) {
     for (const p of peers.values()) {
       const s = p.senders[kind];
-      if (s) s.replaceTrack(track).catch(() => {});
+      if (s) s.replaceTrack(track).then(() => tune(s, kind, Math.max(1, peers.size)), () => {});
       else if (track) p.senders[kind] = p.pc.addTrack(track, stream);
     }
   }
-  const api = {
+  api = {
     topic, self,
     local: () => local, screenStream: () => screen,
     people: () => [...peers.values()].filter((p) => p.seen || p.uid).map((p) => {
@@ -208,7 +232,7 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
     async setCam(on) {
       if (on && !camTrack()) {
         let s; try { s = await media({ video: VIDEO }); } catch (e) { self.warning = mediaTrouble(e, 'camera'); update(); return false; }
-        const t = s.getVideoTracks()[0]; local.addTrack(t); sendTrack('cam', t, local);
+        const t = s.getVideoTracks()[0]; t.contentHint = 'motion'; local.addTrack(t); sendTrack('cam', t, local);
       } else if (!on && camTrack()) {
         const t = camTrack(); t.stop(); local.removeTrack(t); sendTrack('cam', null, local);    // (stopped, so the camera light goes off)
       }
@@ -216,8 +240,9 @@ export async function joinCall({ store, topic, me, video = false, mic = true, de
     },
     async setScreen(on) {
       if (on && !screen) {
-        try { screen = await screenMedia({ video: { frameRate: { ideal: 30 } }, audio: false }); } catch (e) { if (!/NotAllowed|Abort/.test(e && e.name)) { self.warning = mediaTrouble(e, 'screen'); update(); } return false; }
+        try { screen = await screenMedia(SCREEN); } catch (e) { if (!/NotAllowed|Abort/.test(e && e.name)) { self.warning = mediaTrouble(e, 'screen'); update(); } return false; }
         const t = screen.getVideoTracks()[0];
+        t.contentHint = 'detail';                 // (text stays sharp; when the line is slow, fewer pictures rather than blurrier ones)
         t.addEventListener('ended', () => api.setScreen(false));          // (the browser's own "Stop sharing")
         for (const old of screenBox.getTracks()) screenBox.removeTrack(old);
         screenBox.addTrack(t);

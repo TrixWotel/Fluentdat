@@ -78,6 +78,9 @@ const fallback = {
   identities: () => [],
   linkAccount: async () => { throw new Error(SIGN_IN + 'link your accounts.'); },
   canDecorate: () => true,
+  canFrame: () => true,
+  // (badges here are worked out by the app from what's in this browser)
+  badgeStats: async () => null, badgeStatsNow: () => null,
   // a server's events: these come with signing in
   events: () => [],
   canMakeEvents: () => false,
@@ -163,9 +166,13 @@ function localSearch(places, o) {
   return out.sort((a, b) => b.ts - a.ts).slice(0, 25);
 }
 const EXTRAS = 'fluentdat.extras';
-const blankExtras = () => ({ connections: [], widgets: [], activity: [] });
+const blankExtras = () => ({ connections: [], widgets: [], activity: [], quests: [], badges: { order: [], hidden: [] }, playSeconds: 0 });
 function localExtras() {
-  try { const v = JSON.parse(localStorage.getItem(EXTRAS)) || {}; return { connections: Array.isArray(v.connections) ? v.connections : [], widgets: Array.isArray(v.widgets) ? v.widgets : [], activity: Array.isArray(v.activity) ? v.activity : [] }; }
+  try {
+    const v = JSON.parse(localStorage.getItem(EXTRAS)) || {}, b = v.badges && typeof v.badges === 'object' ? v.badges : {};
+    return { connections: Array.isArray(v.connections) ? v.connections : [], widgets: Array.isArray(v.widgets) ? v.widgets : [], activity: Array.isArray(v.activity) ? v.activity : [],
+      quests: Array.isArray(v.quests) ? v.quests : [], badges: { order: Array.isArray(b.order) ? b.order : [], hidden: Array.isArray(b.hidden) ? b.hidden : [] }, playSeconds: 0 };
+  }
   catch { return blankExtras(); }
 }
 function saveExtras(patch) {

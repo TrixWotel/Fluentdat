@@ -128,6 +128,9 @@ The database checks these itself, so they hold even if someone changes the app:
 28. You choose your own nickname in each server (up to 32 characters). Admins can change members' nicknames, and the owner anyone's.
 29. In each server you choose whether its people can start a DM with you (Privacy Settings). Friends always can, and DMs you already have stay.
 30. Search only finds messages you can read: in servers you're in, without private categories you can't see or their threads, and in your own DMs and groups.
+31. A profile frame and a status bubble show to whoever can see your profile. A frame is a name from Fluentdat's own list, never a web address. A bubble is one line of up to 128 characters, and can end at a time you choose.
+32. Badges are counted by the database from what you've done: messages (not Flubot's), reactions, threads you started, friends, the biggest server you own, how long you've boosted, events, Quests, connections, games on your Board, Game Time, and whether you help run Fluentdat. Only people who can see your profile can ask for those counts. You choose the order your badges show in, and which to hide.
+33. Game Time only grows when the database times a game you stopped or switched (up to 12 hours a game). Nobody can set it, not even you.
 
 ## If something goes wrong
 

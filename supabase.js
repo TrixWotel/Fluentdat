@@ -66,7 +66,9 @@ function toUser(p) {
     style: p.name_font || p.name_effect || p.name_color1 ? { font: p.name_font || '', effect: p.name_effect || '', c1: p.name_color1 || '', c2: p.name_color2 || '' } : null,
     tag: p.tag && p.tag_server ? { text: p.tag, badge: p.tag_badge || '', color: p.tag_color || '', server: p.tag_server } : null,
     playing: p.playing && typeof p.playing === 'object' && p.playing.n ? p.playing : null,
-    decoration: p.decoration || '', effect: p.effect || '' };
+    decoration: p.decoration || '', effect: p.effect || '', frame: p.frame || '',
+    // (a status bubble shows until its time is up)
+    bubble: p.bubble && !(p.bubble_until && Date.parse(p.bubble_until) <= Date.now()) ? p.bubble : '', bubbleUntil: p.bubble && p.bubble_until ? Date.parse(p.bubble_until) || 0 : 0 };
 }
 const userOf = (id) => ({ ...toUser(cache.profiles[id]), id });
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
@@ -82,7 +84,9 @@ const toRole = (r) => ({ id: r.id, server: r.server_id, name: r.name, color: r.c
 const rolesOf = (sv, uid) => cache.memberRoles.filter((x) => x.server_id === sv && x.user_id === uid)
   .map((x) => cache.roles.find((r) => r.id === x.role_id)).filter(Boolean).sort(byPos);
 const toExtras = (r) => ({ connections: Array.isArray(r && r.connections) ? r.connections : [], widgets: Array.isArray(r && r.widgets) ? r.widgets : [],
-  activity: Array.isArray(r && r.activity) ? r.activity : [], quests: Array.isArray(r && r.quests) ? r.quests : [] });
+  activity: Array.isArray(r && r.activity) ? r.activity : [], quests: Array.isArray(r && r.quests) ? r.quests : [],
+  badges: { order: Array.isArray(r && r.badges && r.badges.order) ? r.badges.order : [], hidden: Array.isArray(r && r.badges && r.badges.hidden) ? r.badges.hidden : [] },
+  playSeconds: Number(r && r.play_seconds) || 0 });
 const toCategory = (r) => ({ id: r.id, server: r.server_id, name: r.name, position: r.position });
 const toChannel = (r) => ({ id: r.id, server: r.server_id, category: r.category_id, name: r.name, kind: r.kind, position: r.position, topic: r.topic || '',
   parent: r.parent_id || null, starter: r.starter || null, by: r.created_by || null, archived: !!r.archived });
@@ -129,7 +133,8 @@ const toSticker = (r) => ({ id: r.id, server: r.server_id, name: r.name, emoji: 
 const PROFILE_COLS = 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at';
 const PROFILE_STYLE = ',theme1,theme2,name_font,name_effect,name_color1,name_color2,tag_server,tag,tag_badge,tag_color';
 // (newest first: an older database lacks the later columns, and Fluentdat carries on with what it has)
-const PROFILE_SETS = [PROFILE_COLS + PROFILE_STYLE + ',playing,decoration,effect', PROFILE_COLS + PROFILE_STYLE + ',playing', PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS];
+const PROFILE_SETS = [PROFILE_COLS + PROFILE_STYLE + ',playing,decoration,effect,frame,bubble,bubble_until', PROFILE_COLS + PROFILE_STYLE + ',playing,decoration,effect',
+  PROFILE_COLS + PROFILE_STYLE + ',playing', PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS];
 let profileSet = 0;
 async function profilesQ(q) {
   for (;;) {
@@ -144,6 +149,10 @@ async function profilesQ(q) {
 let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
+const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
+// what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
+// set off before your change, and came back after it, would show the old name, status or bubble for a moment)
+const meOps = new Map();                // column → { v, until }
 // a reload of everything. Only the newest one's answer is kept, and an older one still going waits for it, so whoever
 // waits for a reload sees what it brought
 let newestLoad = null;
@@ -164,7 +173,10 @@ async function loadOnce() {
     if (seq !== loadSeq) return newestLoad;
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
     cache.me = mine[0] || null;
-    if (cache.me) cache.profiles[cache.me.id] = cache.me;
+    if (cache.me) {
+      for (const [k, op] of meOps) { if (op.until && Date.now() > op.until) meOps.delete(k); else cache.me[k] = op.v; }
+      cache.profiles[cache.me.id] = cache.me;
+    }
     cache.full = {};
     const mineIn = new Set(members.filter((m) => m.user_id === myId()).map((m) => m.server_id));
     cache.servers = servers.filter((sv) => mineIn.has(sv.id)).map(toServer);      // (public servers you haven't joined are visible, not yours)
@@ -1022,20 +1034,31 @@ export const SupabaseStore = {
   extrasNow: (id) => cache.extras[id] || null,          // (what was fetched last, to show at once while it's fetched again)
   async setProfileExtras(patch) {
     const id = myId(), was = cache.extras[id], row = { id };
-    for (const k of ['connections', 'widgets', 'activity', 'quests']) if (k in patch) row[k] = patch[k];
+    for (const k of ['connections', 'widgets', 'activity', 'quests', ...(profileSet === 0 ? ['badges'] : [])]) if (k in patch) row[k] = patch[k];
     cache.extras[id] = { ...toExtras(was), ...patch }; emit();
     try { const r = must(await sb.from('profile_extras').upsert(row).select('*')); cache.extras[id] = toExtras(r[0]); emit(); return cache.extras[id]; }
     catch (e) { cache.extras[id] = was; emit(); throw e; }
   },
   // the game you say you're playing ({ n, s, l }), or null; the database times it and adds it to your recent activity
   setPlaying(game) {
-    if (!cache.me || profileSet > 1) return;
+    if (!cache.me || profileSet > 2) return;
     const g = game ? Object.fromEntries(['n', 's', 'l'].filter((k) => game[k]).map((k) => [k, game[k]])) : null;
     cache.me.playing = g ? { ...g, at: new Date().toISOString() } : null; emit();
     push(sb.from('profiles').update({ playing: g }).eq('id', myId()).then(must), loadAll);
   },
-  canPlay: () => profileSet <= 1,
-  canDecorate: () => profileSet === 0,
+  canPlay: () => profileSet <= 2,
+  canDecorate: () => profileSet <= 1,
+  canFrame: () => profileSet === 0,             // (frames, status bubbles and badges: the newest setup.sql)
+  // what someone's badges are made of: the database counts (for people you know), kept for a minute
+  async badgeStats(uid) {
+    const id = uid || myId(), had = statsKept.get(id);
+    if (!id || profileSet !== 0) return null;
+    if (had && Date.now() - had.at < 60000) return had.v;
+    let v = null;
+    try { v = await soft(sb.rpc('badge_stats', { p_user: id }).then(must), null); } catch { v = null; }
+    statsKept.set(id, { at: Date.now(), v }); return v;
+  },
+  badgeStatsNow: (uid) => (statsKept.get(uid || myId()) || {}).v || null,
   // the accounts you sign in with (Discord, GitHub…): what a connection can be checked against
   identities: () => ((session && session.user && session.user.identities) || []).map((i) => {
     const d = i.identity_data || {};
@@ -1115,12 +1138,14 @@ export const SupabaseStore = {
   setProfile(patch) {
     if (!cache.me) return;
     const keys = ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate', ...(styled ? ['theme1', 'theme2', 'name_font', 'name_effect', 'name_color1', 'name_color2'] : []),
-      ...(profileSet === 0 ? ['decoration', 'effect'] : [])];
-    const row = {}; for (const k of keys) if (k in patch) row[k] = patch[k] == null ? (k === 'stickers' ? [] : '') : patch[k];
+      ...(profileSet <= 1 ? ['decoration', 'effect'] : []), ...(profileSet === 0 ? ['frame', 'bubble', 'bubble_until'] : [])];
+    const row = {}; for (const k of keys) if (k in patch) row[k] = patch[k] == null || patch[k] === '' ? (k === 'stickers' ? [] : k === 'bubble_until' ? null : '') : patch[k];
     Object.assign(cache.me, row);
+    const ops = Object.keys(row).map((k) => { const op = { v: row[k], until: 0 }; meOps.set(k, op); return [k, op]; });
+    const settle = (ok) => { for (const [k, op] of ops) if (meOps.get(k) === op) { if (ok) op.until = Date.now() + 5000; else meOps.delete(k); } };
     if ('status' in row) for (const [sv, ch] of rooms) announce(ch, sv);
     emit();
-    push(sb.from('profiles').update({ ...row, updated_at: new Date().toISOString() }).eq('id', myId()).then(must), loadAll);
+    push(sb.from('profiles').update({ ...row, updated_at: new Date().toISOString() }).eq('id', myId()).then(must).then(() => settle(true)), () => { settle(false); return loadAll(); });
   },
   stickers: () => ((cache.me && cache.me.stickers) || []).slice(),
   addSticker(s) { SupabaseStore.setProfile({ stickers: [...SupabaseStore.stickers(), { id: 's_' + uuid().slice(0, 8), ...s }] }); },
