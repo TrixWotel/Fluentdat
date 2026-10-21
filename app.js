@@ -18,6 +18,9 @@ import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, FRAMES, decoEl, effect
 import { BADGE as PROFILE_BADGE, KINDS as BADGE_KINDS, SECRETS as SECRET_BADGES, COUNT as BADGE_COUNT, badgesOf, badgeState, badgeIcon, toNext, tierAt } from './badges.js';
 import { TASKS, TASK, EVERY, PRICES, WELCOME, fmtBux, period, resetsIn } from './datbux.js';
 import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, gamesByLetter, LETTERS, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
+// (Customize, the site of its own: customize.html is this same page, marked; app.js shows Customize there instead of the chat)
+const CUSTOMIZE = document.documentElement.dataset.customize === '1';
+try { if (!window.name) window.name = CUSTOMIZE ? 'fluentdat-customize' : 'fluentdat'; } catch {}
 // (the test page hands in pretend cameras and microphones, and keeps everything quiet)
 const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
 
@@ -28,15 +31,18 @@ const DEFAULT_PREFS = {
   rail: 'on', iconShape: 'squircle', chanIcons: 'on', cats: 'on', sideHead: 'on', userPanel: 'on',
   topbar: 'on', banner: 'on', liveBanner: 'off',
   avatars: 'on', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
-  membersDefault: true, membersStyle: 'card', memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
+  membersDefault: true, membersStyle: 'panel', memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
+  // the window's frame: a title bar on top, rounded panels, your controls at the foot of the server rail, the server's banner
+  // under its name, and category names with a line under them (Customize → Layout)
+  titlebar: 'on', titleAlign: 'center', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'line', layoutV: 2,
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
-  railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 136, statusH: 30,
+  railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 136, statusH: 30, titleH: 32, panelR: 14, panelGap: 6,
   avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20,
   // where things sit: the columns left to right, the sidebar and main area top to bottom, and the status bar
   cols: ['rail', 'side', 'main', 'members'], sideOrder: ['head', 'body', 'panel'], mainOrder: ['top', 'content', 'composer'], statusPos: 'top',
   radius: 'soft', uiFont: 'system',
-  // buttons (Settings → Layout → Buttons): which are hidden, the order of each bar, their size, and whether they're labelled
-  hidden: {}, order: {}, btnLabels: 'off',
+  // buttons and parts (Customize → Elements): which are hidden, the order of each bar, whether they're labelled, and your own names
+  hidden: { findDM: true, tActivity: true }, order: {}, btnLabels: 'off', labels: {},
   // pictures and Discord-style extras
   serverBanner: 'on', plates: 'on', memberGroups: 'on', startHeaders: 'on', dmPanel: true,
   micMuted: false, deafened: false,
@@ -58,7 +64,8 @@ const LAYOUT_PRESETS = {
 const SIZES = {
   railW: ['Server rail width', 48, 120], sideW: ['Sidebar width', 160, 420], membersW: ['Member list width', 160, 420],
   topH: ['Top bar height', 36, 90], composerH: ['Message box height', 40, 160], panelH: ['User panel height', 40, 100],
-  bannerH: ['Server banner height', 60, 260], statusH: ['Status bar height', 20, 56], avatarPx: ['Message avatars', 20, 64],
+  bannerH: ['Server banner height', 60, 260], statusH: ['Status bar height', 20, 56], titleH: ['Title bar height', 22, 56], panelR: ['Panel corners', 0, 28], panelGap: ['Space between panels', 0, 16],
+  avatarPx: ['Message avatars', 20, 64],
   memberAv: ['Member list avatars', 20, 56], chanH: ['Channel rows', 24, 48], icTop: ['Top bar icons', 14, 32],
   icComposer: ['Message box icons', 14, 32], icPanel: ['User panel icons', 14, 32], fontSize: ['Text size', 12, 20],
 };
@@ -309,20 +316,32 @@ function plateOn(row, plate) {
 }
 const setBanner = (node, value, color) => { node.style.background = paint(value) || safeColor(color); };
 
-// ---------- buttons you can show, hide and move (Settings → Layout → Buttons) ----------
+// ---------- every part you can show, hide, move and rename (Customize → Elements) ----------
 // [id, what it is, icon, fixed] — a fixed one can be moved but not hidden (you always need a way into settings)
 const BUTTONS = {
+  titlebar: ['Title bar', [['tbIcon', 'Server icon (or the logo)', 'logo'], ['tbName', 'Where you are', 'hash', 1]]],
   rail: ['Server rail', [['home', 'Direct Messages', 'logo'], ['servers', 'Your servers', 'bot', 1], ['add', 'Add a Server', 'plus'], ['discover', 'Discover', 'compass']]],
+  railPanel: ['Your controls, in the server rail', [['deafen', 'Deafen', 'headphones'], ['mic', 'Mute', 'mic'], ['me', 'You (your picture)', 'user', 1], ['settings', 'User Settings', 'gear', 1]]],
   header: ['Server header', [['invite', 'Invite People', 'personAdd'], ['serverMenu', 'Server menu arrow', 'chevD']]],
+  serverTop: ['Server sidebar', [['browse', 'Browse', 'browse'], ['guide', 'Guide', 'signpost'], ['events', 'Event', 'calendar'], ['boost', 'Boost', 'gem'], ['shop', 'Shop', 'shop'],
+    ['rules', 'Rules', 'rules'], ['games', 'Servers', 'servers']]],
   channels: ['Channel list', [['newChannel', 'New channel (+)', 'plus'], ['chanInvite', 'Invite, on hover', 'personAdd'], ['chanSettings', 'Channel settings, on hover', 'gear'], ['delChannel', 'Delete channel (×)', 'x']]],
-  dms: ['Direct messages', [['findDM', 'Find or start a conversation', 'search'], ['newDM', 'New DM (+)', 'plus']]],
-  dmNav: ['Direct messages list', [['friendsNav', 'Friends', 'users'], ['datbuxNav', 'Datbux', 'coin'], ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quests', 'quest']]],
-  serverTop: ['Server sidebar', [['browse', 'Browse Channels', 'browse'], ['games', 'Game Servers', 'game'], ['guide', 'Server Guide', 'signpost'], ['events', 'Events', 'calendar']]],
+  dms: ['Direct messages header', [['findDM', 'Find or start a conversation', 'search'], ['newDM', 'New DM (+)', 'plus']]],
+  dmNav: ['Direct messages sidebar', [['browseNav', 'Browse', 'search'], ['friendsNav', 'Friends', 'users'], ['datbuxNav', 'Bank', 'coin'], ['collectionNav', 'Collection', 'collection'],
+    ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quest', 'quest']]],
   top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['threads', 'Threads', 'thread'],
     ['notify', 'Notification settings', 'bell'], ['pins', 'Pinned messages', 'pin'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['search', 'Search', 'search'], ['saved', 'Bookmarks', 'bookmark']]],
+  msgActions: ['Message buttons (on hover)', [['quick', 'Quick reactions', 'smile'], ['react', 'Add Reaction', 'smilePlus'], ['reply', 'Reply', 'reply'], ['forward', 'Forward', 'forward'],
+    ['thread', 'Create Thread', 'thread'], ['more', 'More', 'more', 1]]],
   composer: ['Message box', [['upload', 'Attach files and pictures', 'plusCircle'], ['input', 'The text box', 'edit', 1], ['emoji', 'Emoji', 'smile'], ['sticker', 'Stickers', 'sticker'], ['voice', 'Voice message', 'mic'], ['send', 'Send', 'send']]],
-  panel: ['User panel', [['me', 'You (avatar and name)', 'user', 1], ['mic', 'Mute', 'mic'], ['deafen', 'Deafen', 'headphones'], ['settings', 'User Settings', 'gear', 1]]],
+  panel: ['Your controls, under the sidebar', [['me', 'You (avatar and name)', 'user', 1], ['mic', 'Mute', 'mic'], ['deafen', 'Deafen', 'headphones'], ['settings', 'User Settings', 'gear', 1]]],
+  profileCard: ['Profile cards (DM profile and full profile)', [['pBadges', 'Badges and server tag', 'medal'], ['pMutual', 'Mutual friends and servers', 'users'], ['pSince', 'Member since, boosting since, friends since', 'calendar'],
+    ['pBio', 'About me', 'edit'], ['pPlaying', 'Playing', 'game'], ['pGames', 'Game Collection', 'game'], ['pWish', 'Wishlist', 'star'], ['pConns', 'Connections', 'link'], ['pNote', 'Your note on them', 'edit']]],
+  profileTabs: ['Full profile tabs', [['tWidget', 'Widget', 'apps'], ['tWish', 'Wishlist', 'star'], ['tCollection', 'Collection', 'collection'], ['tFriends', 'Mutual Friends', 'users'],
+    ['tServers', 'Mutual Server', 'compass'], ['tActivity', 'Activity', 'clock']]],
 };
+// what an item is called: your own name for it (Customize → Elements), else its own
+const labelOf = (group, id) => { const own = (prefs.labels || {})[id]; if (own) return own; const b = (BUTTONS[group] || [, []])[1].find((x) => x[0] === id); return b ? b[1] : id; };
 const shown = (id) => !(prefs.hidden || {})[id];
 function ordered(group) {
   const all = BUTTONS[group][1].map((b) => b[0]), saved = ((prefs.order || {})[group] || []).filter((id) => all.includes(id));
@@ -348,10 +367,15 @@ function avatarEl(user, { size, status } = {}) {
 
 // ---------- themes (built-in + your own) ----------
 const BUILTIN = [['dark', 'Dark'], ['midnight', 'Midnight'], ['ember', 'Ember'], ['forest', 'Forest'], ['light', 'Light']];
+// (their colours, for the swatches in Customize: the same as app.css)
+const BUILTIN_SWATCH = { dark: { rail: '#1a1d23', side: '#20242c', main: '#282d36', accent: '#5b7fd6' }, midnight: { rail: '#05070d', side: '#0a0e18', main: '#0e1320', accent: '#6ea8ff' },
+  ember: { rail: '#1b1310', side: '#231915', main: '#2c201a', accent: '#e8743b' }, forest: { rail: '#0f1713', side: '#15201a', main: '#1b2a21', accent: '#4bbf73' },
+  light: { rail: '#e4e7ec', side: '#eef1f5', main: '#ffffff', accent: '#2f6fed' } };
 const VARS = ['rail', 'side', 'main', 'input', 'hover', 'text', 'muted', 'bright', 'accent', 'accent-text', 'line'];
 const loadThemes = () => { try { return JSON.parse(localStorage.getItem('fluency.themes')) || []; } catch { return []; } };
-const saveThemes = (t) => { try { localStorage.setItem('fluency.themes', JSON.stringify(t)); } catch {} };
-function applyTheme(id) {
+const saveThemes = (t) => { try { localStorage.setItem('fluency.themes', JSON.stringify(t)); } catch {} changedSettings(); };
+// put a theme on (changed: you chose it, so it's kept with your account too)
+function applyTheme(id, changed = true) {
   const cur = document.getElementById('fluency-custom-css'); if (cur) cur.remove();
   VARS.forEach((v) => document.documentElement.style.removeProperty('--' + v));
   const custom = loadThemes().find((t) => t.id === id);
@@ -363,6 +387,7 @@ function applyTheme(id) {
   try { localStorage.setItem('fluency.theme', id); } catch {}
   setFavicon(appLogo());
   if (document.body.dataset.booted) renderRail();            // (the Home button wears the theme's logo)
+  if (changed) changedSettings();
 }
 const currentTheme = () => { try { return localStorage.getItem('fluency.theme') || 'dark'; } catch { return 'dark'; } };
 // the logo you see (Home button, tab icon, sign-in): the one you picked, else the one your theme brings
@@ -382,7 +407,69 @@ function logoGrid(current, onPick, { withTheme = false } = {}) {
   for (const [id, name] of LOGOS) grid.append(tile(id, name, logoEl(id, { size: 48 })));
   return grid;
 }
-applyTheme(currentTheme());
+applyTheme(currentTheme(), false);
+
+// ---------- your settings, following your account (Customize → Sync) ----------
+// Signed in (with setup.sql 10), what Customize keeps (your theme, your themes and your preferences, except a few that are
+// about this device) goes with your account: changed here, it's saved there a moment later; changed on another device,
+// it comes here. Whichever was changed last wins.
+const SYNC_AT = 'fluentdat.settingsAt', SYNC_SEEN = 'fluentdat.settingsSeen';
+const DEVICE_ONLY = ['micMuted', 'deafened', 'notify', 'syncSettings'];
+const syncable = () => Store.kind === 'supabase' && !!Store.canSync && Store.canSync() && prefs.syncSettings !== false;
+const settingsData = () => ({ v: 1, prefs: Object.fromEntries(Object.entries(prefs).filter(([k]) => !DEVICE_ONLY.includes(k))), theme: currentTheme(), themes: loadThemes() });
+// (this browser's settings are just the ones Fluentdat comes with)
+const pristine = () => JSON.stringify(settingsData()) === JSON.stringify({ v: 1, prefs: Object.fromEntries(Object.entries(loadPrefs({})).filter(([k]) => !DEVICE_ONLY.includes(k))), theme: 'dark', themes: [] });
+const lsNum = (k) => { try { return +localStorage.getItem(k) || 0; } catch { return 0; } };
+const lsPut = (k, v) => { try { localStorage.setItem(k, String(v)); } catch {} };
+let syncTimer = 0, adopting = false, syncNote = { state: 'idle', at: 0, err: '' }, lastLocal = JSON.stringify(settingsData());
+// something Customize keeps changed here (a preference, a theme): note when, and save it with your account in a moment
+function changedSettings() {
+  if (adopting) return;
+  const now = JSON.stringify(settingsData());
+  if (now === lastLocal) return;                        // (only a preference about this device, or nothing at all)
+  lastLocal = now; lsPut(SYNC_AT, Date.now());
+  clearTimeout(syncTimer); syncTimer = setTimeout(pushSettings, 1200);
+  if (syncable()) { syncNote = { ...syncNote, state: 'saving' }; czSync(); }
+}
+async function pushSettings() {
+  syncTimer = 0;
+  if (!syncable()) return;
+  syncNote = { ...syncNote, state: 'saving' }; czSync();
+  try { const at = await Store.saveSettings(settingsData()); lsPut(SYNC_SEEN, at); syncNote = { state: 'saved', at, err: '' }; }
+  catch (e) { syncNote = { ...syncNote, state: 'error', err: String((e && e.message) || e) }; }
+  czSync();
+}
+// the account's settings, when they're newer than this browser's: put them on
+function adoptSettings() {
+  if (!syncable() || syncTimer) return;
+  const r = Store.settings(), seen = lsNum(SYNC_SEEN), mine = lsNum(SYNC_AT);
+  // (nothing with your account yet: this browser's go there, if it has any of its own; a browser that never changed a
+  // thing waits for one that did)
+  if (!r) { if ((mine || !pristine()) && syncNote.state !== 'saving') pushSettings(); return; }
+  if (r.at <= seen) { if (syncNote.state === 'idle') { syncNote = { state: 'saved', at: r.at, err: '' }; czSync(); } return; }
+  if (mine > r.at) return pushSettings();                                               // (changed here since: this browser's win)
+  const d = r.data || {};
+  adopting = true;
+  try {
+    if (d.prefs && typeof d.prefs === 'object') {
+      const keep = Object.fromEntries(DEVICE_ONLY.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
+      prefs = { ...loadPrefs(d.prefs), ...keep };
+      try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {}
+    }
+    if (Array.isArray(d.themes)) try { localStorage.setItem('fluency.themes', JSON.stringify(d.themes)); } catch {}
+    if (typeof d.theme === 'string') applyTheme(d.theme, false);
+    lsPut(SYNC_SEEN, r.at); lastLocal = JSON.stringify(settingsData());
+    syncNote = { state: 'saved', at: r.at, err: '' };
+    showMembers = prefs.membersDefault !== false;
+    applyPrefs(); renderAll(); if (CUSTOMIZE) renderCustomize();
+    toast('Your theme and layout came from your account.');
+  } finally { adopting = false; }
+}
+// (the Customize site and the chat in another tab share this browser: a change in one shows in the other at once)
+addEventListener('storage', (e) => {
+  if (e.key === 'fluentdat.prefs') { prefs = loadPrefs(); lastLocal = JSON.stringify(settingsData()); showMembers = prefs.membersDefault !== false; applyPrefs(); renderAll(); if (CUSTOMIZE) renderCustomize(); }
+  else if (e.key === 'fluency.theme' || e.key === 'fluency.themes') { applyTheme(currentTheme(), false); lastLocal = JSON.stringify(settingsData()); renderAll(); if (CUSTOMIZE) renderCustomize(); }
+});
 const cssVar = (v) => getComputedStyle(document.documentElement).getPropertyValue('--' + v).trim() || '#000000';
 
 // ---------- state ----------
@@ -392,7 +479,7 @@ let homePage = null;                    // (the Direct Messages side shows Frien
 let serverPage = null;                  // (a server's own page instead of a channel: { sv, id: 'browse' | 'games' | 'guide' })
 const pageNow = () => (view === 'server' && serverPage && serverPage.sv === serverId ? serverPage.id : null);
 // a server's sidebar extras (Server Settings → Server Sidebar): Browse Channels and Events are on unless switched off
-const FEATURES = { browse: true, events: true, games: false, guide: false, member_events: false };
+const FEATURES = { browse: true, guide: true, events: true, boost: true, shop: true, rules: true, games: true, member_events: false };
 const featureOn = (sv, id) => !!(sv && { ...FEATURES, ...(sv.features || {}) }[id]);
 // channels you've hidden from your list (Browse Channels), per server, in this browser
 const HIDDEN_CHANS = 'fluentdat.hiddenChannels';
@@ -690,17 +777,18 @@ function renderSide() {
   }
   const server = Store.server(serverId), can = Store.canManage(serverId), live = Store.kind === 'supabase';
   const canChans = (catId) => can || (!!catId && Store.can(catId, 'manage_channels'));
-  const bg = prefs.serverBanner !== 'off' && paint(server.banner);
-  head.className = 'side-head btn-like' + (bg ? ' has-banner' : '') + (swapping ? ' swap-in' : '');
+  const bg = prefs.serverBanner !== 'off' && paint(server.banner), under = prefs.bannerStyle !== 'behind';
+  head.className = 'side-head btn-like' + (bg ? (under ? ' banner-under' : ' has-banner') : '') + (swapping ? ' swap-in' : '');
   if (bg) head.style.setProperty('--banner', bg);
-  // (the banner's bottom fades into the channels, which come up over it a little, when the header sits right above them)
+  // (behind the name, the banner's bottom fades into the channels, which come up over it a little, when the header sits
+  // right above them; under the name, it's a picture of its own)
   const order = validOrder(prefs.sideOrder, ['head', 'body', 'panel']);
-  head.parentElement.classList.toggle('banner-over', !!bg && prefs.sideHead !== 'off' && order.indexOf('body') === order.indexOf('head') + 1);
+  head.parentElement.classList.toggle('banner-over', !!bg && !under && prefs.sideHead !== 'off' && order.indexOf('body') === order.indexOf('head') + 1);
   const inviting = live ? Store.canAnywhere(serverId, 'invite') : true;      // (signed out, Invite explains how it works)
   const row = el('div', { className: 'sh-row' }, el('span', { className: 'sh-name' }, server.name), ...ordered('header').map((id) =>
     id === 'invite' ? (shown('invite') && inviting ? el('button', { className: 'sh-btn', title: 'Invite People', onclick: (e) => { e.stopPropagation(); inviteFriends(serverId); } }, icon('personAdd', 18)) : null)
       : shown('serverMenu') ? el('span', { className: 'drop' }, icon('chevD', 18)) : null));
-  head.replaceChildren(row);
+  head.replaceChildren(row, ...(bg && under ? [el('div', { className: 'side-banner' })] : []));
   head.onclick = () => serverMenu(row);
   body.replaceChildren();
   body.oncontextmenu = (e) => { if (e.target.closest('.chan, .cat, .vmem')) return; e.preventDefault(); sideCtx(e.clientX, e.clientY); };
@@ -708,13 +796,13 @@ function renderSide() {
   const groups = cats.length ? cats : [{ id: null, name: 'Channels' }];
   const hiding = live && hideMuted.has(serverId);
   let k = 0;
-  // (Browse Channels, Game Servers, Server Guide, Events: as the server's admins switched them on, in the order and with
-  // the ones you chose in Layout)
-  const extras = ordered('serverTop').filter((id) => shown(id) && featureOn(server, id) && (id !== 'events' || live));
+  // (Browse, Guide, Event, Boost, Shop, Rules and Servers: as the server's admins switched them on, in the order, with the
+  // ones and the names you chose in Customize)
+  const extras = ordered('serverTop').filter((id) => shown(id) && featureOn(server, id) && ((id !== 'events' && id !== 'boost') || live));
   for (const id of extras) {
-    const [, label, ic] = BUTTONS.serverTop[1].find((b) => b[0] === id), n = id === 'events' ? Store.events(serverId).length : 0;
+    const [, , ic] = BUTTONS.serverTop[1].find((b) => b[0] === id), n = id === 'events' ? Store.events(serverId).length : 0;
     body.append(swapIn(el('button', { className: 'chan side-x' + (pageNow() === id ? ' on' : ''), onclick: () => openServerPage(id) },
-      icon(ic, 18), el('span', { className: 'nm' }, label), n ? el('span', { className: 'mbadge soft', title: plural(n, 'upcoming event') }, String(n)) : null), k++));
+      icon(ic, 18), el('span', { className: 'nm' }, labelOf('serverTop', id)), n ? el('span', { className: 'mbadge soft', title: plural(n, 'upcoming event') }, String(n)) : null), k++));
   }
   if (extras.length) body.append(el('div', { className: 'side-sep' }));
   for (const cat of groups) {
@@ -722,7 +810,7 @@ function renderSide() {
     const isCollapsed = collapsed.has(cat.id);
     body.append(swapIn(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) { collapsed.delete(cat.id); unfolding = cat.id; } else collapsed.add(cat.id); renderSide(); unfolding = null; },
       oncontextmenu: (e) => { e.preventDefault(); categoryCtx(cat, e.clientX, e.clientY); } },
-      el('span', { className: 'caret' }, icon('chevD')), el('span', { className: 'nm' }, cat.name),
+      el('span', { className: 'caret' }, icon('chevD')), el('span', { className: 'nm' }, el('span', { className: 'nm-t' }, cat.name)),
       canChans(cat.id) && shown('newChannel') ? el('span', { className: 'add', title: 'Create Channel', onclick: (e) => { e.stopPropagation(); newChannelFlow(cat.id); } }, icon('plus')) : null), k++));
     // (a collapsed category still shows the channel you're in, and ones with something new, as on Discord; hiding
     // muted channels keeps the one you're in and ones that ping you)
@@ -796,17 +884,21 @@ function openChannel(c) {
 }
 // the Direct Messages side: find a conversation, Friends, and your DMs
 function dmSide(head, body) {
-  head.replaceChildren(shown('findDM') ? el('button', { className: 'find-dm', onclick: () => newDMDialog() }, 'Find or start a conversation') : 'Messages');
+  // (no header when Find or Start a Conversation is hidden: Browse, in the list, does the same)
+  head.replaceChildren(shown('findDM') ? el('button', { className: 'find-dm', onclick: () => newDMDialog() }, labelOf('dms', 'findDM')) : 'Messages');
+  head.classList.toggle('gone', !shown('findDM'));
   const parts = [];
   const req = Store.friendRequests().incoming.length;
-  const nav = (id, ic, label, page, badge) => el('button', { className: 'nav-btn' + (!dmId && homePage === page ? ' on' : ''), onclick: () => { dmId = null; homePage = page; renderAll(); $('#app').classList.remove('show-side'); } },
-    icon(ic), el('span', { className: 'grow' }, label), badge || null);
+  const nav = (id, ic, page, badge, onclick) => el('button', { className: 'nav-btn' + (!dmId && page !== undefined && homePage === page ? ' on' : ''),
+    onclick: onclick || (() => { dmId = null; homePage = page; renderAll(); $('#app').classList.remove('show-side'); }) }, icon(ic), el('span', { className: 'grow' }, labelOf('dmNav', id)), badge || null);
   for (const id of ordered('dmNav')) {
     if (!shown(id)) continue;
-    if (id === 'friendsNav') parts.push(nav(id, 'users', 'Friends', null, req ? el('span', { className: 'mbadge' }, String(req)) : null));
-    if (id === 'datbuxNav') { const n = buxLive() && Store.canBux() ? Store.trades().filter((t) => t.status === 'open' && t.to === Store.myId()).length : 0; parts.push(nav(id, 'coin', 'Datbux', 'datbux', n ? el('span', { className: 'mbadge', title: 'Trades waiting for you' }, String(n)) : null)); }
-    if (id === 'shopNav') parts.push(nav(id, 'shop', 'Shop', 'shop'));
-    if (id === 'questsNav') { const n = questsReady(); parts.push(nav(id, 'quest', 'Quests', 'quests', n ? el('span', { className: 'mbadge green', title: 'Rewards to claim' }, String(n)) : null)); }
+    if (id === 'browseNav') parts.push(nav(id, 'search', undefined, null, () => newDMDialog()));
+    if (id === 'friendsNav') parts.push(nav(id, 'users', null, req ? el('span', { className: 'mbadge' }, String(req)) : null));
+    if (id === 'datbuxNav') { const n = buxLive() && Store.canBux() ? Store.trades().filter((t) => t.status === 'open' && t.to === Store.myId()).length : 0; parts.push(nav(id, 'coin', 'datbux', n ? el('span', { className: 'mbadge', title: 'Trades waiting for you' }, String(n)) : null)); }
+    if (id === 'collectionNav') parts.push(nav(id, 'collection', 'collection'));
+    if (id === 'shopNav') parts.push(nav(id, 'shop', 'shop'));
+    if (id === 'questsNav') { const n = questsReady(); parts.push(nav(id, 'quest', 'quests', n ? el('span', { className: 'mbadge green', title: 'Rewards to claim' }, String(n)) : null)); }
   }
   parts.push(el('div', { className: 'cat dm-cat' }, el('span', { className: 'nm' }, 'Direct Messages'),
     shown('newDM') ? el('span', { className: 'add', title: 'Create DM', onclick: (e) => { e.stopPropagation(); newDMDialog(); } }, icon('plus')) : null));
@@ -818,7 +910,7 @@ function dmSide(head, body) {
     const sub = group ? `${d.people.length} Member${d.people.length === 1 ? '' : 's'}` : inCall ? 'In a call' : d.user.bubble || d.user.about;
     const row = el('button', { className: 'dm-row' + (dmId === d.id ? ' on' : '') + (n ? ' unread' : ''), onclick: () => { dmId = d.id; renderAll(); $('#app').classList.remove('show-side'); },
       oncontextmenu: (e) => { e.preventDefault(); dmCtx(d, e.clientX, e.clientY); } },
-      dmAvatar(d, 32), el('div', { className: 'who' }, el('div', { className: 'nm2' }, dmName(d)), sub ? el('div', { className: 'sub2' + (inCall ? ' good' : '') }, sub) : null),
+      dmAvatar(d, 32), el('div', { className: 'who' }, el('div', { className: 'nm2' }, el('span', { className: 'nm2-t' }, dmName(d)), group ? null : tagChipFor(d.user)), sub ? el('div', { className: 'sub2' + (inCall ? ' good' : '') }, sub) : null),
       n ? el('span', { className: 'mbadge' }, n > 99 ? '99+' : String(n)) : null,
       el('span', { className: 'close', title: 'Close DM', onclick: (e) => { e.stopPropagation(); closedDMs.add(d.id); saveClosed(); if (dmId === d.id) dmId = null; renderAll(); } }, icon('x', 16)));
     parts.push(group ? row : plateOn(row, d.user.plate));
@@ -852,21 +944,37 @@ function goToCall() {
 }
 
 // ---------- the user panel ----------
+// your controls sit at the foot of the server rail (when it's shown, on a wide screen), or under the sidebar
+const panelInRail = () => prefs.panelPos === 'rail' && prefs.rail !== 'off' && innerWidth > 720;
 function renderMe() {
-  const panel = $('#me-panel'), parts = [];
+  const panel = $('#me-panel'), parts = [], inRail = panelInRail();
   const pbtn = (ic, title, onclick, on, cls = '') => { const b = el('button', { className: 'pbtn' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), title, onclick }); b.append(icon(ic)); return b; };
   const quiet = prefs.micMuted || prefs.deafened;
-  for (const id of ordered('panel')) {
+  for (const id of ordered(inRail ? 'railPanel' : 'panel')) {
     if (id === 'me') {
       const av = avatarEl(asMember()); av.onclick = (e) => { e.stopPropagation(); showAccount(av); };
       const stName = (STATUSES.find((s) => s[0] === me.status) || [, 'Online'])[1];
-      parts.push(av, el('div', { className: 'who', onclick: (e) => { e.stopPropagation(); showAccount(av); } }, styledName(el('div', { className: 'nm' }, me.name), asMember()), el('div', { className: 'st' }, me.pronouns || stName)));
-    } else if (id === 'settings') parts.push(pbtn('gear', 'User Settings', () => openUserSettings('account'), false, 'gear'));
+      if (inRail) { av.title = `${me.name} (${stName})`; parts.push(av); }
+      else parts.push(av, el('div', { className: 'who', onclick: (e) => { e.stopPropagation(); showAccount(av); } }, styledName(el('div', { className: 'nm' }, me.name), asMember()), el('div', { className: 'st' }, me.pronouns || stName)));
+    } else if (id === 'settings') parts.push(pbtn('gear', labelOf('panel', 'settings'), () => openUserSettings('account'), false, 'gear'));
     else if (id === 'mic' && shown('mic')) parts.push(pbtn(quiet ? 'micOff' : 'mic', quiet ? 'Unmute' : 'Mute', toggleMic, quiet));
     else if (id === 'deafen' && shown('deafen')) parts.push(pbtn(prefs.deafened ? 'headphonesOff' : 'headphones', prefs.deafened ? 'Undeafen' : 'Deafen', toggleDeafen, prefs.deafened));
   }
   panel.replaceChildren(...parts);
-  plateOn(panel, me.plate);
+  panel.classList.toggle('in-rail', inRail);
+  if (inRail) { panel.classList.remove('plated'); panel.style.removeProperty('--plate'); } else plateOn(panel, me.plate);
+}
+// ---------- the title bar, across the top of the window: where you are ----------
+function renderTitle() {
+  const bar = $('#titlebar'); if (!bar) return;
+  bar.hidden = prefs.titlebar === 'off'; if (bar.hidden) return;
+  const sv = view === 'server' && serverId ? Store.server(serverId) : null;
+  const name = sv ? sv.name : view === 'discover' ? 'Discover' : 'Direct Messages';
+  const key = [name, sv ? String(sv.img || '').length + '|' + sv.icon : view, appLogo(), ordered('titlebar').filter(shown).join()].join('|');
+  if (bar.dataset.key === key) return;
+  bar.dataset.key = key;
+  const face = sv ? serverFace(sv, 18) : view === 'discover' ? icon('compass', 16) : logoEl(appLogo(), { size: 18 });
+  bar.replaceChildren(el('div', { className: 'tb-in', title: name }, ...ordered('titlebar').filter(shown).map((id) => (id === 'tbIcon' ? el('span', { className: 'tb-ic' }, face) : el('span', { className: 'tb-name' }, name)))));
 }
 // mute and deafen: they apply to calls, and deafen also silences Fluentdat's sounds (and mutes you, as on Discord)
 function toggleMic() {
@@ -889,13 +997,14 @@ function renderTop() {
   const act = (ic, title, onclick, on) => el('button', { className: 'act' + (on ? ' on' : ''), title, onclick }, icon(ic), prefs.btnLabels === 'on' ? el('span', { className: 'lbl' }, title) : null);
   let where = null;
   if (view === 'discover') parts.push(el('span', { className: 'hash' }, icon('compass')), el('span', {}, 'Discover'));
-  else if (view === 'home' && !dmId) parts.push(el('span', { className: 'hash' }, icon(homePage === 'shop' ? 'shop' : homePage === 'quests' ? 'quest' : homePage === 'datbux' ? 'coin' : 'users')), el('span', {}, homePage === 'shop' ? 'Shop' : homePage === 'quests' ? 'Quests' : homePage === 'datbux' ? 'Datbux' : 'Friends'));
+  else if (view === 'home' && !dmId) { const nid = { shop: 'shopNav', quests: 'questsNav', datbux: 'datbuxNav', collection: 'collectionNav' }[homePage] || 'friendsNav';
+    parts.push(el('span', { className: 'hash' }, icon(BUTTONS.dmNav[1].find((b) => b[0] === nid)[2])), el('span', {}, labelOf('dmNav', nid))); }
   else if (view === 'home') {
     const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
     if (d && d.kind === 'group') { parts.push(dmAvatar(d, 24), el('button', { className: 'ttl ttl-edit', title: 'Rename the group', onclick: () => renameGroup(d) }, dmName(d))); where = 'group'; }
     else { const u = Store.dmUser(dmId) || { name: '?' }; parts.push(avatarEl(u, { size: 24 }), el('span', { className: 'ttl' }, u.name)); where = 'dm'; }
   }
-  else if (pageNow()) { const [, label, ic] = BUTTONS.serverTop[1].find((b) => b[0] === pageNow()); parts.push(el('span', { className: 'hash' }, icon(ic)), el('span', { className: 'ttl' }, label)); }
+  else if (pageNow()) { const [, , ic] = BUTTONS.serverTop[1].find((b) => b[0] === pageNow()); parts.push(el('span', { className: 'hash' }, icon(ic)), el('span', { className: 'ttl' }, labelOf('serverTop', pageNow()))); }
   else {
     const c = Store.channel(channelId);
     if (!c) parts.push(el('span', {}, Store.syncState().loading ? 'Loading…' : 'Fluentdat'));
@@ -1429,7 +1538,7 @@ function datbuxPage() {
   const stat = (label, n) => el('div', { className: 'dbx-stat' }, el('small', {}, label), el('b', {}, fmtBux(n)));
   return el('div', { className: 'dbx-page' },
     el('div', { className: 'dbx-hero' }, el('div', { className: 'dbx-coin' }, icon('coin', 46)),
-      el('div', { className: 'grow' }, el('h1', {}, 'Datbux'), el('p', {}, 'Fluentdat’s own money. Earn it with daily, weekly, monthly and yearly tasks, spend it in the Shop on avatar decorations and name fonts, and send or trade it with people you know.'),
+      el('div', { className: 'grow' }, el('h1', {}, labelOf('dmNav', 'datbuxNav')), el('p', {}, 'Your Datbux, Fluentdat’s own money. Earn them with daily, weekly, monthly and yearly tasks, spend them in the Shop on avatar decorations and name fonts, and send or trade them with people you know.'),
         el('div', { className: 'shp-hero-acts' }, el('button', { className: 'btn', onclick: () => { homePage = 'shop'; renderAll(); } }, icon('shop', 16), 'Shop'),
           el('button', { className: 'btn', onclick: () => sendBuxDialog() }, icon('send', 16), 'Send Datbux'), el('button', { className: 'btn', onclick: () => tradeDialog() }, icon('swap', 16), 'Trade'))),
       el('div', { className: 'dbx-bal' }, el('small', {}, 'Your Datbux'), el('b', {}, icon('coin', 28), fmtBux(w.balance)), w.waiting ? el('small', {}, 'Your welcome Datbux, here with your first claim or buy') : null)),
@@ -1451,7 +1560,8 @@ function shopPage() {
   };
   // (something with a price: bought first, then worn)
   const buyUse = async (kind, id, patch, said) => { if (kind === 'deco' && !canDeco) return use(patch, said); if (await buyFlow(kind, id)) use(patch, said); };
-  const lockBtn = (quest) => el('button', { className: 'btn small ghost', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('lock', 14), `Quest: ${(questInfo(quest) || {}).title || ''}`);
+  const goHome = (page) => { view = 'home'; dmId = null; homePage = page; renderAll(); };
+  const lockBtn = (quest) => el('button', { className: 'btn small ghost', onclick: () => goHome('quests') }, icon('lock', 14), `Quest: ${(questInfo(quest) || {}).title || ''}`);
   const item = (preview, name, sub, action, on) => el('div', { className: 'shp-item' + (on ? ' on' : '') }, el('div', { className: 'shp-pv' }, preview), el('div', { className: 'shp-meta' }, el('b', {}, name), el('small', {}, sub)), action);
   // what it costs, or that it's yours
   const cost = (kind, id, quest) => {
@@ -1495,12 +1605,12 @@ function shopPage() {
     return item(row, 'Nameplate ' + (i + 1), 'Free', on ? el('button', { className: 'btn small', onclick: () => use({ plate: '' }, 'Nameplate taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use({ plate: v }, 'Nameplate on.') }, 'Use'), on);
   });
   const sec = (title, sub, list, cls = '') => [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)];
-  const toBux = () => { homePage = 'datbux'; renderAll(); };
+  const toBux = () => goHome('datbux');
   return el('div', { className: 'shp-page' },
     el('div', { className: 'shp-hero' }, el('div', {}, el('h1', {}, 'Shop'),
       el('p', {}, w ? 'Avatar decorations and name fonts cost Datbux (earn them with tasks). Profile effects, frames and nameplates are free, and a few things unlock with a Quest.' : 'Everything here is free. A few things unlock when you finish a Quest.'),
       el('div', { className: 'shp-hero-acts' }, w ? el('button', { className: 'btn shp-bal', title: 'Your Datbux', onclick: toBux }, icon('coin', 16), fmtBux(w.balance)) : null,
-        el('button', { className: 'btn', onclick: () => { homePage = 'quests'; renderAll(); } }, icon('quest', 16), 'Quests'),
+        el('button', { className: 'btn', onclick: () => goHome('quests') }, icon('quest', 16), labelOf('dmNav', 'questsNav')),
         el('button', { className: 'btn', onclick: () => nameStyleDialog(me.style, (s) => { me.style = s; saveMe(); pushProfile(); renderAll(); }, asMember) }, icon('brush', 16), 'Display Name Style'))),
       el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
     ...sec('Avatar Decorations', 'Shown around your avatar everywhere: in chats, the member list and your profile.', decos),
@@ -1508,7 +1618,42 @@ function shopPage() {
     ...sec('Profile Effects', 'Played over your profile card when someone opens it.', effects, 'wide'),
     ...sec('Profile Frames', 'Drawn around your profile card, wherever someone opens it.', frames, 'frames'),
     ...sec('Nameplates', 'Behind your name in the member list and your DMs (when people have nameplates on).', plates, 'wide'),
-    prefs.decorations === 'off' || prefs.effects === 'off' ? el('div', { className: 'note-box' }, 'You’ve turned off decorations or effects for yourself (Settings → Appearance), so you won’t see them on other people.') : null);
+    prefs.decorations === 'off' || prefs.effects === 'off' ? el('div', { className: 'note-box' }, 'You’ve turned off decorations or effects for yourself (Customize → Profiles), so you won’t see them on other people.') : null);
+}
+
+// Collection (Direct Messages → Collection): what's yours from the Shop (bought, traded, or kept from before things had
+// prices) and from Quests, to put on or take off
+function collectionPage() {
+  const you = asMember(), owned = buxReady() ? Bux.owned() : [], st = me.style || {};
+  const HOW = { buy: 'Bought', trade: 'Traded', grant: 'Yours from before' };
+  const use = (patch, said) => { Object.assign(me, patch); saveMe(); pushProfile(); renderAll(); toast(said); };
+  const item = (preview, name, sub, on, act) => el('div', { className: 'shp-item' + (on ? ' on' : '') }, el('div', { className: 'shp-pv' }, preview),
+    el('div', { className: 'shp-meta' }, el('b', {}, name), el('small', {}, sub)), act);
+  const toggle = (on, off, put, said) => (on ? el('button', { className: 'btn small', onclick: () => use(off, 'Taken off.') }, 'Remove') : el('button', { className: 'btn small primary', onclick: () => use(put, said) }, 'Use'));
+  const how = (kind, id, quest) => { const o = owned.find((x) => x.kind === kind && x.item === id); return o ? HOW[o.how] || 'Yours' : quest ? 'Quest reward' : 'Yours'; };
+  const decoIds = [...new Set([...owned.filter((o) => o.kind === 'deco').map((o) => o.item), ...DECORATIONS.filter(([, , q]) => q && unlocked(q)).map(([id]) => id)])];
+  const decos = decoIds.map((id) => decoInfo(id)).filter(Boolean).map(([id, name, quest]) =>
+    item(avatarEl({ ...you, decoration: id }, { size: 76 }), name, how('deco', id, quest), me.decoration === id, toggle(me.decoration === id, { decoration: '' }, { decoration: id }, `${name} is on your avatar.`)));
+  const fonts = owned.filter((o) => o.kind === 'font').map((o) => FONTS.find((f) => f[0] === o.item)).filter(Boolean).map(([id, name]) =>
+    item(el('div', { className: 'shp-font-pv' }, styleName(el('span', { className: 'shp-font' }, me.name || 'Your Name'), { ...st, font: id }, { fallback: safeColor(me.color, '#ffffff') })), name, how('font', id),
+      st.font === id, toggle(st.font === id, { style: { ...st, font: '' } }, { style: { ...st, font: id } }, `Your name is in ${name} now.`)));
+  const mini = (id) => { const c = el('div', { className: 'shp-mini' }, el('div', { className: 'shp-mini-b' }), el('div', { className: 'shp-mini-av' }, avatarEl(you, { size: 38 })), el('b', {}, me.name)); setBanner(c.firstChild, me.banner, me.color); themeCard(c, you.theme); const fx = effectEl(id); if (fx) c.append(fx); return c; };
+  const effects = PROFILE_EFFECTS.filter(([, , q]) => q && unlocked(q)).map(([id, name]) =>
+    item(mini(id), name, 'Quest reward', me.effect === id, toggle(me.effect === id, { effect: '' }, { effect: id }, `${name} is on your profile.`)));
+  const goHome = (page) => { view = 'home'; dmId = null; homePage = page; renderAll(); };
+  const sec = (title, sub, list, cls = '') => (list.length ? [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)] : []);
+  const n = decos.length + fonts.length + effects.length;
+  return el('div', { className: 'shp-page col-page' },
+    el('div', { className: 'shp-hero col-hero' }, el('div', {}, el('h1', {}, labelOf('dmNav', 'collectionNav')),
+      el('p', {}, n ? `${plural(n, 'thing')} of yours, from the Shop and from Quests. Put one on, take it off, or trade it with someone you know.` : 'Nothing here yet. Decorations and name fonts from the Shop, and rewards from Quests, end up here.'),
+      el('div', { className: 'shp-hero-acts' }, el('button', { className: 'btn', onclick: () => goHome('shop') }, icon('shop', 16), labelOf('dmNav', 'shopNav')),
+        el('button', { className: 'btn', onclick: () => goHome('datbux') }, icon('coin', 16), labelOf('dmNav', 'datbuxNav')),
+        buxLive() && Store.canBux() ? el('button', { className: 'btn', onclick: () => tradeDialog() }, icon('swap', 16), 'Trade') : null)),
+      el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
+    ...sec('Avatar Decorations', 'Around your avatar everywhere.', decos),
+    ...sec('Name Fonts', 'Your name, in its own font.', fonts, 'wide'),
+    ...sec('Profile Effects', 'Over your profile card.', effects, 'wide'),
+    n ? null : el('div', { className: 'note-box' }, 'Earn Datbux with the tasks in ', el('b', {}, labelOf('dmNav', 'datbuxNav')), ', then buy something in the ', el('b', {}, labelOf('dmNav', 'shopNav')), '.'));
 }
 
 // ---------- a server's own pages (Discord's): Browse Channels, Game Servers, Server Guide, and its Events ----------
@@ -1563,6 +1708,14 @@ function gameServersPage(sv) {
 const GUIDE_DONE = 'fluentdat.guideDone';
 const guideDone = (sv) => { try { return (JSON.parse(localStorage.getItem(GUIDE_DONE)) || {})[sv] || []; } catch { return []; } };
 function markGuideDone(sv, i) { try { const all = JSON.parse(localStorage.getItem(GUIDE_DONE)) || {}; all[sv] = [...new Set([...(all[sv] || []), i])]; localStorage.setItem(GUIDE_DONE, JSON.stringify(all)); } catch {} }
+// Rules (a server's own, written by its admins in Server Settings → Server Guide): numbered, one a line
+function rulesPage(sv) {
+  const rules = ((sv.guide || {}).rules || []).filter((r) => typeof r === 'string' && r.trim()), can = Store.canManage(sv.id);
+  const edit = can ? el('button', { className: 'btn', onclick: () => openServerSettings(sv.id, 'guide') }, icon('edit', 16), rules.length ? 'Edit Rules' : 'Write the Rules') : null;
+  return el('div', { className: 'sp-page' }, pageHead('rules', labelOf('serverTop', 'rules'), `What everyone in ${sv.name} agrees to.`, edit),
+    rules.length ? el('ol', { className: 'rules-list' }, ...rules.map((r, i) => el('li', {}, el('span', { className: 'rl-n' }, String(i + 1)), el('span', { className: 'rl-t' }, r))))
+      : el('div', { className: 'note-box' }, can ? 'No rules yet. Write them in Server Settings → Server Guide (up to 25, one a line).' : 'This server hasn’t written its rules yet.'));
+}
 function guidePage(sv) {
   const g = sv.guide || {}, can = Store.canManage(sv.id), done = guideDone(sv.id);
   const hero = el('div', { className: 'sgd-hero' }); setBanner(hero, sv.banner, '#5865f2');
@@ -1662,22 +1815,26 @@ function eventEditor(sv, e) {
 }
 // Server Settings → Server Sidebar: which extras show above the channels, for everyone
 function svSidebar(sv, redraw) {
-  const f = { ...FEATURES, ...(sv.features || {}) }, live = Store.kind === 'supabase';
+  const f = { ...FEATURES, ...(sv.features || {}) }, live = Store.kind === 'supabase', newer = !live || Store.canSync();       // (Boost, Shop and Rules need setup.sql 10)
   const set = (k, v) => { Store.updateServer(sv.id, { features: { ...f, [k]: v } }); renderAll(); setTimeout(redraw, 150); };
   const item = (k, title, desc) => row2(title, desc, sw(!!f[k], (on) => set(k, on)));
-  return [el('h2', {}, 'Server Sidebar'), el('p', { className: 'sub' }, 'What shows above the channels, for everyone in the server. Each person can still hide or move these for themselves in Settings → Layout → Buttons.'),
+  return [el('h2', {}, 'Server Sidebar'), el('p', { className: 'sub' }, 'What shows above the channels, for everyone in the server. Each person can still hide, move or rename these for themselves in Customize → Elements.'),
     item('browse', 'Browse Channels', 'People pick which channels show in their list.'),
-    item('games', 'Game Servers', 'The game servers you play on, with addresses to copy (set them up in Game Servers).'),
     item('guide', 'Server Guide', 'A welcome, things to do first, and resource pages (write it in Server Guide).'),
     live ? item('events', 'Events', 'What’s coming up, and who’s interested.') : null,
-    live ? item('member_events', 'Members can make events', 'Otherwise only admins can.') : null];
+    live ? item('member_events', 'Members can make events', 'Otherwise only admins can.') : null,
+    ...(newer ? [live ? item('boost', 'Server Boost', 'Boosting the server (it’s free), and its levels.') : null,
+      item('shop', 'Shop', 'Fluentdat’s Shop, without leaving the server.'),
+      item('rules', 'Rules', 'The server’s rules, numbered (write them in Server Guide).')] : []),
+    item('games', 'Game Servers', 'The game servers you play on, with addresses to copy (set them up in Game Servers).')];
 }
 // Server Settings → Server Guide: the welcome, up to 7 things to do first (each can point at a channel), up to 7 pages
 function svGuide(sv, redraw, shut) {
   const g = sv.guide || {}, chans = Store.channels(sv.id), chanOpts = [['', 'No channel'], ...chans.map((c) => [c.id, (c.kind === 'voice' ? '🔊 ' : '# ') + c.name])];
   const welcome = el('textarea', { className: 'area', maxLength: 1000, rows: 4, value: g.welcome || '', placeholder: 'Say hello, and what this server is about.' });
   const todos = (g.todos || []).map((t) => ({ t: t.t, c: t.c && chans.some((c) => c.id === t.c) ? t.c : '' })), res = (g.res || []).map((r) => ({ t: r.t, b: r.b || '' }));
-  const todoBox = el('div', { className: 'gd-list' }), resBox = el('div', { className: 'gd-list' });
+  const todoBox = el('div', { className: 'gd-list' }), resBox = el('div', { className: 'gd-list' }), rulesBox = el('div', { className: 'gd-list' });
+  const rules = [...(g.rules || [])], canRules = Store.kind !== 'supabase' || Store.canSync();
   const input = (obj, key, attrs) => { const i = el(attrs.rows ? 'textarea' : 'input', { ...attrs, value: obj[key] || '' }); i.oninput = () => { obj[key] = i.value; }; return i; };
   const drawTodos = () => todoBox.replaceChildren(...todos.map((t, i) => el('div', { className: 'gd-row' }, input(t, 't', { type: 'text', className: 'wide-in', maxLength: 100, placeholder: 'Something to do first, like “Read the rules”' }),
     sel(t.c, chanOpts, (v) => { t.c = v; }), iconBtn('x', 'Remove', () => { todos.splice(i, 1); drawTodos(); }, 'del'))),
@@ -1685,16 +1842,26 @@ function svGuide(sv, redraw, shut) {
   const drawRes = () => resBox.replaceChildren(...res.map((r, i) => el('div', { className: 'gd-res' }, el('div', { className: 'gd-row' }, input(r, 't', { type: 'text', className: 'wide-in', maxLength: 60, placeholder: 'Page title' }),
     iconBtn('x', 'Remove', () => { res.splice(i, 1); drawRes(); }, 'del')), input(r, 'b', { className: 'area', maxLength: 1500, rows: 3, placeholder: 'What it says (Discord formatting works)' }))),
     res.length < 7 ? el('button', { className: 'btn small', onclick: () => { res.push({ t: '', b: '' }); drawRes(); } }, icon('plus', 14), 'Add a Resource Page') : null);
-  drawTodos(); drawRes();
+  // (the rules: up to 25 lines, in order)
+  const drawRules = () => rulesBox.replaceChildren(...rules.map((r, i) => {
+    const inp = el('input', { type: 'text', className: 'wide-in', maxLength: 300, value: r, placeholder: 'A rule, like “Be kind to each other”' });
+    inp.oninput = () => { rules[i] = inp.value.replace(/[\r\n]+/g, ' '); };
+    return el('div', { className: 'gd-row' }, el('span', { className: 'rl-n' }, String(i + 1)), inp,
+      iconBtn('up', 'Move up', () => { if (i) { [rules[i - 1], rules[i]] = [rules[i], rules[i - 1]]; drawRules(); } }),
+      iconBtn('x', 'Remove', () => { rules.splice(i, 1); drawRules(); }, 'del'));
+  }), rules.length < 25 ? el('button', { className: 'btn small', onclick: () => { rules.push(''); drawRules(); } }, icon('plus', 14), 'Add a Rule') : null);
+  drawTodos(); drawRes(); drawRules();
   const save = () => {
     const guide = { welcome: welcome.value.trim().slice(0, 1000), todos: todos.filter((t) => t.t.trim()).map((t) => ({ t: t.t.trim().slice(0, 100), ...(t.c ? { c: t.c } : {}) })),
-      res: res.filter((r) => r.t.trim()).map((r) => ({ t: r.t.trim().slice(0, 60), b: r.b.trim().slice(0, 1500) })) };
+      res: res.filter((r) => r.t.trim()).map((r) => ({ t: r.t.trim().slice(0, 60), b: r.b.trim().slice(0, 1500) })),
+      ...(canRules ? { rules: rules.map((r) => r.replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, 300)).filter(Boolean).slice(0, 25) } : {}) };
     const turnOn = !featureOn(sv, 'guide') && (guide.welcome || guide.todos.length || guide.res.length);
     Store.updateServer(sv.id, { guide, ...(turnOn ? { features: { ...FEATURES, ...(sv.features || {}), guide: true } } : {}) });
     renderAll(); toast(turnOn ? 'Server Guide saved, and switched on in the sidebar.' : 'Server Guide saved.'); setTimeout(redraw, 150);
   };
   return [el('h2', {}, 'Server Guide'), el('p', { className: 'sub' }, 'What new people see first: a welcome, things to do, and pages to read. It shows in the sidebar when Server Guide is on (Server Sidebar).'),
     el('h3', {}, 'Welcome Message'), welcome, el('h3', {}, 'New Member To-Dos'), todoBox, el('h3', {}, 'Resource Pages'), resBox,
+    el('h3', {}, 'Rules'), canRules ? rulesBox : el('div', { className: 'note-box' }, 'Rules need the newest supabase/setup.sql: run it again in Supabase.'),
     el('div', { className: 'row', style: 'justify-content:flex-start;margin-top:18px' }, el('button', { className: 'btn primary', onclick: save }, 'Save Changes'),
       el('button', { className: 'btn', onclick: () => { if (shut) shut(); serverPage = { sv: sv.id, id: 'guide' }; view = 'server'; serverId = sv.id; renderAll(); } }, 'See It'))];
 }
@@ -1852,7 +2019,7 @@ function styledName(node, u, { roleColored = false } = {}) {
 function fillMessages(wrap, msgs, place, start) {
   const keep = wrap._nodes || new Map(), next = new Map(), order = [];
   const put = (key, make) => { let n = keep.get(key), made = false; if (!n) { n = make(); made = true; } next.set(key, n); order.push(n); return [n, made]; };
-  const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars].join();
+  const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars, ordered('msgActions').filter(shown).join('.'), JSON.stringify(prefs.labels || {})].join();
   const first = !wrap._seen; if (first) wrap._seen = new Set();
   const reacts = Store.reactions ? Store.reactions(place) : new Map(), reactable = mayIn('react');
   if (start) put('start:' + start.key, start.make);
@@ -1940,13 +2107,16 @@ function messageNode(m, cont, to, all, ctx) {
   }
   const av = avatarEl(m.user); av.onclick = (e) => showProfile(m.user, e.currentTarget);
   const reacting = !m.sending && mayIn('react');
-  const tools = el('div', { className: 'msg-tools' },
-    ...(reacting ? quickReacts(3).map((q) => el('button', { className: 'qr', title: 'React with ' + emojiLabel(q), onclick: (e) => { e.stopPropagation(); toggleReact(m, q, true); } }, emojiFace(q, 'qre'))) : []),
-    reacting ? el('button', { title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)) : null,
-    !m.sending && mayIn('send') ? el('button', { title: 'Reply', onclick: (e) => { e.stopPropagation(); startReply(m); } }, icon('reply', 18)) : null,
-    !m.sending && Store.kind === 'supabase' ? el('button', { title: 'Forward', onclick: (e) => { e.stopPropagation(); forwardFlow(m); } }, icon('forward', 18)) : null,
-    !m.sending && canThread() ? el('button', { title: threadOf(m.id) ? 'Open Thread' : 'Create Thread', onclick: (e) => { e.stopPropagation(); threadFlow(m); } }, icon('thread', 18)) : null,
-    el('button', { title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); messageCtx(m, r.left - 200, r.bottom + 4); } }, icon('more', 18)));
+  // (the buttons over a message you point at: the ones, in the order and with the names you chose in Customize)
+  const toolOf = {
+    quick: () => (reacting ? quickReacts(3).map((q) => el('button', { className: 'qr', title: 'React with ' + emojiLabel(q), onclick: (e) => { e.stopPropagation(); toggleReact(m, q, true); } }, emojiFace(q, 'qre'))) : []),
+    react: () => (reacting ? [el('button', { title: labelOf('msgActions', 'react'), onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18))] : []),
+    reply: () => (!m.sending && mayIn('send') ? [el('button', { title: labelOf('msgActions', 'reply'), onclick: (e) => { e.stopPropagation(); startReply(m); } }, icon('reply', 18))] : []),
+    forward: () => (!m.sending && Store.kind === 'supabase' ? [el('button', { title: labelOf('msgActions', 'forward'), onclick: (e) => { e.stopPropagation(); forwardFlow(m); } }, icon('forward', 18))] : []),
+    thread: () => (!m.sending && canThread() ? [el('button', { title: threadOf(m.id) ? 'Open Thread' : labelOf('msgActions', 'thread'), onclick: (e) => { e.stopPropagation(); threadFlow(m); } }, icon('thread', 18))] : []),
+    more: () => [el('button', { title: labelOf('msgActions', 'more'), onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); messageCtx(m, r.left - 200, r.bottom + 4); } }, icon('more', 18))],
+  };
+  const tools = el('div', { className: 'msg-tools' }, ...ordered('msgActions').filter((id) => id === 'more' || shown(id)).flatMap((id) => toolOf[id]()));
   const node = el('div', { className: 'msg' + (cont ? ' cont' : '') + (pingsMe(m, all) ? ' pinged' : '') + (m.sending ? ' sending' : '') + (bookmarked(m.id) ? ' saved' : ''),
     oncontextmenu: (e) => { if (e.target.closest('a')) return; e.preventDefault(); messageCtx(m, e.clientX, e.clientY); } });
   node.dataset.id = m.id;
@@ -2097,9 +2267,11 @@ function startHeader() {
       el('div', { className: 'start-acts' }, el('button', { className: 'btn small', onclick: () => addPeopleFlow() }, icon('usersPlus', 15), 'Add Friends'), el('button', { className: 'btn small', onclick: () => renameGroup(d) }, icon('edit', 15), 'Rename'))) };
     const u = Store.dmUser(dmId); if (!u) return null;
     const st = friendState(u), ms = Store.mutualServerList(u.id), live = Store.kind === 'supabase', blocked = live && Store.blocked(u.id);
-    return { key: ['dm', u.id, u.name, String(u.avatar || '').length, st, ms.length, blocked].join(':'), make: () => el('div', { className: 'start' },
-      el('button', { className: 'start-av', title: 'View Full Profile', onclick: () => fullProfile(u) }, avatarEl(u, { size: 80 })),
-      el('h2', {}, el('button', { className: 'start-name', onclick: () => fullProfile(u) }, u.name)), u.login ? el('div', { className: 'start-handle' }, u.login) : null,
+    // (as TrixWotel drew it: their picture, big, with their name beside it and what they say about themselves under it)
+    return { key: ['dm', u.id, u.name, String(u.avatar || '').length, st, ms.length, blocked, u.about, u.status, u.login].join(':'), make: () => el('div', { className: 'start dm-start' },
+      el('div', { className: 'ds-row' }, el('button', { className: 'start-av', title: 'View Full Profile', onclick: () => fullProfile(u) }, avatarEl(u, { size: 112 })),
+        el('div', { className: 'ds-text' }, el('h2', {}, el('button', { className: 'start-name', onclick: () => fullProfile(u) }, styledName(el('span', {}, u.name), u))),
+          u.login ? el('div', { className: 'start-handle' }, u.login) : null, u.about ? el('div', { className: 'ds-about' }, u.about) : null)),
       el('p', {}, 'This is the beginning of your direct message history with ', el('b', {}, u.name), '.'),
       u.bot ? null : el('div', { className: 'start-acts' },
         ms.length ? el('button', { className: 'start-mutual', onclick: () => fullProfile(u, 'servers') }, el('span', { className: 'start-faces' }, ...ms.slice(0, 3).map((sv) => serverFace(sv, 24))), plural(ms.length, 'Mutual Server'))
@@ -2131,8 +2303,9 @@ function renderContent() {
   if (view === 'home' && !dmId && homePage) {
     const bux = buxReady() ? [Bux.wallet().balance, Bux.owned().length] : null;
     const key = homePage + ':' + JSON.stringify(homePage === 'shop' ? [me.decoration, me.effect, me.plate, me.frame, me.style, me.name, me.avatar, me.color, questsDone(), bux]
-      : homePage === 'datbux' ? [bux, buxLive() && Store.canBux() ? Store.trades().map((t) => t.id + t.status) : null, buxReady()] : [questStats(), questsDone(), me.decoration]);
-    if (content.dataset.key !== key) { content.replaceChildren(homePage === 'shop' ? shopPage() : homePage === 'datbux' ? datbuxPage() : questsPage()); content.dataset.key = key; }
+      : homePage === 'datbux' ? [bux, buxLive() && Store.canBux() ? Store.trades().map((t) => t.id + t.status) : null, buxReady()]
+      : homePage === 'collection' ? [bux, me.decoration, me.effect, me.frame, me.style, questsDone()] : [questStats(), questsDone(), me.decoration]);
+    if (content.dataset.key !== key) { content.replaceChildren(homePage === 'shop' ? shopPage() : homePage === 'datbux' ? datbuxPage() : homePage === 'collection' ? collectionPage() : questsPage()); content.dataset.key = key; }
     composer.hidden = true; return;
   }
   if (view === 'home' && !dmId) {
@@ -2143,8 +2316,12 @@ function renderContent() {
   const pg = pageNow(), psv = pg && Store.server(serverId);
   if (pg && psv) {
     const key = 'page:' + serverId + ':' + pg + ':' + JSON.stringify(pg === 'browse' ? [Store.channels(serverId).map((c) => [c.id, c.name, c.topic, c.category]), hiddenChans[serverId]]
-      : pg === 'games' ? psv.gameServers : [psv.guide, psv.name, psv.banner, guideDone(serverId), Store.canManage(serverId)]);
-    if (content.dataset.key !== key) { content.replaceChildren(pg === 'browse' ? browsePage(psv) : pg === 'games' ? gameServersPage(psv) : guidePage(psv)); content.dataset.key = key; }
+      : pg === 'games' ? psv.gameServers : pg === 'shop' ? [me.decoration, me.effect, me.plate, me.frame, me.style, me.name, me.avatar, me.color, questsDone(), buxReady() ? [Bux.wallet().balance, Bux.owned().length] : null]
+      : [psv.guide, psv.name, psv.banner, guideDone(serverId), Store.canManage(serverId)]);
+    if (content.dataset.key !== key) {
+      content.replaceChildren(pg === 'browse' ? browsePage(psv) : pg === 'games' ? gameServersPage(psv) : pg === 'shop' ? shopPage() : pg === 'rules' ? rulesPage(psv) : guidePage(psv));
+      content.dataset.key = key;
+    }
     composer.hidden = true; return;
   }
   const ch = view === 'home' ? null : Store.channel(channelId);
@@ -2320,7 +2497,7 @@ function roleIconEl(r, size = 16) {
   return s;
 }
 function renderAll() {
-  indexEmoji(); ensureSelection(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner();
+  indexEmoji(); ensureSelection(); renderTitle(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner();
   const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null, groupOn = !!g && g.kind === 'group' && showMembers;
   const dmPanelOn = view === 'home' && !!dmId && prefs.dmPanel && !!Store.dmUser(dmId);
   $('#app').classList.toggle('show-members', (showMembers && view === 'server') || dmPanelOn || groupOn || finderOn());
@@ -2331,7 +2508,7 @@ function renderAll() {
   let n = Store.friendRequests().incoming.length;
   for (const d of Store.dmList()) n += dmUnread(d.id);
   for (const sv of Store.servers()) n += serverUnread(sv.id).mentions;
-  document.title = (n ? `(${n > 99 ? '99+' : n}) ` : '') + 'Fluentdat';
+  document.title = (n ? `(${n > 99 ? '99+' : n}) ` : '') + (CUSTOMIZE ? 'Fluentdat Customize' : 'Fluentdat');
 }
 function renderBanner() {
   const b = $('#banner'), st = Store.syncState(), acc = Store.account();
@@ -2583,6 +2760,9 @@ function profileMenu(u, x, y, { full = false } = {}) {
   menu([
     !full && { label: 'View Full Profile', icon: 'user', action: () => fullProfile(u) },
     live && u.login && !u.bot && { label: 'Share Profile', icon: 'share', action: () => copyText(profileLink(u), 'Profile link copied.') },
+    !self && !u.bot && live && st === 'none' && !blocked && { label: 'Add Friend', icon: 'personAdd', action: () => befriend(u) },
+    !self && !u.bot && st === 'incoming' && { label: 'Accept Friend Request', icon: 'check', action: async () => { if ((await attempt(() => Store.acceptFriend(u.id))) !== null) toast(`You and ${u.name} are now friends!`); renderAll(); } },
+    !self && !u.bot && st === 'outgoing' && { label: 'Cancel Friend Request', icon: 'x', action: async () => { await attempt(() => Store.cancelFriend(u.id)); renderAll(); } },
     invitable.length && { label: 'Invite to Server', sub: () => invitable.map((sv) => ({ label: sv.name, action: () => inviteTo(u, sv) })) },
     live && !self && !u.bot && u.id && Store.canBux() && { label: 'Send Datbux', icon: 'coin', action: () => sendBuxDialog(u) },
     live && !self && !u.bot && u.id && Store.canBux() && { label: 'Trade', icon: 'swap', action: () => tradeDialog(u) },
@@ -2609,55 +2789,102 @@ async function blockUser(u) {
 }
 async function unblockUser(u) { if ((await attempt(() => Store.unblock(u.id))) !== null) { toast(`${u.name} is unblocked.`); renderAll(); } }
 
-// the profile beside a DM (Discord's right-hand panel): their banner, picture and name (click it for the whole profile),
-// about them, since when, what you have in common, and View Full Profile at the bottom
-function dmPanel(u) {
-  const live = Store.kind === 'supabase', st = friendState(u);
-  const banner = el('div', { className: 'dmp-banner' }); setBanner(banner, u.banner, u.color);
-  const more = el('button', { className: 'dmp-tool', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); profileMenu(u, r.right - 220, r.bottom + 6); } }, icon('more', 18));
-  const tools = el('div', { className: 'dmp-tools' },
-    !u.bot && live && st === 'none' && !Store.blocked(u.id) ? el('button', { className: 'dmp-tool', title: 'Add Friend', onclick: () => befriend(u) }, icon('personAdd', 18)) : null,
-    !u.bot && st === 'incoming' ? el('button', { className: 'dmp-tool', title: 'Accept Friend Request', onclick: async () => { if ((await attempt(() => Store.acceptFriend(u.id))) !== null) toast(`You and ${u.name} are now friends!`); renderAll(); } }, icon('check', 18)) : null,
-    more);
-  const av = el('button', { className: 'dmp-av', title: 'View Full Profile', onclick: () => fullProfile(u) }, avatarEl(u, { size: 80 }));
-  const id = el('div', { className: 'dmp-id' },
-    el('button', { className: 'dmp-name', title: 'View Full Profile', onclick: () => fullProfile(u) }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
-    el('div', { className: 'dmp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null),
-    u.bot ? null : badgeRow(u, { max: 7 }));
-  const body = el('div', { className: 'dmp-body' });
-  if (live && Store.blocked(u.id)) body.append(el('div', { className: 'dmp-card dmp-blocked' }, icon('ban', 16), el('span', {}, 'You blocked them. ', el('button', { className: 'link-btn', onclick: () => unblockUser(u) }, 'Unblock'))));
-  if (playingNow(u.playing)) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Playing'), playingRow(u.playing)));
-  if (u.about) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'About Me'), el('div', { className: 'dmp-about' }, u.about)));
-  if (u.since) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Member Since'), el('div', { className: 'dmp-since' }, icon('logo', 16), el('span', {}, dateLong(u.since)))));
-  // what you have in common
-  const ms = live ? Store.mutualServerList(u.id) : [];
-  const row = (label, faces, tab) => el('button', { className: 'dmp-row', onclick: () => fullProfile(u, tab) }, el('span', { className: 'dmp-row-l' }, label), el('span', { className: 'dmp-faces' }, ...faces), icon('chevR', 16));
-  const mutual = el('section', { className: 'dmp-card dmp-mutual' });
-  if (ms.length) mutual.append(row(`Mutual Servers — ${ms.length}`, ms.slice(0, 3).map((sv) => serverFace(sv, 20)), 'servers'));
-  if (live && !u.bot && !isMe(u)) Store.mutualFriends(u.id).then((fr) => {
-    if (!fr.length || !mutual.isConnected) return;
-    mutual.append(row(`Mutual Friends — ${fr.length}`, fr.slice(0, 3).map((f) => avatarEl(face(f), { size: 20 })), 'friends'));
-    mutual.hidden = false;
-  }, () => {});
-  mutual.hidden = !ms.length;
-  body.append(mutual);
-  const note = noteOn(u.id);
-  if (note) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Note'), el('div', { className: 'dmp-about' }, note)));
-  if (live && u.id && !u.bot) {          // (their connections and Board, fetched now)
-    const xbox = el('div', { className: 'dmp-extras' }), fill = (x) => xbox.replaceChildren(...gameRows(x, (tab) => fullProfile(u, tab)),
-      ...extrasBits({ ...(x || {}), widgets: [] }, (t, ...k) => el('section', { className: 'dmp-card' }, el('h4', {}, t), ...k), () => fullProfile(u, 'board')));
-    fill(Store.extrasNow(u.id)); body.append(xbox);
-    Store.profileExtras(u.id).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
+// ---------- profile cards (the DM profile beside a chat, and the full profile's card): each part, in the order and with the
+// parts you chose (Customize → Elements → Profile cards) ----------
+// badges and tag; mutual friends and servers; member, boosting and friends since; about them; what they're playing;
+// their Game Collection and Wishlist; their connections; your note on them. onTab(tab) opens the full profile there.
+function profileParts(u, { full = false, onTab = () => {}, closeFirst = () => {} } = {}) {
+  const live = Store.kind === 'supabase', self = isMe(u), xid = u.bot ? null : self ? myXid() : live && u.id ? u.id : null;
+  const sec = (cls, ...kids) => el('section', { className: 'pc-sec ' + cls }, ...kids);
+  const line = (ic, label, value) => el('div', { className: 'pc-line' }, icon(ic, 15), el('span', { className: 'pc-l' }, label), el('b', {}, value));
+  const out = [], later = [];          // (parts filled in once their profile's extras are known)
+  for (const id of ordered('profileCard')) {
+    if (!shown(id)) continue;
+    if (id === 'pBadges' && !u.bot) out.push(sec('pc-badges', badgeRow(u, { max: full ? 9 : 6 }), tagFor(u) ? el('span', { className: 'pc-tag' }, tagChipFor(u)) : null));
+    else if (id === 'pMutual' && live && !self && !u.bot && u.id) {
+      const ms = Store.mutualServerList(u.id), box = sec('pc-mutual');
+      const row = (label, faces, n, tab) => el('button', { className: 'pc-row', onclick: () => onTab(tab) }, el('span', { className: 'pc-l' }, label),
+        el('span', { className: 'dmp-faces' }, ...faces), n > faces.length ? el('span', { className: 'pc-more' }, '+' + (n - faces.length)) : null);
+      const friendsRow = el('div', { className: 'pc-slot' });
+      box.append(friendsRow);
+      if (ms.length) box.append(row('Mutual Servers', ms.slice(0, 3).map((sv) => serverFace(sv, 20)), ms.length, 'servers'));
+      Store.mutualFriends(u.id).then((fr) => { if (fr.length && friendsRow.isConnected) friendsRow.replaceWith(row('Mutual Friends', fr.slice(0, 3).map((f) => avatarEl(face(f), { size: 20 })), fr.length, 'friends')); }, () => {});
+      out.push(box);
+    }
+    else if (id === 'pSince' && !u.bot) {
+      const box = sec('pc-since');
+      if (u.since) box.append(line('logo', 'Member Since', dateLong(u.since)));
+      const boost = el('div', { className: 'pc-slot' }); box.append(boost);
+      // (boosting since: when they first boosted a server you can both see, from what their badges are made of)
+      const showBoost = (st) => { if (st && st.boost_since && boost.isConnected) boost.replaceWith(line('gem', 'Boosting Since', dateLong(Date.parse(st.boost_since)))); };
+      showBoost(statsNow(u)); statsOf(u).then(showBoost, () => {});
+      const fs = full && live && !self && u.id ? Store.friendSince(u.id) : 0;
+      if (fs) box.append(line('users', 'Friends Since', dateLong(fs)));
+      out.push(box);
+    }
+    else if (id === 'pBio' && u.about) out.push(sec('pc-bio', el('h4', {}, 'About Me'), el('div', { className: 'dmp-about' }, u.about)));
+    else if (id === 'pPlaying' && playingNow(u.playing)) out.push(sec('pc-play', el('h4', {}, 'Playing'), playingRow(u.playing)));
+    else if ((id === 'pGames' || id === 'pWish' || id === 'pConns') && xid) {
+      const box = sec('pc-' + id.slice(1).toLowerCase());
+      later.push([id, box]); out.push(box);
+    }
+    else if (id === 'pNote' && !self && !u.bot && u.id) {
+      if (full) {
+        const note = el('textarea', { className: 'fp-note', placeholder: 'Click to add a note', maxLength: 256, rows: 1, value: noteOn(u.id) });
+        const fit = () => { note.style.height = 'auto'; note.style.height = note.scrollHeight + 'px'; };
+        note.oninput = fit; note.onblur = () => { setNote(u.id, note.value.trim()); if (view === 'home') renderMembers(); };
+        note.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); note.blur(); } };
+        out.push(sec('pc-note', el('h4', {}, 'Note (only you see it)'), note)); setTimeout(fit, 0);
+      } else if (noteOn(u.id)) out.push(sec('pc-note', el('h4', {}, 'Note'), el('div', { className: 'dmp-about' }, noteOn(u.id))));
+    }
   }
+  // (their Game Collection, Wishlist and connections: from their profile's extras, fetched now)
+  if (later.length) {
+    const fill = (x) => {
+      for (const [id, box] of later) {
+        if (id === 'pConns') {
+          const list = (x && x.connections) || [];
+          box.replaceChildren(...(list.length || (self && full) ? [el('h4', {}, 'Connections'), ...list.map(connectionRow),
+            ...(self && full ? [el('button', { className: 'fp-addconn', onclick: () => { closeFirst(); openUserSettings('connections'); } }, icon('plus', 15), 'Add Connection')] : [])] : []));
+        } else {
+          const t = id === 'pGames' ? 'likes' : 'want', w = widgetsOf(x).find((v) => v && v.t === t && Array.isArray(v.g) && v.g.length);
+          box.replaceChildren(...(w ? [el('button', { className: 'pc-row pc-games', title: id === 'pGames' ? 'See the Board' : 'See the Wishlist', onclick: () => onTab(id === 'pGames' ? 'board' : 'wishlist') },
+            el('span', { className: 'pc-l' }, id === 'pGames' ? 'Game Collection' : 'Wishlist'), el('span', { className: 'p-gc-ic' }, ...w.g.slice(0, 3).map((g) => gameTile(g)),
+              w.g.length > 3 ? el('span', { className: 'p-gc-n' }, '+' + (w.g.length - 3)) : null))] : []));
+        }
+      }
+    };
+    fill(Store.extrasNow(xid));
+    Store.profileExtras(xid).then((x) => { if (later[0][1].isConnected) fill(x); }, () => {});
+  }
+  return out;
+}
+// the top of a profile card: their picture (with their status), their name, username and pronouns, and their bubble
+function profileHead(u, { size = 72, onOpen = null, self = isMe(u) } = {}) {
+  const av = el(onOpen ? 'button' : 'div', { className: 'pc-av', title: onOpen ? 'View Full Profile' : '', ...(onOpen ? { onclick: onOpen } : {}) }, avatarEl(u, { size }));
+  const name = el(onOpen ? 'button' : 'div', { className: 'pc-name', ...(onOpen ? { onclick: onOpen, title: 'View Full Profile' } : {}) }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null);
+  return el('div', { className: 'pc-id' }, av, el('div', { className: 'pc-names' }, name, u.login ? el('div', { className: 'pc-login' }, u.login) : null,
+    u.pronouns ? el('div', { className: 'pc-pro' }, u.pronouns) : null, bubbleEl(u, { mine: self })));
+}
+// the profile beside a DM (as TrixWotel drew it): their banner, picture, name, username and pronouns, then the parts of
+// their profile, and View Full Profile and More (two buttons) at the bottom
+function dmPanel(u) {
+  const live = Store.kind === 'supabase';
+  const banner = el('div', { className: 'dmp-banner' }); setBanner(banner, u.banner, u.color);
+  const body = [];
+  if (live && Store.blocked(u.id)) body.push(el('section', { className: 'pc-sec pc-blocked' }, icon('ban', 16), el('span', {}, 'You blocked them. ', el('button', { className: 'link-btn', onclick: () => unblockUser(u) }, 'Unblock'))));
+  body.push(...profileParts(u, { onTab: (tab) => fullProfile(u, tab) }));
   if (!u.banner && u.id) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
-  return withFrame(withEffect(themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, el('div', { className: 'dmp-top' }, banner, tools, av, bubbleEl(u, { mine: isMe(u) })), id, body),
-    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'))), u.theme), u.effect), u.frame);
+  const more = el('button', { className: 'dmp-more', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); profileMenu(u, r.right - 220, r.top - 8); } }, icon('more', 18));
+  return withFrame(withEffect(themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, banner, profileHead(u, { onOpen: () => fullProfile(u) }), ...body),
+    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'), more)), u.theme), u.effect), u.frame);
 }
 
-// the whole profile, in the middle of the screen (Discord's): their card on the left (message them, befriend them, their
-// connections, your note on them), and on the right their Board, Activity and Wishlist, and the friends and servers you
-// share (click a server to go there, a friend to see theirs)
+// the whole profile, floating over Fluentdat (as TrixWotel drew it): their card on the left (message them, befriend them,
+// and the parts of their profile), and tabs on the right: Widget, Wishlist, Collection, Mutual Friends and Mutual Server
+// (in the order and with the ones you chose in Customize)
 let fullOpen = null;
+const TAB_OF = { tWidget: 'board', tWish: 'wishlist', tCollection: 'collection', tFriends: 'friends', tServers: 'servers', tActivity: 'activity' };
 function fullProfile(user, tab = null) {
   closePop(); if (fullOpen) fullOpen.close();
   const self = isMe(user), live = Store.kind === 'supabase';
@@ -2668,52 +2895,27 @@ function fullProfile(user, tab = null) {
   const drawActs = () => {
     const s = friendState(u);
     acts.replaceChildren(...(self ? [el('button', { className: 'btn primary', onclick: () => { w.close(); openProfileEditor(); } }, icon('edit', 16), 'Edit Profile')] : [
-      !u.bot ? el('button', { className: 'btn primary', onclick: async () => { w.close(); await openDM(normFriend(u)); } }, icon('message', 16), 'Message') : null,
+      !u.bot ? el('button', { className: 'btn primary fp-msg', onclick: async () => { w.close(); await openDM(normFriend(u)); } }, icon('message', 16), 'Message') : null,
       !u.bot && s === 'none' && !(live && Store.blocked(u.id)) ? el('button', { className: 'btn fp-icon', title: 'Add Friend', onclick: async () => { await befriend(u); drawActs(); } }, icon('personAdd', 18)) : null,
+      !u.bot && s === 'friend' ? el('button', { className: 'btn fp-icon', title: 'Friends', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu([{ label: 'Remove Friend', danger: true, action: async () => { await unfriend(u); drawActs(); } }], r.left, r.bottom + 6); } }, icon('userCheck', 18)) : null,
       !u.bot && s === 'outgoing' ? el('button', { className: 'btn fp-icon', title: 'Friend Request Sent (click to cancel)', onclick: async () => { await attempt(() => Store.cancelFriend(u.id)); renderAll(); drawActs(); } }, icon('clock', 18)) : null,
       !u.bot && s === 'incoming' ? el('button', { className: 'btn green', onclick: async () => { if ((await attempt(() => Store.acceptFriend(u.id))) !== null) toast(`You and ${u.name} are now friends!`); renderAll(); drawActs(); } }, 'Accept') : null,
       el('button', { className: 'btn fp-icon', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); profileMenu(u, r.left, r.bottom + 6, { full: true }); } }, icon('more', 18))]).filter(Boolean));
   };
   drawActs();
-  const sec = (title, ...kids) => el('section', { className: 'fp-sec' }, el('h4', {}, title), ...kids);
-  const left = el('div', { className: 'fp-left' }, el('div', { className: 'fp-top' }, banner, el('div', { className: 'fp-av' }, avatarEl(u, { size: 120 })), bubbleEl(u, { mine: self }), acts),
-    el('div', { className: 'fp-id' }, el('h2', { className: 'fp-name' }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
-      el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null),
-      u.bot ? null : badgeRow(u, { max: 10 })));
-  const card = el('div', { className: 'fp-card' });
-  if (u.about) card.append(sec('About Me', el('div', { className: 'fp-about' }, u.about)));
-  const since = [u.since && el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong(u.since)))].filter(Boolean);
-  if (since.length) card.append(sec('Member Since', ...since));
-  const fs = live && !self ? Store.friendSince(u.id) : 0;
-  if (fs) card.append(sec('Friends Since', el('div', { className: 'fp-since' }, icon('users', 16), el('span', {}, dateLong(fs)))));
-  // what they've added to their profile: their accounts elsewhere, the Board, the games they played (fetched now)
-  const xid = u.bot ? null : self ? (live ? Store.myId() : 'me') : live ? u.id : null;
+  const xid = u.bot ? null : self ? myXid() : live ? u.id : null;
   let extras = (xid && Store.extrasNow(xid)) || null, fetched = !xid;
-  const conns = el('div', { className: 'fp-conns' }), connSec = sec('Connections', conns);
-  const drawConns = () => {
-    const list = (extras && extras.connections) || [];
-    conns.replaceChildren(...list.map(connectionRow), ...(self ? [el('button', { className: 'fp-addconn', onclick: () => { w.close(); openUserSettings('connections'); } }, icon('plus', 15), 'Add Connection')] : []));
-    connSec.hidden = !list.length && !self;
-  };
-  if (xid) { card.append(connSec); drawConns(); }
-  if (!self && !u.bot && u.id) {
-    const note = el('textarea', { className: 'fp-note', placeholder: 'Click to add a note', maxLength: 256, rows: 1, value: noteOn(u.id) });
-    const fit = () => { note.style.height = 'auto'; note.style.height = note.scrollHeight + 'px'; };
-    note.oninput = fit; note.onblur = () => { setNote(u.id, note.value.trim()); if (view === 'home') renderMembers(); };
-    note.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); note.blur(); } };
-    card.append(sec('Note (only you see it)', note)); setTimeout(fit, 0);
-  }
-  const quiet = el('div', { className: 'fp-quiet' }, 'Nothing here yet.');
-  card.append(quiet); quiet.hidden = [...card.children].some((c) => c !== quiet && !c.hidden);
-  left.append(card);
-  themeCard(left, u.theme); withEffect(left, u.effect);
-  const leftBox = withFrame(el('div', { className: 'fp-lwrap' }, left), u.frame);          // (the frame stays put while the card scrolls)
-  // the right side: their Board, Activity and Wishlist, and what you share
+  const parts = profileParts(u, { full: true, onTab: (t) => { if (tabs().some(([id]) => id === t) && tab !== t) { tab = t; draw(); } }, closeFirst: () => w.close() });
+  const card = el('div', { className: 'fp-card2' }, banner, profileHead(u, { size: 96, self }), acts, ...parts);
+  themeCard(card, u.theme); withEffect(card, u.effect);
+  const leftBox = withFrame(el('div', { className: 'fp-lwrap' }, card), u.frame);          // (the frame stays put while the card scrolls)
+  // the right side: tabs
   const right = el('div', { className: 'fp-right' });
   const ms = live && !self ? Store.mutualServerList(u.id) : [];
-  let friends = null;
-  const tabs = () => [...(xid ? [['board', 'Board'], ['activity', 'Activity'], ['wishlist', 'Wishlist']] : []),
-    ...(!self && live && !u.bot ? [['friends', 'Mutual Friends', friends ? friends.length : null], ['servers', 'Mutual Servers', ms.length]] : [])];
+  let friends = null, theirs = null;
+  const tabs = () => ordered('profileTabs').filter(shown).map((id) => [TAB_OF[id], labelOf('profileTabs', id)]).filter(([id]) =>
+    (id === 'board' || id === 'activity' || id === 'wishlist') ? !!xid : id === 'collection' ? !u.bot && (self || live) : !self && live && !u.bot)
+    .map(([id, label]) => [id, label, id === 'friends' ? (friends ? friends.length : null) : id === 'servers' ? ms.length : null]);
   if (!tabs().some(([id]) => id === tab)) tab = (tabs()[0] || [])[0] || null;
   const tabsEl = el('nav', { className: 'fp-tabs', role: 'tablist' }), list = el('div', { className: 'fp-list' });
   // (your own: changes show at once, then as the database kept them)
@@ -2722,6 +2924,16 @@ function fullProfile(user, tab = null) {
     const r = await attempt(() => Store.setProfileExtras(patch));
     extras = r || Store.extrasNow(xid) || extras; if (fullOpen === w) draw(false);
   };
+  // their Collection: what they have from the Shop (and, yours, from Quests too)
+  const collectionView = () => {
+    const items = self ? Bux.owned().map((o) => [o.kind, o.item]) : (theirs || []).map((o) => [o.kind, o.item]);
+    if (self) for (const [id, , q] of DECORATIONS) if (q && unlocked(q) && !items.some(([k, i]) => k === 'deco' && i === id)) items.push(['deco', id]);
+    if (!self && theirs === null) return [el('div', { className: 'fp-empty' }, 'Loading…')];
+    if (!items.length) return [el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('collection', 34)), self ? 'Nothing yet: the Shop has decorations and name fonts.' : `${u.name} hasn’t collected anything yet.`)];
+    return [el('div', { className: 'fp-col' }, ...items.map(([kind, item]) => el('div', { className: 'fp-col-it', title: KIND_NAME[kind] || '' },
+      el('div', { className: 'fp-col-pv' }, kind === 'deco' ? avatarEl({ ...u, decoration: item, status: '' }, { size: 56 }) : kind === 'font' ? styleName(el('span', { className: 'shp-font' }, u.name), { font: item }) : icon(kind === 'frame' ? 'frame' : 'sparkle', 26)),
+      el('b', {}, itemName(kind, item)), el('small', {}, KIND_NAME[kind] || ''))))];
+  };
   const draw = (anim = true) => {
     tabsEl.replaceChildren(...tabs().map(([id, label, n]) =>
       el('button', { className: id === tab ? 'on' : '', role: 'tab', ariaSelected: String(id === tab), onclick: () => { if (tab !== id) { tab = id; draw(); } } }, label, n != null ? el('span', { className: 'fp-n' }, String(n)) : null)));
@@ -2729,7 +2941,8 @@ function fullProfile(user, tab = null) {
     if (tab === 'board' || tab === 'activity' || tab === 'wishlist') {
       if (!fetched && !extras) rows = [el('div', { className: 'fp-empty' }, 'Loading…')];
       else rows = tab === 'board' ? boardView(extras, self, save) : tab === 'activity' ? activityView(u, extras, self, () => { u.playing = me.playing || null; draw(false); }) : wishlistView(extras, self, save);
-    } else if (tab === 'servers') rows = ms.length ? ms.map((sv) => el('button', { className: 'fp-row', onclick: () => { w.close(); go(sv.id); } }, serverFace(sv, 40),
+    } else if (tab === 'collection') rows = collectionView();
+    else if (tab === 'servers') rows = ms.length ? ms.map((sv) => el('button', { className: 'fp-row', onclick: () => { w.close(); go(sv.id); } }, serverFace(sv, 40),
       el('div', { className: 'fp-who' }, el('b', {}, sv.name), el('small', {}, plural(((Store.members(sv.id) || []).length), 'Member'))), icon('chevR', 18)))
       : [el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('compass', 34)), 'No servers in common.')];
     else if (!friends) rows = [el('div', { className: 'fp-empty' }, 'Loading…')];
@@ -2742,13 +2955,14 @@ function fullProfile(user, tab = null) {
   if (tab) {
     right.append(tabsEl, list); draw();
     if (!self && live && !u.bot) Store.mutualFriends(u.id).then((f) => { friends = f; if (fullOpen === w) draw(false); }, () => { friends = []; if (fullOpen === w) draw(false); });
+    if (!self && live && !u.bot && u.id && Store.canBux()) Store.ownedBy(u.id).then((o) => { theirs = o; if (fullOpen === w) draw(false); }, () => { theirs = []; if (fullOpen === w) draw(false); });
+    else theirs = [];
   } else right.append(el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('users', 34)), u.bot ? 'Nothing to show here.' : 'Sign in to see what you have in common.'));
   const w = modal({ cls: 'fp-dlg', body: [el('div', { className: 'fp' }, leftBox, right)], onClose: () => { if (fullOpen === w) fullOpen = null; } });
   fullOpen = w;
   w.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: () => w.close() }, icon('x', 20)));
   if (!u.banner && u.id && !self) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
-  if (xid) Store.profileExtras(xid).then((x) => { extras = x; fetched = true; if (fullOpen === w) { drawConns(); quiet.hidden = [...card.children].some((c) => c !== quiet && !c.hidden); draw(false); } },
-    () => { fetched = true; if (fullOpen === w) draw(false); });
+  if (xid) Store.profileExtras(xid).then((x) => { extras = x; fetched = true; if (fullOpen === w) draw(false); }, () => { fetched = true; if (fullOpen === w) draw(false); });
   return w;
 }
 // what someone added to their profile, for a card: their connections (as icons) and the first games on their Board.
@@ -2932,8 +3146,9 @@ function showAccount(anchor) {
       el('span', { className: 'acct-st' }, me.statusUntil && st !== 'online' ? el('small', {}, 'until ' + when(me.statusUntil, true)) : null, st === 'dnd' ? icon('bellOff', 15) : null, chev()), (e) => { e.stopPropagation(); statusMenu(e.currentTarget); }),
     row('medal', 'Badges', null, () => { closePop(); badgesDialog(u); }),
     row('quest', 'Quests', el('span', { className: 'acct-st' }, ready ? el('span', { className: 'mbadge' }, String(ready)) : null, chev()), () => { closePop(); view = 'home'; dmId = null; homePage = 'quests'; renderAll(); }),
-    buxReady() ? row('coin', 'Datbux', el('span', { className: 'acct-st' }, buxTag(Bux.wallet().balance), chev()), () => { closePop(); view = 'home'; dmId = null; homePage = 'datbux'; renderAll(); }) : null);
+    buxReady() ? row('coin', labelOf('dmNav', 'datbuxNav'), el('span', { className: 'acct-st' }, buxTag(Bux.wallet().balance), chev()), () => { closePop(); view = 'home'; dmId = null; homePage = 'datbux'; renderAll(); }) : null);
   const card2 = el('div', { className: 'card' },
+    row('palette', 'Customize', null, () => { closePop(); openCustomize(); }),
     row('users', 'Switch Accounts', chev(), (e) => { e.stopPropagation(); switchMenu(e.currentTarget); }),
     row('id', 'Copy User ID', null, () => { closePop(); copyText(String(live ? Store.myId() : me.id), 'User ID copied.'); }));
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, me.banner, me.color);
@@ -3298,6 +3513,7 @@ addEventListener('pagehide', () => { if (call) leaveCall(); });
 // (a trade offered to you, as it arrives)
 if (Store.onTrade) Store.onTrade((t) => { toast(`${person(t.from).name} offered you a trade: see it in Datbux.`); renderAll(); });
 Store.onCall(({ call: c, started }) => {
+  if (CUSTOMIZE) return;
   if (c.mine) {
     if (c.ended && call && call.callId === c.id && !call.met) { toast('They didn’t pick up.'); leaveCall(); }
   } else if (started && !c.ended && Date.now() - c.ts < 60000 && !(call && call.callId === c.id)) ring(c);
@@ -3495,6 +3711,7 @@ function go(where) { view = 'server'; serverId = where; channelId = firstChannel
 // one of a server's own pages (Browse Channels, Game Servers, Server Guide), or its Events
 function openServerPage(id) {
   if (id === 'events') return eventsDialog(serverId);
+  if (id === 'boost') return boostDialog(serverId);
   serverPage = { sv: serverId, id }; renderAll(); $('#app').classList.remove('show-side');
 }
 
@@ -4229,7 +4446,8 @@ addEventListener('resize', closePop);
 
 let lastError = '';
 Store.onChange(() => {
-  if (Store.kind === 'supabase') adoptProfile();          // (your profile can change on another device)
+  if (Store.kind === 'supabase') { adoptProfile(); adoptSettings(); }          // (your profile, and your settings, can change on another device)
+  if (CUSTOMIZE) czSync();
   questCheck();
   renderAll(); alertNew();
   const err = Store.syncState().error || '';
@@ -4247,6 +4465,7 @@ function notifyDesktop(title, body, go, tag) {
 }
 // something new somewhere (signed in): a sound and a notification, if that place may tell you about it
 Store.onMessage(({ place, dm, ping, message: m, server }) => {
+  if (CUSTOMIZE) return;                                  // (the chat, in its own tab, tells you)
   const looking = (dm ? view === 'home' && dmId === place : view === 'server' && channelId === place) && document.visibilityState === 'visible' && document.hasFocus();
   if (!dm) renderRail();
   if (looking || hiddenAuthor(m.user)) return;
@@ -4321,9 +4540,12 @@ ready.then(() => setTimeout(followLink, 0));
 addEventListener('hashchange', () => followLink('click'));
 
 // ===================== preferences =====================
-function loadPrefs() {
-  let saved = {}; try { saved = JSON.parse(localStorage.getItem('fluentdat.prefs')) || {}; } catch {}
-  const p = { ...DEFAULT_PREFS, ...saved, hidden: { ...(saved.hidden || {}) }, order: { ...(saved.order || {}) } };
+function loadPrefs(from = null) {
+  let saved = from || {}; if (!from) try { saved = JSON.parse(localStorage.getItem('fluentdat.prefs')) || {}; } catch {}
+  const p = { ...DEFAULT_PREFS, ...saved, hidden: { ...DEFAULT_PREFS.hidden, ...(saved.hidden || {}) }, order: { ...(saved.order || {}) }, labels: { ...(saved.labels || {}) } };
+  // (Fluentdat's own layout, from TrixWotel's drawings: a title bar, rounded panels, your controls in the server rail, the
+  // banner under the server's name, Browse in Direct Messages, and the member list flush beside the chat; once, for everyone)
+  if ((saved.layoutV || 1) < 2) Object.assign(p, { titlebar: 'on', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'line', membersStyle: 'panel', layoutV: 2 });
   // (from before every button could be changed: a few had their own switches)
   if (saved.callBtns === 'off') p.hidden.call = p.hidden.video = true;
   if (saved.composerSticker === 'off') p.hidden.sticker = true;
@@ -4342,9 +4564,10 @@ function loadPrefs() {
   return p;
 }
 // what a layout preset or reset leaves alone (they're not about layout)
-const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo', 'decorations', 'effects', 'liveBanner'];
+const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo', 'decorations', 'effects', 'liveBanner',
+  'labels', 'layoutV', 'syncSettings'];
 const keepOf = () => Object.fromEntries(KEEP.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
-function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
+function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); changedSettings(); }
 function applyPrefs() {
   const d = document.documentElement, S = (k, v) => d.setAttribute('data-' + k, v), V = (k, v) => d.style.setProperty(k, v + 'px');
   S('density', prefs.density);
@@ -4356,10 +4579,12 @@ function applyPrefs() {
     ['chanicons', prefs.chanIcons], ['cats', prefs.cats], ['sidehead', prefs.sideHead], ['userpanel', prefs.userPanel],
     ['topbar', prefs.topbar], ['banner', prefs.banner], ['livebanner', prefs.liveBanner], ['avatars', prefs.avatars],
     ['avatarshape', prefs.avatarShape], ['dividers', prefs.dividers], ['hover', prefs.hover],
-    ['radius', prefs.radius], ['uifont', prefs.uiFont], ['btnlabels', prefs.btnLabels]]) S(attr, val);
+    ['radius', prefs.radius], ['uifont', prefs.uiFont], ['btnlabels', prefs.btnLabels], ['titlebar', prefs.titlebar], ['titlealign', prefs.titleAlign],
+    ['frame', prefs.frame], ['catstyle', prefs.catStyle], ['memstyle', prefs.membersStyle], ['bannerstyle', prefs.bannerStyle]]) S(attr, val);
   S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
   V('--rail-w', prefs.railW); V('--side-w', prefs.sideW); V('--members-w', prefs.membersW); V('--top-h', prefs.topH);
   V('--composer-h', prefs.composerH); V('--panel-h', prefs.panelH); V('--banner-h', prefs.bannerH); V('--status-h', prefs.statusH);
+  V('--title-h', prefs.titleH); V('--panel-r', prefs.panelR); V('--panel-gap', prefs.panelGap);
   V('--avatar', prefs.avatarPx); V('--mem-av', prefs.memberAv); V('--chan-h', prefs.chanH);
   V('--ic-top', prefs.icTop); V('--ic-composer', prefs.icComposer); V('--ic-panel', prefs.icPanel);
   V('--srv', Math.max(28, Math.min(80, prefs.railW - 26)));
@@ -4382,7 +4607,10 @@ function applyLayout() {
   app.classList.toggle('joined', joined); app.classList.toggle('mem-left', joined && ci < mi);
   app.style.setProperty('--mem-w', width.members + 'px');
   app.style.setProperty('--cols', cols.map((c) => (c === 'main' ? 'minmax(0, 1fr)' : c === 'members' && joined ? '0px' : width[c] + 'px')).join(' '));
-  const node = { rail: $('#rail'), side: $('.side'), main: $('.main'), members: $('#members') };
+  const node = { rail: $('#rail-col'), side: $('.side'), main: $('.main'), members: $('#members') };
+  // (your controls: at the foot of the server rail, or under the sidebar)
+  const panel = $('#me-panel'), inRail = panelInRail();
+  if (inRail ? panel.parentNode !== node.rail : panel.parentNode !== node.side) { (inRail ? node.rail : node.side).append(panel); renderMe(); }
   const col = $('#main-col');
   if (joined) { if (ci > mi ? node.members.previousElementSibling !== col : node.members.nextElementSibling !== col) (ci > mi ? col.after(node.members) : col.before(node.members)); }
   else if (node.members.parentNode !== app) app.append(node.members);
@@ -4393,6 +4621,7 @@ function applyLayout() {
   mo.forEach((p, i) => { ({ top: $('#top'), content: $('#content'), composer: $('#composer') })[p].style.order = i * 2; });
   $('#call').style.order = mo.indexOf('content') * 2 - 1;
   $('#banner').style.order = prefs.statusPos === 'bottom' ? 2 : 0;
+  $('#titlebar').style.order = -1;
   app.style.order = 1;
 }
 addEventListener('resize', () => applyLayout());
@@ -4414,8 +4643,10 @@ let joinCode = null;
   else try { joinCode = sessionStorage.getItem(JOIN_KEY); } catch {}
 }
 ready.then((ok) => {
+  if (CUSTOMIZE) { lastLocal = JSON.stringify(settingsData()); if (ok) adoptSettings(); renderCustomize(); return; }
+  lastLocal = JSON.stringify(settingsData());
   if (joinCode) { if (ok) { adoptProfile(); renderAll(); } return appJoin(joinCode); }
-  if (ok) { adoptProfile(); renderAll(); joinPendingInvite(); finishLinking(); Store.profileExtras(Store.myId()).then(() => { questCheck(); renderSide(); }, () => {}); return; }
+  if (ok) { adoptProfile(); adoptSettings(); renderAll(); joinPendingInvite(); finishLinking(); Store.profileExtras(Store.myId()).then(() => { questCheck(); renderSide(); }, () => {}); return; }
   if (Store.resumeError) toast('Sign-in trouble: ' + Store.resumeError);
   let code = null; try { code = localStorage.getItem(PENDING_INVITE); } catch {}
   if (code && Store.configured) signInDialog(null, 'Sign in to join the server you were invited to');
@@ -5093,9 +5324,7 @@ function openUserSettings(section = 'account') {
     { id: 'sync', label: 'Data & Sync', icon: 'cloud' },
     Store.kind === 'supabase' && Store.isAppAdmin() && { id: 'admin', label: 'Invites & Reports', icon: 'key' },
     { hr: true }, { head: 'App Settings' },
-    { id: 'appearance', label: 'Appearance', icon: 'palette' },
-    { id: 'layout', label: 'Layout', icon: 'layout' },
-    { id: 'animations', label: 'Animations', icon: 'sparkle' },
+    { id: 'customize', label: 'Customize', icon: 'palette' },
     { id: 'notifications', label: 'Notifications', icon: 'bell' },
     { id: 'privacy', label: 'Privacy & Safety', icon: 'shield' },
     { id: 'accessibility', label: 'Accessibility', icon: 'eye' },
@@ -5111,10 +5340,8 @@ function openUserSettings(section = 'account') {
     if (sec === 'account') return accountPane(redraw);
     if (sec === 'sync') return syncPane(redraw);
     if (sec === 'connections') return connectionsPane(redraw);
-    if (sec === 'appearance') return appearancePane(redraw);
-    if (sec === 'layout') return layoutPane(redraw);
+    if (sec === 'customize' || sec === 'appearance' || sec === 'layout' || sec === 'animations') return customizeEntry();
     if (sec === 'notifications') return notificationsPane(redraw);
-    if (sec === 'animations') return animationsPane(redraw);
     if (sec === 'privacy') return privacyPane(redraw);
     if (sec === 'admin') return adminPane();
     if (sec === 'accessibility') return accessibilityPane(redraw);
@@ -6073,23 +6300,24 @@ function buttonsSection(redraw) {
         [o[i], o[j]] = [o[j], o[i]]; prefs.order = { ...(prefs.order || {}), [group]: o }; savePrefs(); renderAll(); redraw();
       };
       const toggle = fixed ? el('span', { className: 'chip', title: id === 'settings' ? 'Always shown, so you can always reach settings' : 'Always shown' }, icon('lock', 12), 'Always')
-        : sw(shown(id), (on) => { const h = { ...(prefs.hidden || {}) }; if (on) delete h[id]; else h[id] = true; prefs.hidden = h; savePrefs(); renderAll(); });
+        : sw(shown(id), (on) => { prefs.hidden = { ...(prefs.hidden || {}), [id]: !on }; savePrefs(); renderAll(); });
       list.append(el('div', { className: 'it' }, icon(ic, 17), el('span', { className: 'nm3' }, label),
         iconBtn('up', 'Move ' + (group === 'rail' ? 'up' : 'earlier'), () => move(-1)), iconBtn('down', 'Move ' + (group === 'rail' ? 'down' : 'later'), () => move(1)), toggle));
     });
     out.push(el('h4', { className: 'sub-h' }, title), list);
   }
   out.push(el('div', { className: 'row', style: 'justify-content:flex-start' },
-    el('button', { className: 'btn', onclick: () => { prefs.hidden = {}; prefs.order = {}; savePrefs(); renderAll(); redraw(); toast('Buttons are back to normal.'); } }, 'Reset Buttons')));
+    el('button', { className: 'btn', onclick: () => { prefs.hidden = { ...DEFAULT_PREFS.hidden }; prefs.order = {}; prefs.labels = {}; savePrefs(); renderAll(); redraw(); toast('Buttons are back to normal.'); } }, 'Reset Buttons')));
   return out;
 }
 
 // ===================== the layout studio: a mini screen of the whole app =====================
 // Drag an edge to resize a part, drag a part to move it (columns left and right, the rest up and down), drag a button
 // along its bar to reorder it or into the tray to hide it, and click anything for all of its settings underneath.
-const PARTS = { status: 'Status bar', rail: 'Server rail', side: 'Sidebar', head: 'Server header', body: 'Channel list', panel: 'User panel',
+const PARTS = { title: 'Title bar', status: 'Status bar', rail: 'Server rail', side: 'Sidebar', head: 'Server header', body: 'Channel list', panel: 'Your controls',
   main: 'Main area', top: 'Top bar', content: 'Messages', composer: 'Message box', members: 'Member list' };
-const PART_OF_BAR = { rail: 'rail', header: 'head', channels: 'body', dms: 'side', top: 'top', composer: 'composer', panel: 'panel' };
+const PART_OF_BAR = { rail: 'rail', header: 'head', channels: 'body', dms: 'side', top: 'top', composer: 'composer', panel: 'panel', railPanel: 'panel', titlebar: 'title',
+  serverTop: 'body', dmNav: 'body', msgActions: 'content' };
 const SIDE_PARTS = ['head', 'body', 'panel'], MAIN_PARTS = ['top', 'content', 'composer'];
 const WIDE_CHIPS = new Set(['servers', 'input', 'me', 'findDM']);
 const LAYOUT_KEYS = Object.keys(DEFAULT_PREFS).filter((k) => !KEEP.includes(k));
@@ -6127,9 +6355,11 @@ function layoutStudio(redraw) {
     const W = S(realW), H = S(realH);
     mini.style.width = W + 'px'; mini.style.height = H + 'px';
     const statusOn = prefs.banner !== 'off', stH = statusOn ? S(prefs.statusH) : 5, bottom = prefs.statusPos === 'bottom';
-    const appTop = bottom ? 0 : stH, appH = H - stH, dm = studio.view === 'dm';
+    const titleOn = prefs.titlebar !== 'off', tH = titleOn ? Math.max(6, S(prefs.titleH)) : 5;
+    const appTop = tH + (bottom ? 0 : stH), appH = H - stH - tH, dm = studio.view === 'dm';
     const membersOn = dm ? prefs.dmPanel !== false : prefs.membersDefault !== false;
-    const kids = [place(part('status', statusOn ? [el('span', { className: 'm-tag' }, 'Live, signed in')] : [], !statusOn), 0, bottom ? appH : 0, W, stH)];
+    const kids = [place(chipSize(part('title', titleOn ? [bar('titlebar', 'title-bar' + (prefs.titleAlign === 'left' ? ' left' : ''))] : [], !titleOn), Math.max(10, prefs.titleH - 12)), 0, 0, W, tH),
+      place(part('status', statusOn ? [el('span', { className: 'm-tag' }, 'Live, signed in')] : [], !statusOn), 0, bottom ? tH + appH : tH, W, stH)];
     const w = { rail: prefs.rail === 'off' ? 5 : S(prefs.railW), side: S(prefs.sideW), members: membersOn ? S(dm ? Math.max(prefs.membersW, 280) : prefs.membersW) : 5 };
     w.main = Math.max(30, W - w.rail - w.side - w.members);
     let x = 0;
@@ -6153,6 +6383,8 @@ function layoutStudio(redraw) {
     const na = (studio.view === 'dm' && id === 'members') || (studio.view === 'server' && id === 'dmProfile');
     const c = el('span', { className: 'mchip' + (WIDE_CHIPS.has(id) ? ' wide' : '') + (na ? ' na' : ''), title: label + (na ? ' (only shows in ' + (id === 'members' ? 'servers' : 'DMs') + ')' : '') + (fixed ? '' : '. Drag along the bar to move it, or into the tray to hide it.') });
     if (id === 'servers') c.append(el('i'), el('i'), el('i'));
+    else if (id === 'me' && group === 'railPanel') { c.classList.remove('wide'); c.append(el('i')); }
+    else if (id === 'tbName') c.append(el('em', {}, studio.view === 'dm' ? 'Direct Messages' : (Store.server(serverId) || { name: 'Robotics' }).name));
     else if (id === 'input') c.append(el('em', {}, studio.view === 'dm' ? 'Message @Bee' : 'Message #general'));
     else if (id === 'me') c.append(el('i'), el('em', {}, me.name));
     else if (id === 'findDM') c.append(el('em', {}, 'Find a conversation'));
@@ -6168,8 +6400,10 @@ function layoutStudio(redraw) {
     return b;
   }
   function railPart() {
-    const off = prefs.rail === 'off';
-    return chipSize(part('rail', off ? [] : [bar('rail', 'vertical')], off), Math.max(28, Math.min(80, prefs.railW - 26)));
+    const off = prefs.rail === 'off', kids = off ? [] : [bar('rail', 'vertical')];
+    // (your controls at its foot, when they live there)
+    if (!off && prefs.panelPos === 'rail') { const on = prefs.userPanel !== 'off'; kids.push(chipSize(part('panel', on ? [bar('railPanel', 'vertical')] : [], !on, 'sub in-rail'), prefs.icPanel)); }
+    return chipSize(part('rail', kids, off), Math.max(28, Math.min(80, prefs.railW - 26)));
   }
   function sidePart() {
     const sv = Store.server(serverId) || { name: 'Server' };
@@ -6183,7 +6417,7 @@ function layoutStudio(redraw) {
     panel.style.height = (panelOn ? S(prefs.panelH) : 5) + 'px';
     if (panelOn) plateOn(panel, me.plate);
     const col = part('side');
-    col.append(...validOrder(prefs.sideOrder, SIDE_PARTS).map((p) => ({ head, body, panel })[p]));
+    col.append(...validOrder(prefs.sideOrder, SIDE_PARTS).filter((p) => p !== 'panel' || prefs.panelPos !== 'rail' || prefs.rail === 'off').map((p) => ({ head, body, panel })[p]));
     return col;
   }
   function channelLines() {
@@ -6243,7 +6477,8 @@ function layoutStudio(redraw) {
     };
     edge('top', 'topH', 'content', prefs.mainOrder, MAIN_PARTS);
     edge('composer', 'composerH', 'content', prefs.mainOrder, MAIN_PARTS);
-    edge('panel', 'panelH', 'body', prefs.sideOrder, SIDE_PARTS);
+    if (prefs.panelPos !== 'rail' || prefs.rail === 'off') edge('panel', 'panelH', 'body', prefs.sideOrder, SIDE_PARTS);
+    if (prefs.titlebar !== 'off') { const r = rect('.m-title'); if (r) hs.push(handle('h', r.x, r.y + r.h, r.w, 'titleH', 1)); }
     edge('head', mini.querySelector('.m-head.bannered') ? 'bannerH' : 'topH', 'body', prefs.sideOrder, SIDE_PARTS);
     if (prefs.banner !== 'off') { const r = rect('.m-status'), top = prefs.statusPos !== 'bottom'; hs.push(handle('h', r.x, top ? r.y + r.h : r.y, r.w, 'statusH', top ? 1 : -1)); }
     const av = rect('.m-content .m-av.first'); if (av) hs.push(grip(av.x + av.w, av.y + av.h, 'avatarPx'));
@@ -6351,7 +6586,7 @@ function layoutStudio(redraw) {
     const fixed = !!(BUTTONS[group][1].find((b) => b[0] === id) || [])[3];
     let target = null;
     begin(e, {
-      click: () => { if (fromTray) { const h = { ...(prefs.hidden || {}) }; delete h[id]; remember(); prefs.hidden = h; commit(); } else select(PART_OF_BAR[group]); },
+      click: () => { if (fromTray) { remember(); prefs.hidden = { ...(prefs.hidden || {}), [id]: false }; commit(); } else select(PART_OF_BAR[group]); },
       start: (ev) => { remember(); ghost = makeGhost(node, ev); node.classList.add('lifting'); },
       move: (ev) => {
         moveGhost(ev);
@@ -6378,7 +6613,7 @@ function layoutStudio(redraw) {
           if (fixed) { toast(id === 'settings' ? 'The settings cog always stays, so you can always get back here.' : 'That one can be moved, but not hidden.'); return draw(); }
           prefs.hidden = { ...(prefs.hidden || {}), [id]: true };
         } else {
-          const h = { ...(prefs.hidden || {}) }; delete h[id]; prefs.hidden = h;
+          prefs.hidden = { ...(prefs.hidden || {}), [id]: false };
           const o = ordered(group).filter((x) => x !== id), at = target.before ? o.indexOf(target.before) : -1;
           o.splice(at < 0 ? o.length : at, 0, id);
           prefs.order = { ...(prefs.order || {}), [group]: o };
@@ -6391,12 +6626,14 @@ function layoutStudio(redraw) {
   // ---------- the tray: hidden buttons (drag or tap one to bring it back) and hidden parts ----------
   function drawTray() {
     const items = [];
-    const parts = [['status', prefs.banner === 'off', () => { prefs.banner = 'on'; }], ['rail', prefs.rail === 'off', () => { prefs.rail = 'on'; }],
+    const parts = [['title', prefs.titlebar === 'off', () => { prefs.titlebar = 'on'; }], ['status', prefs.banner === 'off', () => { prefs.banner = 'on'; }], ['rail', prefs.rail === 'off', () => { prefs.rail = 'on'; }],
       ['head', prefs.sideHead === 'off', () => { prefs.sideHead = 'on'; }], ['panel', prefs.userPanel === 'off', () => { prefs.userPanel = 'on'; }],
       ['top', prefs.topbar === 'off', () => { prefs.topbar = 'on'; }], ['members', prefs.membersDefault === false, () => { prefs.membersDefault = true; showMembers = true; }]];
     for (const [id, off, on] of parts) if (off) items.push(el('button', { className: 'mchip tchip part', title: 'Show the ' + PARTS[id].toLowerCase() + ' again', onclick: () => { remember(); on(); studio.sel = id; commit(); } }, icon('eye'), el('span', {}, PARTS[id])));
+    const listed = new Set();
     for (const [group, [title, list]] of Object.entries(BUTTONS)) for (const [id, label, ic] of list) {
-      if (shown(id)) continue;
+      if (shown(id) || listed.has(id)) continue;
+      listed.add(id);
       const c = el('span', { className: 'mchip tchip', title: `${label}, in the ${title.toLowerCase()}. Drag it back onto its bar, or tap it, to show it.` }, icon(ic), el('span', {}, label));
       c.dataset.chip = id;
       c.addEventListener('pointerdown', (e) => chipDown(e, group, id, c, true));
@@ -6428,6 +6665,8 @@ function layoutStudio(redraw) {
     };
     const sideways = (key, all) => move(key, all, ['◀ Left', 'Right ▶']), updown = (key, all) => move(key, all, ['▲ Up', 'Down ▼']);
     const onoff = [['on', 'Shown'], ['off', 'Hidden']];
+    if (id === 'title') out.push(flag('titlebar', 'Show the title bar', 'Across the top of the window: the server you’re in, or Direct Messages.'), size('titleH'),
+      pickRow('titleAlign', 'Title', [['center', 'In the middle'], ['left', 'On the left']]), ...buttonRows('titlebar'));
     if (id === 'status') out.push(flag('banner', 'Show the status bar', 'The line saying whether you’re signed in and live.'),
       flag('liveBanner', 'Say when all is well', '“Live, signed in as @you.” Off, the bar only shows when something needs you.'), size('statusH'),
       row2('Position', 'Across the top or the bottom of the window.', el('div', { className: 'btn-row' }, ...[['top', 'Top'], ['bottom', 'Bottom']].map(([v, l]) =>
@@ -6436,23 +6675,26 @@ function layoutStudio(redraw) {
       pickRow('iconShape', 'Icon shape', [['squircle', 'Circle, squircle when open (Discord)'], ['round', 'Always a circle'], ['square', 'Always a rounded square']]), ...buttonRows('rail'));
     if (id === 'side') out.push(size('sideW'), sideways('cols', COLS), size('chanH'), flag('cats', 'Category headings', 'TEXT CHANNELS, VOICE CHANNELS…'), flag('chanIcons', 'Channel icons', 'The # and speaker marks.'), ...buttonRows('dms'));
     if (id === 'head') out.push(flag('sideHead', 'Show the server header', 'The server’s name and menu.'), flag('serverBanner', 'Server banners', 'A server’s picture at the top of its channels.'),
-      size('bannerH', 'When a server has a banner.'), updown('sideOrder', SIDE_PARTS), ...buttonRows('header'));
-    if (id === 'body') out.push(size('chanH'), flag('cats', 'Category headings', ''), flag('chanIcons', 'Channel icons', ''), updown('sideOrder', SIDE_PARTS), ...buttonRows('channels'));
-    if (id === 'panel') out.push(flag('userPanel', 'Show the user panel', 'You, your status and the settings cog.'), size('panelH'), size('icPanel'),
-      flag('plates', 'Nameplates', 'Pictures behind names here, in member lists and DMs.'), updown('sideOrder', SIDE_PARTS), ...buttonRows('panel'));
-    if (id === 'main') out.push(sideways('cols', COLS), pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']], 'Long lines can stop at a comfortable width.'));
+      pickRow('bannerStyle', 'Banner', [['under', 'Under the server’s name'], ['behind', 'Behind the server’s name']]), size('bannerH', 'When a server has a banner.'), updown('sideOrder', SIDE_PARTS), ...buttonRows('header'));
+    if (id === 'body') out.push(size('chanH'), flag('cats', 'Category headings', ''), pickRow('catStyle', 'Category names', [['line', 'With a line under them'], ['caps', 'SMALL CAPITALS']]),
+      flag('chanIcons', 'Channel icons', ''), updown('sideOrder', SIDE_PARTS), ...buttonRows(studio.view === 'dm' ? 'dmNav' : 'serverTop'), ...buttonRows('channels'));
+    if (id === 'panel') out.push(flag('userPanel', 'Show your controls', 'Your picture, mute, deafen and the settings cog.'),
+      pickRow('panelPos', 'Where', [['rail', 'At the foot of the server rail'], ['side', 'Under the sidebar']]), ...(prefs.panelPos === 'rail' && prefs.rail !== 'off' ? [] : [size('panelH'), updown('sideOrder', SIDE_PARTS)]), size('icPanel'),
+      flag('plates', 'Nameplates', 'Pictures behind names here, in member lists and DMs.'), ...buttonRows(prefs.panelPos === 'rail' && prefs.rail !== 'off' ? 'railPanel' : 'panel'));
+    if (id === 'main') out.push(sideways('cols', COLS), pickRow('frame', 'Panels', [['panels', 'Rounded, with room between them'], ['flat', 'Flat, side by side']]), size('panelR'), size('panelGap'),
+      pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']], 'Long lines can stop at a comfortable width.'));
     if (id === 'top') out.push(flag('topbar', 'Show the top bar', 'The channel name and its buttons.'), size('topH'), size('icTop'),
       pickRow('btnLabels', 'Labels', [['off', 'Icons only'], ['on', 'Icons and words']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('top'));
     if (id === 'content') out.push(flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), pickRow('avatarShape', 'Avatar shape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']]),
       size('fontSize', 'Everything in the app scales with it.'), pickRow('density', 'Spacing', [['cozy', 'Cozy'], ['compact', 'Compact']]),
       pickRow('timestamps', 'Timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']]), flag('group', 'Group messages', 'One heading for several messages in a row.'),
       pickRow('dividers', 'Date dividers', onoff), pickRow('hover', 'Highlight on hover', onoff), pickRow('startHeaders', 'Conversation start', onoff, '“Welcome to #channel”.'),
-      pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']]), updown('mainOrder', MAIN_PARTS));
+      pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('msgActions'));
     if (id === 'composer') out.push(size('composerH'), size('icComposer'), updown('mainOrder', MAIN_PARTS), ...buttonRows('composer'));
     if (id === 'members') out.push(flag('membersDefault', 'Open by default', 'You can always open it from the top bar.', (on) => { showMembers = on; }), size('membersW', 'The DM profile panel uses it too.'),
       sideways('cols', COLS), size('memberAv'), flag('memberOffline', 'Include offline', ''), flag('memberStatusText', 'Second line', 'Each person’s about text.'),
       pickRow('memberGroups', 'Group by role', onoff), flag('plates', 'Nameplates', ''), flag('dmPanel', 'Profile beside DMs', 'Shown in this column in DMs.'),
-      pickRow('membersStyle', 'Look', [['card', 'A card in the chat (Discord’s)'], ['column', 'A column of its own']], 'As a card, the top bar and its search run across it. (Only beside the chat.)'));
+      pickRow('membersStyle', 'Look', [['panel', 'Under the top bar, beside the chat'], ['card', 'A card in the chat'], ['column', 'A column of its own']], 'Beside the chat, the top bar and its search run across it.'));
     insp.replaceChildren(el('div', { className: 'insp-head' }, el('h3', {}, PARTS[id] || 'Layout'), el('span', { className: 'muted' }, 'Selected')), ...out);
   }
   function buttonRows(group) {
@@ -6462,7 +6704,7 @@ function layoutStudio(redraw) {
       const go = (d) => { const o = ordered(group), j = i + d; if (j < 0 || j >= o.length) return; remember(); [o[i], o[j]] = [o[j], o[i]]; prefs.order = { ...(prefs.order || {}), [group]: o }; commit(); };
       list.append(el('div', { className: 'it' }, icon(ic, 17), el('span', { className: 'nm3' }, label), iconBtn('up', 'Move earlier', () => go(-1)), iconBtn('down', 'Move later', () => go(1)),
         fixed ? el('span', { className: 'chip', title: 'Always shown' }, icon('lock', 12), 'Always')
-          : sw(shown(bid), (on) => { remember(); const h = { ...(prefs.hidden || {}) }; if (on) delete h[bid]; else h[bid] = true; prefs.hidden = h; commit(); })));
+          : sw(shown(bid), (on) => { remember(); prefs.hidden = { ...(prefs.hidden || {}), [bid]: !on }; commit(); })));
     });
     return [el('h4', { className: 'sub-h' }, title + ' buttons'), list];
   }
@@ -6472,3 +6714,152 @@ function layoutStudio(redraw) {
   draw();
   return el('div', { className: 'studio' }, tools, hint, wrap, tray, insp);
 }
+
+// ===================== Customize: a site of its own (customize.html) =====================
+// Fluentdat's look and every part of it, in one place: Theme, Layout (the mini screen), Elements (every part: shown or
+// hidden, where it goes and what it's called), Messages, Profiles, Animations, and Sync (your account). Changes show in
+// this browser's Fluentdat at once (the chat, open in another tab, follows them), and on your other devices when you're
+// signed in.
+const CZ = [['theme', 'Theme', 'palette'], ['layout', 'Layout', 'layout'], ['elements', 'Elements', 'apps'], ['messages', 'Messages', 'message'],
+  ['profiles', 'Profiles', 'user'], ['animations', 'Animations', 'sparkle'], ['sync', 'Sync', 'cloud']];
+let czAt = (location.hash.match(/^#([a-z]+)/) || [])[1] || 'theme';
+const openCustomize = (section = '') => { if (!window.open('customize.html' + (section ? '#' + section : ''), 'fluentdat-customize')) toast('Your browser kept the new tab from opening: allow pop-ups, or open customize.html.'); };
+// (Settings → Customize: where it went)
+function customizeEntry() {
+  return [el('h2', {}, 'Customize'), el('p', { className: 'sub' }, 'Your theme, your layout and every part of Fluentdat have a site of their own now. What you change there shows here at once, and when you’re signed in it follows your account to every device you use.'),
+    el('a', { className: 'btn primary cz-open', href: 'customize.html', target: 'fluentdat-customize' }, icon('palette', 18), 'Open Customize'),
+    el('div', { className: 'cz-sync-slot cz-entry-sync' }, syncLine())];
+}
+// how your settings and your account are getting on
+function syncLine() {
+  const live = Store.kind === 'supabase', acc = Store.account(), who = acc && acc.login ? '@' + acc.login : 'your account';
+  const say = (cls, text) => el('span', { className: 'cz-sync ' + cls }, icon('cloud', 15), el('span', {}, text));
+  if (!live) return say('off', 'Kept in this browser. Sign in to Fluentdat to have them on every device.');
+  if (!Store.canSync()) return say('off', 'They follow your account once supabase/setup.sql is run again.');
+  if (prefs.syncSettings === false) return say('off', 'Kept in this browser only (Sync is off).');
+  if (syncNote.state === 'saving') return say('busy', `Saving to ${who}…`);
+  if (syncNote.state === 'error') return say('bad', 'Couldn’t save to your account: ' + syncNote.err);
+  return say('good', `Following ${who}` + (syncNote.at ? ` · saved ${when(syncNote.at, true)}` : ''));
+}
+function czSync() { for (const n of document.querySelectorAll('.cz-sync-slot')) n.replaceChildren(syncLine()); }
+function renderCustomize() {
+  if (!CUSTOMIZE) return;
+  let root = $('#customize');
+  if (!root) { root = el('div', { id: 'customize', className: 'cz' }); document.body.append(root); }
+  if (!CZ.some(([id]) => id === czAt)) czAt = 'theme';
+  const was = root.querySelector('.cz-body'), keep = was ? was.scrollTop : 0;
+  const nav = el('nav', { className: 'cz-nav' }, ...CZ.map(([id, label, ic]) => el('button', { className: czAt === id ? 'on' : '', onclick: () => {
+    czAt = id; history.replaceState(null, '', '#' + id); renderCustomize(); const b = $('.cz-body'); if (b) b.scrollTop = 0; } }, icon(ic, 18), el('span', {}, label))));
+  const body = el('main', { className: 'cz-body' }, el('div', { className: 'cz-page' }, ...czPane(czAt, () => renderCustomize())));
+  root.replaceChildren(el('header', { className: 'cz-head' }, el('span', { className: 'cz-logo' }, logoEl(appLogo(), { size: 34 })),
+    el('div', { className: 'cz-title' }, el('h1', {}, 'Customize'), el('div', { className: 'cz-sync-slot' }, syncLine())),
+    el('a', { className: 'btn primary cz-back', href: './', target: 'fluentdat' }, icon('logo', 16), 'Open Fluentdat')), el('div', { className: 'cz-main' }, nav, body));
+  body.scrollTop = keep;
+}
+// each page of Customize
+function czPane(id, redraw) {
+  const set = (key, v) => { prefs[key] = v; savePrefs(); renderAll(); redraw(); };
+  const pick = (key, options) => sel(prefs[key], options, (v) => set(key, v));
+  const flag = (key, label, desc) => row2(label, desc, sw(prefs[key] === true || prefs[key] === 'on', (on) => set(key, typeof DEFAULT_PREFS[key] === 'boolean' ? on : on ? 'on' : 'off')));
+  const size = (key, desc = '') => {
+    const [label, lo, hi] = SIZES[key], val = el('span', { className: 'val' }, prefs[key] + 'px'), r = el('input', { type: 'range', min: lo, max: hi, step: 1, value: prefs[key] });
+    r.oninput = () => { prefs[key] = +r.value; val.textContent = r.value + 'px'; applyPrefs(); };
+    r.onchange = () => { savePrefs(); renderAll(); };
+    return row2(label, desc, el('div', { className: 'slide' }, r, val));
+  };
+  const head = (title, sub) => [el('h2', {}, title), el('p', { className: 'sub' }, sub)];
+  const reset = (label, keys, done) => el('button', { className: 'btn', onclick: async () => {
+    if (!(await confirmBox({ title: label, text: 'Put these back the way Fluentdat comes?', ok: 'Reset', danger: true }))) return;
+    for (const k of keys) prefs[k] = JSON.parse(JSON.stringify(DEFAULT_PREFS[k])); savePrefs(); renderAll(); redraw(); toast(done);
+  } }, label);
+  if (id === 'theme') {
+    const cur = currentTheme();
+    const tile = (tid, label, vars) => el('button', { className: 'cz-theme' + (cur === tid ? ' on' : ''), onclick: () => { applyTheme(tid); renderAll(); redraw(); } },
+      el('span', { className: 'cz-swatch' }, ...['rail', 'side', 'main', 'accent'].map((v) => el('i', { style: `background:${vars ? vars[v] || 'transparent' : `var(--${v})`}` }))), el('b', {}, label));
+    const builtin = BUILTIN.map(([tid, label]) => tile(tid, label, BUILTIN_SWATCH[tid]));
+    return [...head('Theme', 'Colours for everything, and the logo. Make your own theme from scratch, or start from one of these.'),
+      el('div', { className: 'cz-themes' }, ...builtin, ...loadThemes().map((t) => tile(t.id, t.name, t.vars))),
+      el('div', { className: 'row', style: 'justify-content:flex-start;gap:8px' }, el('button', { className: 'btn primary', onclick: () => editTheme(null) }, icon('plus', 16), 'Make a Theme'),
+        el('button', { className: 'btn', onclick: () => openThemes() }, 'Manage Themes…')),
+      el('h3', {}, 'Shape'),
+      row2('Panels', 'Rounded panels with a little room between them (as Fluentdat comes), or flat ones side by side (as Discord’s).', pick('frame', [['panels', 'Rounded panels'], ['flat', 'Flat']])),
+      size('panelR'), size('panelGap'),
+      row2('Corners', 'How rounded buttons, channels and messages are.', pick('radius', [['sharp', 'Sharp'], ['soft', 'Soft'], ['round', 'Round']])),
+      row2('Interface font', 'The font used everywhere in the app.', pick('uiFont', [['system', 'System'], ['rounded', 'Rounded'], ['serif', 'Serif'], ['mono', 'Monospaced']])),
+      el('h3', {}, 'App Icon'), el('p', { className: 'hint' }, 'Fluentdat’s logo on the Home button, in the title bar and on the browser tab. Match Theme uses the one your theme brings.'),
+      logoGrid(prefs.logo || 'theme', (lid) => { prefs.logo = lid; savePrefs(); renderAll(); redraw(); }, { withTheme: true })];
+  }
+  if (id === 'layout') return [...head('Layout', 'A small copy of Fluentdat’s screen. Drag any edge to resize it, drag parts and buttons to move them, drop a button in the tray to hide it, and click anything to see all of its settings.'),
+    layoutStudio(redraw),
+    el('h3', {}, 'The frame'),
+    flag('titlebar', 'Title bar', 'Across the top of the window: the server you’re in (or Direct Messages).'), size('titleH'),
+    row2('Title', 'Where the name sits in the title bar.', pick('titleAlign', [['center', 'In the middle'], ['left', 'On the left']])),
+    row2('Your controls', 'Your picture, mute, deafen and the settings cog.', pick('panelPos', [['rail', 'At the foot of the server rail'], ['side', 'Under the sidebar']])),
+    row2('Server banner', 'A server’s picture, at the top of its channels.', pick('bannerStyle', [['under', 'Under the server’s name'], ['behind', 'Behind the server’s name']])),
+    row2('Category names', '“Example Group” above its channels.', pick('catStyle', [['line', 'With a line under them'], ['caps', 'SMALL CAPITALS']])),
+    row2('Member list and DM profile', 'Beside the chat.', pick('membersStyle', [['panel', 'Under the top bar, beside the chat'], ['card', 'A card in the chat'], ['column', 'A column of its own']])),
+    el('h3', {}, 'Start over'), row2('Reset layout', 'Every size, position, part and button on this page, the way Fluentdat comes.', el('button', { className: 'btn danger', onclick: async () => {
+      if (!(await confirmBox({ title: 'Reset Layout', text: 'Put every layout option, size, position and button back the way Fluentdat comes?', ok: 'Reset', danger: true }))) return;
+      prefs = { ...prefs, ...DEFAULT_PREFS, ...keepOf() }; savePrefs(); showMembers = true; renderAll(); redraw(); toast('Layout reset.');
+    } }, 'Reset'))];
+  if (id === 'elements') return [...head('Elements', 'Every part of Fluentdat: show it or hide it, put it where you want it, and call it what you like. (The settings cog always stays, so you can always get back here.)'),
+    row2('Button labels', 'Words beside the top bar’s buttons.', pick('btnLabels', [['off', 'Icons only'], ['on', 'Icons and words']])),
+    ...elementGroups(redraw),
+    el('div', { className: 'row', style: 'justify-content:flex-start' }, el('button', { className: 'btn', onclick: () => { prefs.hidden = { ...DEFAULT_PREFS.hidden }; prefs.order = {}; prefs.labels = {}; savePrefs(); renderAll(); redraw(); toast('Every part is back the way Fluentdat comes.'); } }, 'Reset Elements'))];
+  if (id === 'messages') return [...head('Messages', 'How the chat looks.'),
+    row2('Spacing', 'Cozy gives each message room. Compact fits more on screen.', pick('density', [['cozy', 'Cozy'], ['compact', 'Compact']])),
+    size('fontSize', 'Everything in the app scales with it.'),
+    flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), row2('Avatar shape', '', pick('avatarShape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']])),
+    row2('Timestamps', '', pick('timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']])),
+    flag('group', 'Group messages', 'One heading for several messages in a row from the same person.'),
+    row2('Date dividers', 'A line with the date between days.', pick('dividers', [['on', 'Shown'], ['off', 'Hidden']])),
+    row2('Highlight on hover', '', pick('hover', [['on', 'Shown'], ['off', 'Hidden']])),
+    row2('Conversation start', '“Welcome to #channel”, and a DM’s big picture and name.', pick('startHeaders', [['on', 'Shown'], ['off', 'Hidden']])),
+    row2('Reading width', 'Long lines can stop at a comfortable width.', pick('msgWidth', [['full', 'Use the full width'], ['readable', 'Readable column']])),
+    row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos.', sw(prefs.embeds !== 'off', (on) => set('embeds', on ? 'on' : 'off'))),
+    row2('Formatting bar', 'Bold, italics, code and more when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => set('formatBar', on ? 'on' : 'off'))),
+    row2('“Live, signed in as @you”', 'The bar across the top when all is well. Off, it only shows when something needs you.', sw(prefs.liveBanner === 'on', (on) => set('liveBanner', on ? 'on' : 'off'))),
+    el('h3', {}, 'The buttons over a message'), ...elementGroups(redraw, ['msgActions'])];
+  if (id === 'profiles') return [...head('Profiles', 'Profile cards, and what you see of other people’s looks.'),
+    row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => set('decorations', on ? 'on' : 'off'))),
+    row2('Profile effects and frames', 'Snow, sparkles, frames and more on profile cards.', sw(prefs.effects !== 'off', (on) => set('effects', on ? 'on' : 'off'))),
+    flag('plates', 'Nameplates', 'Pictures behind names in member lists and DMs.'),
+    flag('dmPanel', 'Profile beside DMs', 'Their card, beside your conversation with them.'),
+    flag('memberOffline', 'Offline people in member lists', ''), flag('memberStatusText', 'A second line in member lists', 'Each person’s about text.'),
+    row2('Group members by role', 'People with a role shown separately get their own heading.', pick('memberGroups', [['on', 'Grouped'], ['off', 'One list']])),
+    el('h3', {}, 'Profile cards'), ...elementGroups(redraw, ['profileCard', 'profileTabs'])];
+  if (id === 'animations') return animationsPane(redraw);
+  // Sync
+  const live = Store.kind === 'supabase';
+  return [...head('Sync', 'Your theme, your themes and every setting here can follow your account, so each device you sign in on looks the same. Whichever device changed last wins.'),
+    el('div', { className: 'cz-sync-slot' }, syncLine()),
+    row2('Follow my account', 'Off, this browser keeps its own and leaves your account’s alone.', sw(prefs.syncSettings !== false, (on) => { prefs.syncSettings = on; savePrefs(); if (on) { lsPut(SYNC_SEEN, 0); adoptSettings(); } redraw(); czSync(); })),
+    live && Store.canSync() ? el('div', { className: 'row', style: 'justify-content:flex-start;gap:8px' },
+      el('button', { className: 'btn', onclick: async () => { lsPut(SYNC_AT, Date.now()); await pushSettings(); toast('This browser’s settings are your account’s now.'); } }, icon('up', 16), 'Use This Browser’s Everywhere'),
+      el('button', { className: 'btn', onclick: () => { lsPut(SYNC_SEEN, 0); lsPut(SYNC_AT, 0); adoptSettings(); } }, icon('down', 16), 'Take My Account’s')) : null,
+    el('p', { className: 'hint' }, 'A few things stay with each device: mute and deafen, desktop notifications, and this switch.'),
+    live ? null : el('a', { className: 'btn primary', href: './', target: 'fluentdat' }, 'Sign In on Fluentdat')].filter(Boolean);
+}
+// Customize → Elements: every part, group by group (the ones given), each with its switch, its place and its name
+const RENAMABLE = new Set(['serverTop', 'dmNav', 'msgActions', 'profileTabs', 'dms']);
+function elementGroups(redraw, groups = Object.keys(BUTTONS)) {
+  const out = [];
+  for (const group of groups) {
+    const [title, items] = BUTTONS[group], order = ordered(group), list = el('div', { className: 'sx-list btn-list cz-els' });
+    order.forEach((id, i) => {
+      const [, label, ic, fixed] = items.find((b) => b[0] === id);
+      const move = (d) => { const o = ordered(group), j = i + d; if (j < 0 || j >= o.length) return; [o[i], o[j]] = [o[j], o[i]]; prefs.order = { ...(prefs.order || {}), [group]: o }; savePrefs(); renderAll(); redraw(); };
+      let name = el('span', { className: 'nm3' }, label);
+      if (RENAMABLE.has(group)) {
+        name = el('input', { type: 'text', className: 'cz-rename', maxLength: 32, value: (prefs.labels || {})[id] || '', placeholder: label, title: 'Call it something else (empty: its own name)' });
+        name.onchange = () => { const v = name.value.trim(); const l = { ...(prefs.labels || {}) }; if (v && v !== label) l[id] = v; else delete l[id]; prefs.labels = l; savePrefs(); renderAll(); };
+      }
+      const toggle = fixed ? el('span', { className: 'chip', title: id === 'settings' ? 'Always shown, so you can always reach settings' : 'Always shown' }, icon('lock', 12), 'Always')
+        : sw(shown(id), (on) => { prefs.hidden = { ...(prefs.hidden || {}), [id]: !on }; savePrefs(); renderAll(); });
+      list.append(el('div', { className: 'it' + (shown(id) || fixed ? '' : ' off') }, icon(ic, 17), name, iconBtn('up', 'Move earlier', () => move(-1)), iconBtn('down', 'Move later', () => move(1)), toggle));
+    });
+    out.push(el('h4', { className: 'sub-h' }, title), list);
+  }
+  return out;
+}
+if (CUSTOMIZE) renderCustomize();

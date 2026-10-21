@@ -334,6 +334,13 @@ create table if not exists public.event_interest (
 );
 -- Datbux, Fluentdat's own currency: earned with daily, weekly, monthly and yearly tasks, spent in the Shop, and sent or
 -- traded between people. Only the functions further down change any of this, so nobody can make Datbux up.
+-- your settings (Customize: your theme, your layout, and every part of Fluentdat you changed), kept with your account so
+-- each device you sign in on looks the same; only you see or change yours
+create table if not exists public.user_settings (
+  user_id uuid primary key default auth.uid() references public.profiles (id) on delete cascade,
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
 create table if not exists public.wallets (
   user_id uuid primary key references public.profiles (id) on delete cascade,
   balance bigint not null default 0 check (balance >= 0),
@@ -824,6 +831,16 @@ create policy "what people you know have" on public.owned_items for select to au
 alter table public.trades enable row level security;
 drop policy if exists "your trades" on public.trades;
 create policy "your trades" on public.trades for select to authenticated using (from_user = auth.uid() or to_user = auth.uid());
+-- your settings: yours only
+alter table public.user_settings enable row level security;
+drop policy if exists "your settings" on public.user_settings;
+create policy "your settings" on public.user_settings for select to authenticated using (user_id = auth.uid());
+drop policy if exists "keep your settings" on public.user_settings;
+create policy "keep your settings" on public.user_settings for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists "change your settings" on public.user_settings;
+create policy "change your settings" on public.user_settings for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "forget your settings" on public.user_settings;
+create policy "forget your settings" on public.user_settings for delete to authenticated using (user_id = auth.uid());
 -- whoever started a thread can remove it (admins and channel managers can anyway)
 drop policy if exists "remove your threads" on public.channels;
 create policy "remove your threads" on public.channels for delete to authenticated using (kind = 'thread' and created_by = auth.uid());
@@ -1322,12 +1339,32 @@ drop trigger if exists guard_playing on public.profiles;
 create trigger guard_playing before insert or update on public.profiles for each row execute function public.guard_playing();
 
 -- a server's sidebar extras: which are on, its Server Guide (a welcome, up to 7 to-dos that can point at a channel, up to
--- 7 resource pages) and up to 12 game servers (a name, an address, maybe a game and a note)
+-- 7 resource pages, and up to 25 rules) and up to 12 game servers (a name, an address, maybe a game and a note)
+-- your settings are an object of what Customize keeps: your preferences, your themes and which one is on (256 KB at most)
+create or replace function public.guard_user_settings() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(jsonb_typeof(new.data), '') <> 'object' or exists (select 1 from jsonb_object_keys(new.data) k where k not in ('v', 'prefs', 'themes', 'theme'))
+     or (new.data ? 'prefs' and jsonb_typeof(new.data->'prefs') <> 'object')
+     or (new.data ? 'themes' and (jsonb_typeof(new.data->'themes') <> 'array' or jsonb_array_length(new.data->'themes') > 60))
+     or (new.data ? 'theme' and (jsonb_typeof(new.data->'theme') <> 'string' or length(new.data->>'theme') > 80))
+     or octet_length(new.data::text) > 262144 then
+    raise exception 'Those aren''t settings Fluentdat can keep (or they''re over 256 KB).';
+  end if;
+  new.user_id := coalesce(new.user_id, auth.uid());
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists guard_user_settings on public.user_settings;
+create trigger guard_user_settings before insert or update on public.user_settings for each row execute function public.guard_user_settings();
+
 create or replace function public.server_extras_ok(f jsonb, g jsonb, gs jsonb) returns boolean
 language sql immutable set search_path = public as $$
   select coalesce(jsonb_typeof(f) = 'object'
-    and not exists (select 1 from jsonb_each(f) e where e.key not in ('browse', 'games', 'guide', 'events', 'member_events') or jsonb_typeof(e.value) <> 'boolean')
-    and jsonb_typeof(g) = 'object' and not exists (select 1 from jsonb_object_keys(g) k where k not in ('welcome', 'todos', 'res'))
+    and not exists (select 1 from jsonb_each(f) e where e.key not in ('browse', 'games', 'guide', 'events', 'member_events', 'boost', 'shop', 'rules') or jsonb_typeof(e.value) <> 'boolean')
+    and jsonb_typeof(g) = 'object' and not exists (select 1 from jsonb_object_keys(g) k where k not in ('welcome', 'todos', 'res', 'rules'))
+    and (g->'rules' is null or (jsonb_typeof(g->'rules') = 'array' and jsonb_array_length(g->'rules') <= 25 and not exists (
+      select 1 from jsonb_array_elements(g->'rules') r where coalesce(jsonb_typeof(r), '') <> 'string' or length(r #>> '{}') not between 1 and 300 or (r #>> '{}') ~ '[[:cntrl:]]')))
     and (g->'welcome' is null or (jsonb_typeof(g->'welcome') = 'string' and length(g->>'welcome') <= 1000))
     and (g->'todos' is null or (jsonb_typeof(g->'todos') = 'array' and jsonb_array_length(g->'todos') <= 7 and not exists (
       select 1 from jsonb_array_elements(g->'todos') t where coalesce(jsonb_typeof(t), '') <> 'object'
@@ -1514,8 +1551,9 @@ begin
   update server_members set allow_dms = coalesce(p_allow_dms, true) where server_id = p_server and user_id = auth.uid();
   if not found then raise exception 'You aren''t in that server.'; end if;
 end $$;
--- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 9 $$;
+-- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
+-- that follow your account, and a server's rules)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 10 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -2190,6 +2228,8 @@ revoke all on public.profiles, public.servers, public.server_members, public.cat
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
   public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras,
   public.server_events, public.event_interest, public.pins, public.server_boosts from anon;
+grant select, insert, update, delete on public.user_settings to authenticated;
+revoke all on public.user_settings from anon;
 -- (Datbux: looked at only; changed only by its functions)
 grant select on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades to authenticated;
 revoke insert, update, delete, truncate on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades from authenticated;
@@ -2237,6 +2277,7 @@ do $$ begin
     begin alter publication supabase_realtime add table public.wallets; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.owned_items; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.trades; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.user_settings; exception when duplicate_object then null; end;
   end if;
 end $$;
 

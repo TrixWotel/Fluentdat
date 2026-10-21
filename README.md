@@ -6,6 +6,8 @@ Live: https://trixwotel.github.io/Fluentdat/
 
 ## What it does
 
+* Fluentdat's own layout (from TrixWotel's drawings): a title bar across the top, your controls at the foot of the server rail, a server's banner under its name with Browse, Guide, Event, Boost, Shop, Rules and Servers above its channels, Browse, Friends, Bank, Collection, Shop and Quest in Direct Messages, a profile beside DMs, and full profiles that float over everything
+* Customize, a site of its own (customize.html): the theme, the layout (a small copy of the screen to drag and resize), every element (shown or hidden, where it goes, what it's called), messages, profiles and animations. The open chat changes with it at once, and signed in, it all follows your account to every device
 * Servers with categories, text channels and voice channels, invites, Discover for public servers, roles, bans and banners
 * Category settings and permissions like Discord's: private categories, and what @everyone, each role and each member may do there
 * Profile connections (GitHub, Steam, TikTok, YouTube, Twitch, Spotify, X and more; the accounts you sign in with show as verified), a Board of game widgets, a Wishlist, and "Playing …" under your name; any game on Wikipedia, with its cover, by search or from Wikipedia's lists of PC games A–Z
@@ -21,7 +23,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Voice messages, pictures and files (dragged in, pasted or picked, sent when you press Enter)
 * Replies, @mentions, Discord's formatting (bold, italics, spoilers, code, quotes, headings, lists) and link previews for invites, GitHub and YouTube
 * Unread counts, pings, muting and notification settings for every server, channel and DM, and desktop notifications
-* A layout you can rearrange (the member list and DM profile sit as a card in the chat, under the top bar and its search, or as a column of their own), themes you can edit, stickers you make, and profiles with banners and nameplates
+* A layout you can rearrange (rounded panels or flat ones; the member list and DM profile flush beside the chat, as a card in it, or as a column of their own), themes you can edit, stickers you make, and profiles with banners and nameplates
 * An emoji and sticker picker, and servers' own emoji and stickers (GIFs too), with :name: suggestions as you type
 * Full profiles with mutual friends and servers, notes, blocking, ignoring and reports
 * Discord's message menu: forward, bookmark, reminders, mark unread, message links and speak message
@@ -33,9 +35,9 @@ Signed out, everything stays in your browser. Signed in (Discord, GitHub, email,
 
 ## How it is built
 
-Static HTML, CSS and JavaScript modules, with no build step. Supabase keeps the data and decides who sees what (supabase/setup.sql, row level security). Calls go straight between browsers (WebRTC), meeting in private Supabase Realtime channels.
+Static HTML, CSS (app.css) and JavaScript modules, with no build step. Supabase keeps the data and decides who sees what (supabase/setup.sql, row level security). Calls go straight between browsers (WebRTC), meeting in private Supabase Realtime channels.
 
-To set up your own copy, follow supabase/SETUP.md. Run `python3 tools/stamp.py` before each update.
+To set up your own copy, follow supabase/SETUP.md. Run `python3 tools/stamp.py` before each update (it also makes customize.html from index.html).
 
 ## License
 

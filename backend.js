@@ -85,6 +85,8 @@ const fallback = {
   // (Datbux signed out: the app keeps a wallet of its own in this browser; sending and trading come with signing in)
   canBux: () => false, onTrade: () => () => {}, wallet: () => null, priceOf: () => null, owns: () => false, ownedList: () => [], trades: () => [],
   ownedBy: async () => [], buxLog: async () => [],
+  // (settings follow an account only when signed in: here they're this browser's)
+  canSync: () => false, settings: () => null, saveSettings: async () => 0,
   sendBux: async () => { throw new Error(SIGN_IN + 'send Datbux.'); },
   offerTrade: async () => { throw new Error(SIGN_IN + 'trade.'); },
   // (badges here are worked out by the app from what's in this browser)

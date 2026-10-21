@@ -30,7 +30,7 @@ function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
     emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [], pins: {}, boosts: [], threadInfo: {},
-    wallet: null, owned: [], shop: {}, trades: [] };
+    wallet: null, owned: [], shop: {}, trades: [], settings: null };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -157,7 +157,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 9;                // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 10;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -193,6 +193,12 @@ async function loadOnce() {
         const op = meOps.get(k);
         if (op && op.v && (cache.shop[kind + ':' + op.v] || 0) > 0 && !owned.some((o) => o.kind === kind && o.item === op.v)) meOps.delete(k);
       }
+    }
+    // (your settings, as Customize keeps them with your account)
+    if (ver >= 10) {
+      const got = await soft(sb.from('user_settings').select('data,updated_at').eq('user_id', myId()).then(must), null);
+      if (seq !== loadSeq) return newestLoad;
+      if (got) cache.settings = got[0] ? { data: got[0].data || {}, at: Date.parse(got[0].updated_at) || 0 } : null;
     }
     cache.version = ver;
     if (cache.version < SETUP_VERSION) state.needsSetup = true;
@@ -391,7 +397,7 @@ function watchStructure() {
   structure6.subscribe();
   // (Datbux: your wallet, what you have, and trades for you; an offer is told to the app)
   structure7 = sb.channel('fluentdat-structure-7');
-  for (const table of ['wallets', 'owned_items']) structure7.on('postgres_changes', { event: '*', schema: 'public', table }, again);
+  for (const table of ['wallets', 'owned_items', 'user_settings']) structure7.on('postgres_changes', { event: '*', schema: 'public', table }, again);
   structure7.on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, ({ eventType, new: row }) => {
     again();
     if (eventType === 'INSERT' && row && row.to_user === myId()) for (const cb of tradeListeners) try { cb(toTrade(row)); } catch {}
@@ -862,6 +868,14 @@ export const SupabaseStore = {
   async cancelTrade(id) { must(await sb.rpc('cancel_trade', { p_trade: id })); await loadAll(); },
   trades: () => cache.trades.map(toTrade),
   async buxLog() { return must(await sb.from('datbux_log').select('*').order('id', { ascending: false }).limit(60)) || []; },
+  // ---- your settings (Customize), kept with your account: { data, at } (at: when they last changed), or null ----
+  canSync: () => (cache.version || 0) >= 10,
+  settings: () => cache.settings,
+  async saveSettings(data) {
+    const r = must(await sb.from('user_settings').upsert({ user_id: myId(), data }).select('updated_at'));
+    cache.settings = { data, at: Date.parse(r[0].updated_at) || Date.now() };
+    return cache.settings.at;
+  },
   // a call's private live channel ("call:<id>" or "vc:<voice channel id>"), which only its people may join
   callChannel: (topic, key) => sb.channel(topic, { config: { private: true, presence: { key }, broadcast: { self: false, ack: false } } }),
   dropChannel: (ch) => { try { sb.removeChannel(ch); } catch {} },

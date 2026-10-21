@@ -134,6 +134,8 @@ The database checks these itself, so they hold even if someone changes the app:
 34. Datbux are kept by the database, and only it changes them: nobody can write to a wallet, what someone has, or a trade, not even their own. Everyone starts with 200. Tasks pay once a day, week (Monday to Sunday), month or year (in UTC), and only when the database counts that they're done. You see your own wallet, its history and your trades; whoever can see your profile sees what you have from the Shop.
 35. You can send Datbux (1 to 100,000 at a time) or offer a trade only to someone you know, and not to someone either of you has blocked. A trade holds up to 100,000 Datbux and 10 things from the Shop each way, and you can only offer what you have. Nothing changes hands until they accept, and then everything swaps at once (it doesn't go through if either of you no longer has it). You can have up to 10 offers waiting.
 36. A role can have an icon, chosen by the server's admins: an emoji, or a small picture of their own (never a web address). It shows beside the names of the people with that role.
+37. Your settings (Customize: your theme, your themes, your layout and every part you changed) are kept with your account, so each device you sign in on has them. Only you can see or change yours, and they're at most 256 KB.
+38. A server's rules (up to 25, a line each) are written by its admins in Server Guide, and everyone in the server can read them. Its admins can switch Boost, Shop and Rules in its sidebar on and off, as they can the rest.
 
 ## If something goes wrong
 
@@ -145,3 +147,4 @@ The database checks these itself, so they hold even if someone changes the app:
 6. **Calls ring but never connect** for some people: their network needs a TURN server (step 8).
 7. **“Invite Invalid” cards, or no Emoji and Stickers pages in Server Settings**: run `setup.sql` again (step 2).
 8. **A username and password won't log in** although they're right: check that the Email provider is on (step 9).
+9. **Customize says your settings follow your account “once supabase/setup.sql is run again”**, or a server's Rules can't be written: run `setup.sql` again (step 2).
