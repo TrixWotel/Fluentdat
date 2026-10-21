@@ -13,7 +13,7 @@ const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
 
-let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, active = null, following = false, providersOn = null, beat = 0;
+let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, active = null, following = false, providersOn = null, beat = 0;
 let cache = blank();
 const pending = new Map();          // messages you've sent that the server hasn't confirmed yet (kept through reloads)
 const asking = new Set();           // profiles being fetched
@@ -25,7 +25,8 @@ let state = { loading: false, error: '', lastSync: 0, needsSetup: false };
 const listeners = new Set(), messageListeners = new Set(), callListeners = new Set();
 function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
-    dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set() };
+    dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
+    emoji: [], stickers: [], blocks: [], admin: false };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -63,7 +64,7 @@ function toUser(p) {
 }
 const userOf = (id) => ({ ...toUser(cache.profiles[id]), id });
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
-const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text, sticker: r.sticker, action: r.action, reply: r.reply_to || null,
+const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text, sticker: r.sticker, action: r.action, reply: r.reply_to || null, forwarded: r.forwarded || null,
   files: Array.isArray(r.files) ? r.files : null, mine: r.author === myId(), sending: pending.has(r.id), progress: r._progress,
   user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : userOf(r.author) });
 const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, owner: r.owner, banner: r.banner || '', description: r.description || '',
@@ -82,6 +83,10 @@ const chanName = (name, kind) => (kind === 'voice' ? String(name).trim().replace
 const placeKind = (id) => (cache.dmIndex.some((d) => d.id === id) ? 'dm' : 'channel');
 const serverOfChannel = (id) => (cache.channels.find((c) => c.id === id) || {}).server || null;
 const roleIn = (sv, uid) => (cache.members.find((m) => m.server_id === sv && m.user_id === uid) || {}).role || null;
+// a server's emoji and stickers: their pictures are in the public "expressions" bucket, so they're plain links
+const expressionUrl = (path) => (path && sb ? sb.storage.from('expressions').getPublicUrl(path).data.publicUrl : '');
+const toEmoji = (r) => ({ id: r.id, server: r.server_id, name: r.name, animated: !!r.animated, path: r.path, url: expressionUrl(r.path), by: r.created_by });
+const toSticker = (r) => ({ id: r.id, server: r.server_id, name: r.name, emoji: r.emoji || '', description: r.description || '', animated: !!r.animated, path: r.path, url: expressionUrl(r.path), by: r.created_by });
 
 // ---------- loading ----------
 async function loadAll() {
@@ -89,11 +94,12 @@ async function loadAll() {
   state.loading = true; state.error = ''; emit();
   try {
     const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
-    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread] = await Promise.all([
+    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin] = await Promise.all([
       q('profiles', 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at'),
       sb.from('profiles').select('*').eq('id', myId()).then(must),
       q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles'),
-      soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null)]);
+      soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null),
+      soft(q('server_emoji'), []), soft(q('server_stickers'), []), soft(q('blocks'), []), soft(sb.rpc('is_app_admin').then(must), false)]);
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
     cache.me = mine[0] || null;
     if (cache.me) cache.profiles[cache.me.id] = cache.me;
@@ -109,6 +115,7 @@ async function loadAll() {
     cache.dmMembers = dmMembers;
     cache.friendRows = friends;
     cache.reads = Object.fromEntries(reads.map((r) => [r.place, r]));
+    cache.emoji = emoji; cache.stickers = stickers; cache.blocks = blocks; cache.admin = admin === true;
     if (unread) cache.unread = Object.fromEntries(unread.map((u) => [u.place, { unread: u.unread, mentions: u.mentions, last: u.last_at ? Date.parse(u.last_at) : 0 }]));
     // (the first time on this version: what's already there counts as read, rather than every old message at once)
     if (unread && !reads.length && unread.some((u) => u.unread)) await soft(markAllRead(unread.map((u) => u.place)), null);
@@ -240,6 +247,10 @@ function watchStructure() {
   structure2 = sb.channel('fluentdat-structure-2');
   for (const table of ['friends', 'dm_members']) structure2.on('postgres_changes', { event: 'INSERT', schema: 'public', table }, again);
   structure2.subscribe();
+  // a server's emoji and stickers (their own channel: an older database has none)
+  structure3 = sb.channel('fluentdat-structure-3');
+  for (const table of ['server_emoji', 'server_stickers']) structure3.on('postgres_changes', { event: '*', schema: 'public', table }, again);
+  structure3.subscribe();
 }
 // signed in: load everything, keep it live, and notice if the session ends (signed out in another tab, or it ran out)
 async function start() {
@@ -268,6 +279,7 @@ function sendTo(dm, id, msg) {
     action: !!msg.action, bot: !!(msg.user && msg.user.bot), [dm ? 'dm_id' : 'channel_id']: id };
   if (msg.reply) row.reply_to = msg.reply;
   if (msg.files && msg.files.length) row.files = msg.files;
+  if (msg.forwarded) row.forwarded = msg.forwarded;
   const bucket = dm ? cache.dms : cache.msgs, shown = { ...row, created_at: new Date().toISOString() };
   (bucket[id] = bucket[id] || []).push(shown);
   pending.set(row.id, shown);
@@ -287,6 +299,17 @@ function markRead(place) {
   const read_at = new Date().toISOString();
   cache.reads[place] = { ...(cache.reads[place] || { place, notify: 'default', muted_until: null }), read_at };
   sb.from('reads').upsert({ user_id: myId(), place, read_at }).then(() => {}, () => {});
+}
+// Mark Unread: you've read up to just before this message (and it isn't marked read again until you come back to it)
+function markUnread(place, ts) {
+  if (!place || !session) return;
+  const read_at = new Date(ts - 1).toISOString(), dm = placeKind(place) === 'dm';
+  cache.reads[place] = { ...(cache.reads[place] || { place, notify: 'default', muted_until: null }), read_at };
+  const after = (cache.dms[place] || cache.msgs[place] || []).filter((r) => Date.parse(r.created_at) >= ts && r.author !== myId());
+  cache.unread[place] = { ...(cache.unread[place] || { last: 0 }), unread: after.length, mentions: dm ? after.length : after.filter((r) => pings(r, place)).length };
+  lastMarked[place] = Date.now();
+  emit();
+  push(sb.from('reads').upsert({ user_id: myId(), place, read_at }).then(must));
 }
 async function markAllRead(places) {
   const read_at = new Date().toISOString();
@@ -320,11 +343,22 @@ async function fileLink(path, download) {
   p.catch(() => links.delete(key));
   return p;
 }
+// signing in with a password (accounts made from a one-time link: their address is made up from their username)
+async function signInPassword(email, password) {
+  const r = await sb.auth.signInWithPassword({ email, password: String(password || '') });
+  if (r.error) throw new Error(/invalid login|invalid credentials/i.test(r.error.message || '') ? 'That username and password don’t match.' : friendly(r.error.message || String(r.error)));
+  session = (r.data && r.data.session) || (await sb.auth.getSession()).data.session;
+  if (!session) throw new Error('Couldn’t sign in. Try again.');
+  await start();
+}
+// a picture's file type, for the "expressions" bucket (an animated PNG is a PNG)
+const pictureExt = (file) => ({ 'image/gif': 'gif', 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/apng': 'png' }[String(file.type || '').toLowerCase()] || 'png');
 
 export const SupabaseStore = {
   get backend() { return cache.me ? `Supabase (@${cache.me.handle})` : 'Supabase'; },
   configured,
-  account: () => (session ? { id: session.user.id, login: cache.me ? cache.me.handle : session.user.email, email: session.user.email || '', provider: (session.user.app_metadata || {}).provider || 'email' } : null),
+  account: () => (session ? { id: session.user.id, login: cache.me ? cache.me.handle : session.user.email, email: session.user.email || '', provider: (session.user.app_metadata || {}).provider || 'email',
+    password: /@users\.fluentdat\.invalid$/i.test(session.user.email || '') } : null),
   // is there a sign-in to pick up? (from last time, or just back from Discord / an email link) — answered without the network
   pending() {
     if (!configured()) return false;
@@ -378,9 +412,41 @@ export const SupabaseStore = {
     return true;
   },
   async signInOAuth(provider) { await client(); must(await sb.auth.signInWithOAuth({ provider, options: { redirectTo: here() } })); },
+  // ---- accounts made from a one-time link: a username and a password (no email) ----
+  // what a one-time link is (asked signed out, on the page it opens): { ok, by, expires } or null
+  async appInviteCheck(code) {
+    await client();
+    const r = must(await sb.rpc('app_invite_check', { p_code: String(code || '').trim() }));
+    const row = Array.isArray(r) ? r[0] : r;
+    return row ? { ok: !!row.ok, by: row.by_name || 'Someone', expires: row.expires_at ? Date.parse(row.expires_at) : 0 } : null;
+  },
+  // make the account, then sign in to it
+  async redeemAppInvite(code, handle, password, name) {
+    await client();
+    const email = must(await sb.rpc('redeem_app_invite', { p_code: String(code || '').trim(), p_handle: String(handle || '').trim(), p_password: String(password || ''), p_name: String(name || '').trim() }));
+    await signInPassword(email, password);
+    return SupabaseStore.account();
+  },
+  async signInUsername(handle, password) {
+    await client();
+    const email = must(await sb.rpc('login_email', { p_handle: String(handle || '').trim() }));
+    if (!email) throw new Error('There’s no account with that username and a password. (Signed in with Discord, GitHub or email before? Use that instead.)');
+    await signInPassword(email, password);
+    return SupabaseStore.account();
+  },
+  // a new password (accounts made from a one-time link)
+  async changePassword(password) {
+    const r = await sb.auth.updateUser({ password: String(password || '') });
+    if (r.error) throw new Error(friendly(r.error.message || String(r.error)));
+  },
+  // someone by their @handle (for a profile link)
+  async findUser(handle) {
+    const found = must(await sb.rpc('find_user', { p_handle: String(handle || '').replace(/^@/, '') }));
+    return found && found[0] ? { ...toUser(found[0]), id: found[0].id } : null;
+  },
   async signOut() {
-    for (const ch of [feed, extras, structure, structure2, ...rooms.values()]) if (ch) sb.removeChannel(ch);
-    feed = extras = structure = structure2 = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
+    for (const ch of [feed, extras, structure, structure2, structure3, ...rooms.values()]) if (ch) sb.removeChannel(ch);
+    feed = extras = structure = structure2 = structure3 = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
     if (sb) await sb.auth.signOut({ scope: 'local' });   // (just this browser — your phone stays signed in)
     session = null; cache = blank(); active = null; pending.clear(); emit();
   },
@@ -608,7 +674,7 @@ export const SupabaseStore = {
   unread: (place) => cache.unread[place] || { unread: 0, mentions: 0, last: 0 },
   // when you'd read a place up to (for the red NEW line)
   readAt: (place) => Date.parse((cache.reads[place] || {}).read_at || '') || 0,
-  markRead,
+  markRead, markUnread,
   async markServerRead(sv) { await markAllRead(SupabaseStore.channels(sv).map((c) => c.id)); emit(); },
   // a place's settings: muted until when, and what it may tell you about ('default', 'all', 'mentions' or 'none')
   placeSettings: (place) => { const r = cache.reads[place]; return { muted: !!(r && r.muted_until && Date.parse(r.muted_until) > Date.now()), mutedUntil: r && r.muted_until ? Date.parse(r.muted_until) : 0, notify: (r && r.notify) || 'default' }; },
@@ -673,6 +739,78 @@ export const SupabaseStore = {
     return { ...toUser(cache.full[id]), banner: cache.full[id].banner || '' };
   },
   mutualServers: (uid) => cache.servers.filter((sv) => cache.members.some((m) => m.server_id === sv.id && m.user_id === uid)).length,
+  mutualServerList: (uid) => cache.servers.filter((sv) => cache.members.some((m) => m.server_id === sv.id && m.user_id === uid)),
+  // friends you both have (the database works it out: you can't see their friends otherwise)
+  async mutualFriends(uid) {
+    if (!isUuid(uid) || uid === myId()) return [];
+    return (await soft(sb.rpc('mutual_friends', { p_other: uid }).then(must), [])).map((p) => ({ ...toUser(p), id: p.id }));
+  },
+  // when you became friends (when the second of you added the other)
+  friendSince(uid) {
+    const rows = cache.friendRows.filter((f) => (f.owner === myId() && f.friend === uid) || (f.owner === uid && f.friend === myId()));
+    return rows.length === 2 ? Math.max(...rows.map((f) => Date.parse(f.created_at) || 0)) : 0;
+  },
+
+  // ---- blocking: they can't message you or ask to be your friend, and you don't see their messages ----
+  blocked: (uid) => cache.blocks.some((b) => b.blocked === uid),
+  blockedIds: () => cache.blocks.map((b) => b.blocked),
+  async block(uid) { must(await sb.rpc('block_user', { p_user: uid })); await loadAll(); },
+  async unblock(uid) { must(await sb.rpc('unblock_user', { p_user: uid })); await loadAll(); },
+  // ---- reports, to the people who run Fluentdat ----
+  async report({ target = null, place = null, message = null, excerpt = '', reason }) {
+    must(await sb.from('reports').insert({ reporter: myId(), target: isUuid(target) ? target : null, place: isUuid(place) ? place : null,
+      message: isUuid(message) ? message : null, excerpt: String(excerpt || '').slice(0, 600), reason: String(reason || '').slice(0, 500) }));
+  },
+  // ---- for the people who run Fluentdat (TrixWotel): one-time links to make an account, and the reports ----
+  isAppAdmin: () => !!cache.admin,
+  async createAppInvite(note = '', days = 7) { return must(await sb.rpc('create_app_invite', { p_note: note, p_days: days })); },
+  async appInvites() {
+    return must(await sb.rpc('app_invites_list')).map((r) => ({ code: r.code, note: r.note, ts: Date.parse(r.created_at), expires: r.expires_at ? Date.parse(r.expires_at) : 0,
+      used: r.used_at ? Date.parse(r.used_at) : 0, usedBy: r.used_handle ? { login: r.used_handle, name: r.used_name || r.used_handle } : null, by: r.by_handle || '' }));
+  },
+  async revokeAppInvite(code) { must(await sb.rpc('revoke_app_invite', { p_code: code })); },
+  async appReports() {
+    return must(await sb.rpc('app_reports')).map((r) => ({ id: r.id, ts: Date.parse(r.created_at), reason: r.reason, excerpt: r.excerpt, resolved: !!r.resolved, place: r.place, message: r.message,
+      reporter: { login: r.reporter_handle || '?', name: r.reporter_name || r.reporter_handle || 'Someone' }, target: r.target_handle ? { login: r.target_handle, name: r.target_name || r.target_handle } : null }));
+  },
+  async resolveReport(id, on) { took('Only the people who run Fluentdat can do that.')(await sb.from('reports').update({ resolved: !!on }).eq('id', id).select('id')); },
+
+  // ---- a server's own emoji and stickers (its admins add them; everyone signed in can use and see them) ----
+  emojiAll: () => cache.emoji.map(toEmoji),
+  serverEmoji: (sv) => cache.emoji.filter((e) => e.server_id === sv).map(toEmoji),
+  serverStickers: (sv) => cache.stickers.filter((s) => s.server_id === sv).map(toSticker),
+  expressionUrl,
+  async addEmoji(sv, file, name) {
+    const ext = pictureExt(file), path = `${sv}/emoji/${uuid()}.${ext}`;
+    must(await sb.storage.from('expressions').upload(path, file, { contentType: file.type || 'image/png', upsert: false }));
+    try { must(await sb.from('server_emoji').insert({ server_id: sv, name, path, animated: ext === 'gif', created_by: myId() })); }
+    catch (e) { sb.storage.from('expressions').remove([path]).then(() => {}, () => {}); throw e; }
+    await loadAll();
+  },
+  async renameEmoji(id, name) { took('Only this server’s admins can rename its emoji.')(await sb.from('server_emoji').update({ name }).eq('id', id).select('id')); await loadAll(); },
+  async removeEmoji(id) {
+    const e = cache.emoji.find((x) => x.id === id);
+    took('Only this server’s admins can remove its emoji.')(await sb.from('server_emoji').delete().eq('id', id).select('id'));
+    if (e) sb.storage.from('expressions').remove([e.path]).then(() => {}, () => {});
+    await loadAll();
+  },
+  async addServerSticker(sv, file, { name, emoji = '', description = '' }) {
+    const ext = pictureExt(file), path = `${sv}/sticker/${uuid()}.${ext}`;
+    must(await sb.storage.from('expressions').upload(path, file, { contentType: file.type || 'image/png', upsert: false }));
+    try { must(await sb.from('server_stickers').insert({ server_id: sv, name, emoji, description, path, animated: ext === 'gif' || /apng/.test(file.type || ''), created_by: myId() })); }
+    catch (e) { sb.storage.from('expressions').remove([path]).then(() => {}, () => {}); throw e; }
+    await loadAll();
+  },
+  async updateServerSticker(id, patch) {
+    const row = {}; for (const k of ['name', 'emoji', 'description']) if (k in patch) row[k] = patch[k];
+    took('Only this server’s admins can change its stickers.')(await sb.from('server_stickers').update(row).eq('id', id).select('id')); await loadAll();
+  },
+  async removeServerSticker(id) {
+    const s = cache.stickers.find((x) => x.id === id);
+    took('Only this server’s admins can remove its stickers.')(await sb.from('server_stickers').delete().eq('id', id).select('id'));
+    if (s) sb.storage.from('expressions').remove([s.path]).then(() => {}, () => {});
+    await loadAll();
+  },
   setProfile(patch) {
     if (!cache.me) return;
     const row = {}; for (const k of ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate']) if (k in patch) row[k] = patch[k] == null ? (k === 'stickers' ? [] : '') : patch[k];

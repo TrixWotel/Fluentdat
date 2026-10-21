@@ -13,8 +13,16 @@
 --   * Friend requests: the person you ask sees your request (and can accept or ignore it); nobody else does.
 --   * Group DMs hold up to 10 people, started and grown by people who are friends with whoever they add.
 --   * Calls, voice messages and attachments only reach the people in that DM, group or server.
+--   * You can block someone: they can't message you, ask to be your friend or start a DM with you.
+--   * Someone new can also make an account with a username and a password (no email), from a one-time link that only
+--     the people who run Fluentdat (TrixWotel) can make.
+--   * A server's admins add its own emoji and stickers (pictures, GIFs too); everyone signed in can see them.
 
 -- ===================== tables =====================
+-- (passwords for accounts made from a one-time link are hashed with pgcrypto, which Supabase keeps in "extensions")
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   handle text unique not null check (handle ~ '^[a-z0-9_]{1,24}$'),   -- the @name people add you by
@@ -182,6 +190,65 @@ create table if not exists public.seen (
   at timestamptz not null default now()
 );
 
+-- the people who run Fluentdat (TrixWotel): they make the one-time links that let someone make an account, and read reports
+create table if not exists public.app_admins (
+  user_id uuid primary key references public.profiles (id) on delete cascade
+);
+-- a one-time link to make an account with a username and a password (no email), made by one of the people who run Fluentdat
+create table if not exists public.app_invites (
+  code text primary key,
+  created_by uuid references public.profiles (id) on delete set null,
+  note text not null default '' check (char_length(note) <= 100),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz,
+  used_by uuid references public.profiles (id) on delete set null,
+  used_at timestamptz
+);
+-- people you've blocked: they can't message you, ask to be your friend or start a DM with you, and you don't see their messages
+create table if not exists public.blocks (
+  blocker uuid not null references public.profiles (id) on delete cascade,
+  blocked uuid not null references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (blocker, blocked),
+  check (blocker <> blocked)
+);
+-- a profile or a message reported to the people who run Fluentdat
+create table if not exists public.reports (
+  id uuid primary key default gen_random_uuid(),
+  reporter uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  target uuid references public.profiles (id) on delete cascade,
+  place uuid,
+  message uuid,
+  excerpt text not null default '' check (char_length(excerpt) <= 600),
+  reason text not null check (char_length(reason) between 1 and 500),
+  created_at timestamptz not null default now(),
+  resolved boolean not null default false
+);
+-- a server's own emoji and stickers (their pictures are in the "expressions" storage bucket, in the server's folder)
+create table if not exists public.server_emoji (
+  id uuid primary key default gen_random_uuid(),
+  server_id uuid not null references public.servers (id) on delete cascade,
+  name text not null check (name ~ '^[A-Za-z0-9_]{2,32}$'),
+  path text not null,
+  animated boolean not null default false,
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique (server_id, name),
+  check (path ~ ('^' || server_id::text || '/emoji/[0-9a-f-]{36}\.(png|gif|webp|jpg)$'))
+);
+create table if not exists public.server_stickers (
+  id uuid primary key default gen_random_uuid(),
+  server_id uuid not null references public.servers (id) on delete cascade,
+  name text not null check (char_length(name) between 2 and 30),
+  emoji text not null default '' check (char_length(emoji) <= 32),
+  description text not null default '' check (char_length(description) <= 100),
+  path text not null,
+  animated boolean not null default false,
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  check (path ~ ('^' || server_id::text || '/sticker/[0-9a-f-]{36}\.(png|gif|webp|jpg)$'))
+);
+
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
 alter table public.profiles add column if not exists plate text not null default '';
@@ -203,6 +270,9 @@ alter table public.dms add column if not exists owner uuid references public.pro
 alter table public.dms alter column user_a drop not null;
 alter table public.dms alter column user_b drop not null;
 alter table public.dms drop constraint if exists dms_check;
+-- a forwarded message says where it came from: { from, by, at }
+alter table public.messages add column if not exists forwarded jsonb;
+alter table public.dm_messages add column if not exists forwarded jsonb;
 
 -- pictures are kept small (the app shrinks them before saving), and these limits stop anyone filling the database
 do $$ begin
@@ -257,6 +327,19 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.dm_messages add constraint dm_messages_sticker_size check (sticker is null or octet_length(sticker::text) <= 400000);
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter table public.messages add constraint messages_forwarded_shape check (forwarded is null or (jsonb_typeof(forwarded) = 'object' and octet_length(forwarded::text) <= 1000));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.dm_messages add constraint dm_messages_forwarded_shape check (forwarded is null or (jsonb_typeof(forwarded) = 'object' and octet_length(forwarded::text) <= 1000));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.messages add constraint messages_sticker_server check (sticker is null or coalesce(sticker ->> 'kind', '') <> 'server' or (sticker ->> 'path') ~ '^[0-9a-f-]{36}/sticker/[0-9a-f-]{36}\.(png|gif|webp|jpg)$');
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.dm_messages add constraint dm_messages_sticker_server check (sticker is null or coalesce(sticker ->> 'kind', '') <> 'server' or (sticker ->> 'path') ~ '^[0-9a-f-]{36}/sticker/[0-9a-f-]{36}\.(png|gif|webp|jpg)$');
 exception when duplicate_object then null; end $$;
 
 -- ===================== helpers used by the rules =====================
@@ -330,6 +413,35 @@ begin
   if k = 'dm' then return in_dm(place::uuid); end if;
   if k = 'ch' then return is_member(channel_server(place::uuid)); end if;
   return false;
+end $$;
+
+-- one of the people who run Fluentdat?
+create or replace function public.is_app_admin() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from app_admins where user_id = auth.uid());
+$$;
+
+-- has either of you blocked the other?
+create or replace function public.blocked_with(p_other uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from blocks where (blocker = auth.uid() and blocked = p_other) or (blocker = p_other and blocked = auth.uid()));
+$$;
+
+-- a two-person DM where one of them has blocked the other (nobody writes in it then)
+create or replace function public.dm_blocked(p_dm uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from dms d join blocks b on (b.blocker = d.user_a and b.blocked = d.user_b) or (b.blocker = d.user_b and b.blocked = d.user_a)
+                 where d.id = p_dm and d.kind = 'dm');
+$$;
+
+-- a server emoji's or sticker's picture: "<server id>/emoji/<file>" or "<server id>/sticker/<file>", added or removed by that server's admins
+create or replace function public.expression_ok(p_name text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare sv text := split_part(p_name, '/', 1);
+begin
+  if sv !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or split_part(p_name, '/', 2) not in ('emoji', 'sticker')
+     or split_part(p_name, '/', 3) !~ '^[0-9a-f-]{36}\.(png|gif|webp|jpg)$' or split_part(p_name, '/', 4) <> '' then return false; end if;
+  return is_admin(sv::uuid);
 end $$;
 
 -- ===================== row level security =====================
@@ -410,7 +522,7 @@ create policy "leave a group, or its owner removes you" on public.dm_members for
 drop policy if exists "the people in a dm see its calls" on public.calls;
 create policy "the people in a dm see its calls" on public.calls for select to authenticated using (in_dm(dm_id));
 drop policy if exists "start a call as yourself" on public.calls;
-create policy "start a call as yourself" on public.calls for insert to authenticated with check (started_by = auth.uid() and in_dm(dm_id));
+create policy "start a call as yourself" on public.calls for insert to authenticated with check (started_by = auth.uid() and in_dm(dm_id) and not dm_blocked(dm_id));
 drop policy if exists "the people in a dm end its calls" on public.calls;
 create policy "the people in a dm end its calls" on public.calls for update to authenticated using (in_dm(dm_id)) with check (in_dm(dm_id));
 
@@ -421,7 +533,7 @@ drop policy if exists "the two people read it" on public.dm_messages;
 create policy "the two people read it" on public.dm_messages for select to authenticated using (in_dm(dm_id));
 drop policy if exists "the two people write as themselves" on public.dm_messages;
 create policy "the two people write as themselves" on public.dm_messages for insert to authenticated
-  with check (author = auth.uid() and in_dm(dm_id));
+  with check (author = auth.uid() and in_dm(dm_id) and not dm_blocked(dm_id));
 drop policy if exists "authors delete their dm messages" on public.dm_messages;
 create policy "authors delete their dm messages" on public.dm_messages for delete to authenticated using (author = auth.uid());
 
@@ -430,7 +542,7 @@ drop policy if exists "your own friends list" on public.friends;
 drop policy if exists "see requests to and from you" on public.friends;
 create policy "see requests to and from you" on public.friends for select to authenticated using (owner = auth.uid() or friend = auth.uid());
 drop policy if exists "ask as yourself" on public.friends;
-create policy "ask as yourself" on public.friends for insert to authenticated with check (owner = auth.uid());
+create policy "ask as yourself" on public.friends for insert to authenticated with check (owner = auth.uid() and not blocked_with(friend));
 drop policy if exists "cancel, ignore or unfriend" on public.friends;
 create policy "cancel, ignore or unfriend" on public.friends for delete to authenticated using (owner = auth.uid() or friend = auth.uid());
 
@@ -451,6 +563,72 @@ drop policy if exists "admins see bans" on public.bans;
 create policy "admins see bans" on public.bans for select to authenticated using (is_admin(server_id));
 drop policy if exists "admins lift bans" on public.bans;
 create policy "admins lift bans" on public.bans for delete to authenticated using (is_admin(server_id));
+
+alter table public.app_admins enable row level security;
+alter table public.app_invites enable row level security;
+alter table public.blocks enable row level security;
+alter table public.reports enable row level security;
+alter table public.server_emoji enable row level security;
+alter table public.server_stickers enable row level security;
+
+drop policy if exists "see whether you're one" on public.app_admins;
+create policy "see whether you're one" on public.app_admins for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists "the people who run fluentdat see its links" on public.app_invites;
+create policy "the people who run fluentdat see its links" on public.app_invites for select to authenticated using (is_app_admin());
+drop policy if exists "the people who run fluentdat take back unused links" on public.app_invites;
+create policy "the people who run fluentdat take back unused links" on public.app_invites for delete to authenticated using (is_app_admin() and used_by is null);
+
+-- (blocking and unblocking go through block_user() and unblock_user(); you only ever see your own list)
+drop policy if exists "your own blocks" on public.blocks;
+create policy "your own blocks" on public.blocks for select to authenticated using (blocker = auth.uid());
+
+drop policy if exists "report as yourself" on public.reports;
+create policy "report as yourself" on public.reports for insert to authenticated with check (reporter = auth.uid());
+drop policy if exists "your reports, or every one for the people who run fluentdat" on public.reports;
+create policy "your reports, or every one for the people who run fluentdat" on public.reports for select to authenticated using (reporter = auth.uid() or is_app_admin());
+drop policy if exists "the people who run fluentdat resolve reports" on public.reports;
+create policy "the people who run fluentdat resolve reports" on public.reports for update to authenticated using (is_app_admin()) with check (is_app_admin());
+
+-- server emoji and stickers show wherever they're used, so everyone signed in can see them; a server's admins manage its own
+drop policy if exists "everyone signed in sees server emoji" on public.server_emoji;
+create policy "everyone signed in sees server emoji" on public.server_emoji for select to authenticated using (true);
+drop policy if exists "admins add emoji" on public.server_emoji;
+create policy "admins add emoji" on public.server_emoji for insert to authenticated with check (is_admin(server_id) and created_by = auth.uid());
+drop policy if exists "admins rename emoji" on public.server_emoji;
+create policy "admins rename emoji" on public.server_emoji for update to authenticated using (is_admin(server_id)) with check (is_admin(server_id));
+drop policy if exists "admins remove emoji" on public.server_emoji;
+create policy "admins remove emoji" on public.server_emoji for delete to authenticated using (is_admin(server_id));
+
+drop policy if exists "everyone signed in sees server stickers" on public.server_stickers;
+create policy "everyone signed in sees server stickers" on public.server_stickers for select to authenticated using (true);
+drop policy if exists "admins add stickers" on public.server_stickers;
+create policy "admins add stickers" on public.server_stickers for insert to authenticated with check (is_admin(server_id) and created_by = auth.uid());
+drop policy if exists "admins change stickers" on public.server_stickers;
+create policy "admins change stickers" on public.server_stickers for update to authenticated using (is_admin(server_id)) with check (is_admin(server_id));
+drop policy if exists "admins remove stickers" on public.server_stickers;
+create policy "admins remove stickers" on public.server_stickers for delete to authenticated using (is_admin(server_id));
+
+-- an emoji or sticker keeps its server, picture and maker (only its name, and a sticker's emoji and description, change),
+-- and a server holds up to 50 emoji and 30 stickers
+create or replace function public.guard_expression() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if TG_OP = 'UPDATE' then
+    if new.server_id is distinct from old.server_id or new.path is distinct from old.path or new.created_by is distinct from old.created_by
+       or new.created_at is distinct from old.created_at or new.animated is distinct from old.animated then
+      raise exception 'Only an emoji''s or sticker''s name (and a sticker''s emoji and description) can change.';
+    end if;
+    return new;
+  end if;
+  if TG_TABLE_NAME = 'server_emoji' and (select count(*) from server_emoji where server_id = new.server_id) >= 50 then raise exception 'A server holds up to 50 emoji.'; end if;
+  if TG_TABLE_NAME = 'server_stickers' and (select count(*) from server_stickers where server_id = new.server_id) >= 30 then raise exception 'A server holds up to 30 stickers.'; end if;
+  return new;
+end $$;
+drop trigger if exists guard_expression on public.server_emoji;
+create trigger guard_expression before insert or update on public.server_emoji for each row execute function public.guard_expression();
+drop trigger if exists guard_expression on public.server_stickers;
+create trigger guard_expression before insert or update on public.server_stickers for each row execute function public.guard_expression();
 
 -- admins may edit a server, but never hand it to someone else, and only the owner makes it public or private
 create or replace function public.guard_server() returns trigger
@@ -594,6 +772,7 @@ begin
   a := least(auth.uid(), p_other); b := greatest(auth.uid(), p_other);
   select id into d from dms where user_a = a and user_b = b;
   if d is not null then return d; end if;
+  if blocked_with(p_other) then raise exception 'You can''t message them.'; end if;
   if not (exists (select 1 from server_members x join server_members y on x.server_id = y.server_id where x.user_id = auth.uid() and y.user_id = p_other)
           or exists (select 1 from friends where owner = p_other and friend = auth.uid())) then
     raise exception 'You can message people you share a server with, or who have added you as a friend.';
@@ -750,29 +929,155 @@ end $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
 
+-- ===================== Fluentdat's own one-time invites, blocking, reports, mutual friends =====================
+-- a one-time link that lets someone make an account (only the people who run Fluentdat); good for p_days days
+create or replace function public.create_app_invite(p_note text default '', p_days int default 7)
+returns text language plpgsql security definer set search_path = public as $$
+declare c text;
+begin
+  if not is_app_admin() then raise exception 'Only the people who run Fluentdat can make these links.'; end if;
+  c := replace(gen_random_uuid()::text, '-', '') || substr(replace(gen_random_uuid()::text, '-', ''), 1, 8);
+  insert into app_invites (code, created_by, note, expires_at)
+    values (c, auth.uid(), left(trim(coalesce(p_note, '')), 100), case when p_days is null or p_days <= 0 then null else now() + make_interval(days => least(p_days, 365)) end);
+  return c;
+end $$;
+
+-- the page a link opens on asks this (signed out): is it still good, and who sent it
+create or replace function public.app_invite_check(p_code text)
+returns table (ok boolean, by_name text, expires_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select i.used_by is null and (i.expires_at is null or i.expires_at > now()), coalesce(nullif(p.name, ''), p.handle, 'Someone'), i.expires_at
+  from app_invites i left join profiles p on p.id = i.created_by
+  where i.code = lower(trim(coalesce(p_code, '')));
+$$;
+
+-- make an account with a one-time link: a username (your @handle) and a password, no email. The account's address is
+-- made up from the username (and can't be a real one); this hands it back to sign in with.
+create or replace function public.redeem_app_invite(p_code text, p_handle text, p_password text, p_name text default '')
+returns text language plpgsql security definer set search_path = public, extensions as $$
+declare inv app_invites%rowtype; h text := lower(trim(both '@' from trim(coalesce(p_handle, '')))); uid uuid := gen_random_uuid(); em text;
+begin
+  select * into inv from app_invites where code = lower(trim(coalesce(p_code, ''))) for update;
+  if not found then raise exception 'That invite link doesn''t work.'; end if;
+  if inv.used_by is not null then raise exception 'That invite link has already been used. Ask for a new one.'; end if;
+  if inv.expires_at is not null and inv.expires_at < now() then raise exception 'That invite link has expired. Ask for a new one.'; end if;
+  if h !~ '^[a-z0-9_]{2,24}$' then raise exception 'A username is 2 to 24 letters, numbers or underscores.'; end if;
+  if char_length(coalesce(p_password, '')) < 8 then raise exception 'Your password needs at least 8 characters.'; end if;
+  if octet_length(p_password) > 72 then raise exception 'That password is too long (72 characters at most).'; end if;
+  em := h || '@users.fluentdat.invalid';
+  if exists (select 1 from profiles where handle = h) or exists (select 1 from auth.users where email = em) then raise exception 'That username is taken. Try another one.'; end if;
+  insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      created_at, updated_at, confirmation_token, recovery_token, email_change_token_new, email_change)
+    values ('00000000-0000-0000-0000-000000000000', uid, 'authenticated', 'authenticated', em, crypt(p_password, gen_salt('bf', 10)), now(),
+      jsonb_build_object('provider', 'email', 'providers', jsonb_build_array('email')),
+      jsonb_build_object('user_name', h, 'full_name', left(coalesce(nullif(trim(coalesce(p_name, '')), ''), h), 40)),
+      now(), now(), '', '', '', '');
+  insert into auth.identities (id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+    values (gen_random_uuid(), uid, uid::text, jsonb_build_object('sub', uid::text, 'email', em, 'email_verified', true), 'email', now(), now(), now());
+  if not exists (select 1 from profiles where id = uid and handle = h) then raise exception 'That username is taken. Try another one.'; end if;
+  update app_invites set used_by = uid, used_at = now() where code = inv.code;
+  return em;
+end $$;
+
+-- signing in with a username: the address its account was made with (only for accounts made from a one-time link)
+create or replace function public.login_email(p_handle text)
+returns text language sql stable security definer set search_path = public as $$
+  select u.email from profiles p join auth.users u on u.id = p.id
+  where p.handle = lower(trim(both '@' from trim(coalesce(p_handle, '')))) and u.email like '%@users.fluentdat.invalid';
+$$;
+
+-- the one-time links made so far, newest first, and who used them (the people who run Fluentdat)
+create or replace function public.app_invites_list()
+returns table (code text, note text, created_at timestamptz, expires_at timestamptz, used_at timestamptz, used_handle text, used_name text, by_handle text)
+language sql stable security definer set search_path = public as $$
+  select i.code, i.note, i.created_at, i.expires_at, i.used_at, u.handle, u.name, b.handle
+  from app_invites i left join profiles u on u.id = i.used_by left join profiles b on b.id = i.created_by
+  where is_app_admin()
+  order by i.created_at desc
+  limit 200;
+$$;
+create or replace function public.revoke_app_invite(p_code text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_app_admin() then raise exception 'Only the people who run Fluentdat can take links back.'; end if;
+  delete from app_invites where code = lower(trim(coalesce(p_code, ''))) and used_by is null;
+end $$;
+
+-- block someone (you stop being friends too), or unblock them
+create or replace function public.block_user(p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  if p_user is null or p_user = auth.uid() then raise exception 'You can''t block yourself.'; end if;
+  if not exists (select 1 from profiles where id = p_user) then raise exception 'There''s nobody like that.'; end if;
+  insert into blocks (blocker, blocked) values (auth.uid(), p_user) on conflict do nothing;
+  delete from friends where (owner = auth.uid() and friend = p_user) or (owner = p_user and friend = auth.uid());
+end $$;
+create or replace function public.unblock_user(p_user uuid)
+returns void language sql security definer set search_path = public as $$
+  delete from blocks where blocker = auth.uid() and blocked = p_user;
+$$;
+
+-- friends you both have
+create or replace function public.mutual_friends(p_other uuid)
+returns table (id uuid, handle text, name text, color text, avatar text)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.handle, p.name, p.color, p.avatar from profiles p
+  where auth.uid() is not null and p.id <> auth.uid() and p.id <> p_other
+    and exists (select 1 from friends where owner = auth.uid() and friend = p.id) and exists (select 1 from friends where owner = p.id and friend = auth.uid())
+    and exists (select 1 from friends where owner = p_other and friend = p.id) and exists (select 1 from friends where owner = p.id and friend = p_other)
+  order by p.name
+  limit 100;
+$$;
+
+-- every report, newest first, with who sent it and who it's about (the people who run Fluentdat)
+create or replace function public.app_reports()
+returns table (id uuid, created_at timestamptz, reason text, excerpt text, resolved boolean, place uuid, message uuid,
+               reporter_handle text, reporter_name text, target_handle text, target_name text)
+language sql stable security definer set search_path = public as $$
+  select r.id, r.created_at, r.reason, r.excerpt, r.resolved, r.place, r.message, a.handle, a.name, t.handle, t.name
+  from reports r left join profiles a on a.id = r.reporter left join profiles t on t.id = r.target
+  where is_app_admin()
+  order by r.created_at desc
+  limit 200;
+$$;
+
 -- only signed-in people may call the actions (the helpers only ever answer about the caller, so they're harmless)
 revoke all on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
   public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid), public.create_group(uuid[], text),
-  public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat() from public, anon;
+  public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat(),
+  public.create_app_invite(text, int), public.app_invites_list(), public.revoke_app_invite(text), public.block_user(uuid),
+  public.unblock_user(uuid), public.mutual_friends(uuid), public.app_reports() from public, anon;
 grant execute on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
   public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid), public.create_group(uuid[], text),
-  public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat() to authenticated;
+  public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat(),
+  public.create_app_invite(text, int), public.app_invites_list(), public.revoke_app_invite(text), public.block_user(uuid),
+  public.unblock_user(uuid), public.mutual_friends(uuid), public.app_reports() to authenticated;
+-- a one-time link is opened signed out: checking it, making the account with it, and signing in with a username need no sign-in
+revoke all on function public.app_invite_check(text), public.redeem_app_invite(text, text, text, text), public.login_email(text) from public;
+grant execute on function public.app_invite_check(text), public.redeem_app_invite(text, text, text, text), public.login_email(text) to anon, authenticated;
 -- the rules call these helpers, so signed-in people need to be able to run them (granted here rather than left to the
 -- project's defaults, so it works however the project was set up)
 grant execute on function public.is_member(uuid), public.is_admin(uuid), public.is_owner(uuid), public.channel_server(uuid),
-  public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean) to authenticated;
+  public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean),
+  public.is_app_admin(), public.blocked_with(uuid), public.dm_blocked(uuid), public.expression_ok(text) to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
-  public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen to authenticated;
+  public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers to authenticated;
 revoke all on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
-  public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen from anon;
+  public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers from anon;
+
+-- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
+insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
 
 -- ===================== live updates =====================
 do $$ begin
@@ -791,6 +1096,8 @@ do $$ begin
     begin alter publication supabase_realtime add table public.dm_members; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.calls; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.reads; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.server_emoji; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.server_stickers; exception when duplicate_object then null; end;
   end if;
 end $$;
 
@@ -808,6 +1115,21 @@ do $$ begin
     execute 'create policy "fluentdat: delete your own files" on storage.objects for delete to authenticated using (bucket_id = ''files'' and split_part(name, ''/'', 3) = auth.uid()::text)';
   end if;
 exception when insufficient_privilege then raise notice 'Fluentdat: couldn''t set up file storage (%)', sqlerrm;
+end $$;
+-- server emoji and stickers: a public bucket (their pictures show to anyone, like Discord's), where only a server's admins
+-- add or remove its own (512 KB each)
+do $$ begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types) values ('expressions', 'expressions', true, 524288, array['image/png', 'image/apng', 'image/gif', 'image/webp', 'image/jpeg'])
+      on conflict (id) do update set public = true, file_size_limit = 524288, allowed_mime_types = excluded.allowed_mime_types;
+    execute 'drop policy if exists "fluentdat: see emoji and stickers" on storage.objects';
+    execute 'create policy "fluentdat: see emoji and stickers" on storage.objects for select to authenticated using (bucket_id = ''expressions'')';
+    execute 'drop policy if exists "fluentdat: server admins add emoji and stickers" on storage.objects';
+    execute 'create policy "fluentdat: server admins add emoji and stickers" on storage.objects for insert to authenticated with check (bucket_id = ''expressions'' and public.expression_ok(name))';
+    execute 'drop policy if exists "fluentdat: server admins remove emoji and stickers" on storage.objects';
+    execute 'create policy "fluentdat: server admins remove emoji and stickers" on storage.objects for delete to authenticated using (bucket_id = ''expressions'' and public.expression_ok(name))';
+  end if;
+exception when insufficient_privilege then raise notice 'Fluentdat: couldn''t set up emoji and sticker storage (%)', sqlerrm;
 end $$;
 
 -- ===================== calls (Supabase Realtime, private channels) =====================

@@ -13,8 +13,12 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Replies, @mentions, Discord's formatting (bold, italics, spoilers, code, quotes, headings, lists) and link previews for invites, GitHub and YouTube
 * Unread counts, pings, muting and notification settings for every server, channel and DM, and desktop notifications
 * A layout you can rearrange, themes you can edit, stickers you make, and profiles with banners and nameplates
+* An emoji and sticker picker, and servers' own emoji and stickers (GIFs too), with :name: suggestions as you type
+* Full profiles with mutual friends and servers, notes, blocking, ignoring and reports
+* Discord's message menu: forward, bookmark, reminders, mark unread, message links and speak message
+* Accounts with a username and a password (no email), from one-time links that only the people who run Fluentdat can make
 
-Signed out, everything stays in your browser. Signed in (Discord, GitHub or email) it is shared and live.
+Signed out, everything stays in your browser. Signed in (Discord, GitHub, email, or a username from a one-time link) it is shared and live.
 
 ## How it is built
 

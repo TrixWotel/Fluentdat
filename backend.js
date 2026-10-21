@@ -55,6 +55,22 @@ const fallback = {
   unban: async () => {},
   profileFull: async () => null,
   mutualServers: () => 0,
+  mutualServerList: () => [],
+  mutualFriends: async () => [],
+  friendSince: () => 0,
+  blockedIds: () => [],
+  findUser: async () => null,
+  changePassword: async () => { throw new Error('Sign in first.'); },
+  // blocking, reports, server emoji and stickers, and Fluentdat's own one-time links: these come with signing in
+  blocked: () => false,
+  block: async () => { throw new Error(SIGN_IN + 'block people.'); },
+  unblock: async () => {},
+  report: async () => { throw new Error(SIGN_IN + 'report something.'); },
+  isAppAdmin: () => false,
+  markUnread: () => {},
+  emojiAll: () => [], serverEmoji: () => [], serverStickers: () => [], expressionUrl: () => '',
+  addEmoji: async () => { throw new Error(SIGN_IN + 'add server emoji.'); },
+  addServerSticker: async () => { throw new Error(SIGN_IN + 'add server stickers.'); },
   person: () => null,
   myId: () => null,
   needsSetup: () => false,
@@ -111,6 +127,10 @@ export const Store = new Proxy({}, {
       case 'signInOAuth': return (provider) => SupabaseStore.signInOAuth(provider);
       case 'providers': return () => SupabaseStore.providers();
       case 'verifyEmailCode': return async (email, code) => { await SupabaseStore.verifyEmailCode(email, code); impl = SupabaseStore; emit(); return SupabaseStore.account(); };
+      // a username and password (an account made from a one-time link), or making one with that link
+      case 'signInUsername': return async (handle, pw) => { const a = await SupabaseStore.signInUsername(handle, pw); impl = SupabaseStore; emit(); return a; };
+      case 'redeemAppInvite': return async (code, handle, pw, name) => { const a = await SupabaseStore.redeemAppInvite(code, handle, pw, name); impl = SupabaseStore; emit(); return a; };
+      case 'appInviteCheck': return (code) => SupabaseStore.appInviteCheck(code);
       case 'signOut': return async () => {
         if (impl === SupabaseStore) await SupabaseStore.signOut(); else GitHubStore.signOut();
         impl = LocalStore; emit();

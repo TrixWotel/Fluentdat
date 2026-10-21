@@ -15,7 +15,7 @@ Fluentdat's **Continue with Discord**, **Continue with GitHub** and **email** si
 1. In the project, open **SQL Editor** and click **New query**.
 2. Paste all of [`setup.sql`](setup.sql) and click **Run**. It should finish with “Success. No rows returned”.
 
-This makes the tables and the rules that decide who can read what, the private **files** bucket for attachments and voice messages (Storage), and the rules for calls' private channels (Realtime). It's safe to run again after an update, because it replaces what it made before.
+This makes the tables and the rules that decide who can read what, the private **files** bucket for attachments and voice messages and the public **expressions** bucket for servers' emoji and stickers (Storage), and the rules for calls' private channels (Realtime). It's safe to run again after an update, because it replaces what it made before.
 
 ## 3. Tell Supabase where Fluentdat lives
 
@@ -76,6 +76,24 @@ Calls go straight between browsers, so Supabase only introduces them (through pr
 
 Some networks, like many schools and offices, block direct connections. There a call needs a **TURN server** to pass it along. If calls connect for some people but not others, get one (Metered, Twilio and Cloudflare have free tiers) and add it to `ICE_SERVERS` in [`config.js`](../config.js). Its login is visible to anyone, so use one meant for that.
 
+## 9. One-time links: accounts with a username and password
+
+Someone without Discord, GitHub or an email address you can reach can still join, from a link only you can make:
+
+1. Sign in to Fluentdat as **@trixwotel**. `setup.sql` makes that account one of the people who run Fluentdat, so run it again (step 2) if you made the account after running it.
+2. **User Settings → Invites & Reports → Create Link**, and send the link to one person. It works once.
+3. They open it, pick a username and a password, and they're in. Next time they use **Log in with a username and password**.
+
+There's no email to reset a forgotten password, so they should keep it safe (they can change it in **My Account**). The same page lists your links (take back one nobody has used) and anything people have reported.
+
+To let someone else make links too, run this in the SQL Editor with their @handle:
+
+```sql
+insert into public.app_admins (user_id) select id from public.profiles where handle = 'their_handle' on conflict do nothing;
+```
+
+Password sign-in uses Supabase's **Email** provider, which is on from the start: leave **Authentication → Sign In / Providers → Email** turned on.
+
 ## What the rules allow
 
 The database checks these itself, so they hold even if someone changes the app:
@@ -94,6 +112,9 @@ The database checks these itself, so they hold even if someone changes the app:
 12. Attachments and voice messages (up to 10 MB each) can only be fetched by the people in that DM, group or server, and only uploaded by their sender.
 13. A call's private channel can only be joined by the people in that DM or group, or the members of that voice channel's server.
 14. What you've read and what you've muted is yours alone.
+15. Blocking someone stops them messaging you, calling you, starting a DM or sending a friend request, and ends your friendship. Only you can see who you blocked.
+16. A server's admins add, rename and remove its emoji (up to 50) and stickers (up to 30). Everyone signed in can see and use them.
+17. Only the people who run Fluentdat make one-time links. Each link makes one account, then stops working. They also see what people report, and who reported it.
 
 ## If something goes wrong
 
@@ -103,3 +124,5 @@ The database checks these itself, so they hold even if someone changes the app:
 4. **Messages only show up after a reload**: in Supabase open **Realtime → Settings** and make sure **Allow public access** is on. Who can read what is still decided by the rules above.
 5. **A call says it couldn't join its private channel**, or **files say they need the newest setup.sql**: run `setup.sql` again (step 2).
 6. **Calls ring but never connect** for some people: their network needs a TURN server (step 8).
+7. **“Invite Invalid” cards, or no Emoji and Stickers pages in Server Settings**: run `setup.sql` again (step 2).
+8. **A username and password won't log in** although they're right: check that the Email provider is on (step 9).

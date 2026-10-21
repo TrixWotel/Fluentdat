@@ -1,13 +1,14 @@
 // Link previews in messages, like Discord's: a Fluentdat invite becomes the server's card (with Join), a GitHub
-// repository its card and picture, a YouTube video a thumbnail that plays right there. Only places that answer a web
-// page directly are asked (GitHub's API and YouTube's own oEmbed), and pictures only come from GitHub and YouTube,
-// so nobody can post a link just to see who looked at it. Answers are kept for a while (GitHub allows 60 asks an hour).
+// repository its card and picture, a YouTube video a thumbnail that plays right there, and a GitHub Pages site (like
+// Fluentio) its title and description. Only places that answer a web page directly are asked (GitHub's API, YouTube's
+// own oEmbed, and *.github.io pages, which GitHub serves to anyone and logs for nobody), and pictures only come from
+// those, so nobody can post a link just to see who looked at it. Answers are kept for a while (GitHub allows 60 asks an hour).
 import { el, icon } from './ui.js';
 
 const RESERVED = new Set(['about', 'apps', 'collections', 'contact', 'customer-stories', 'enterprise', 'events', 'explore', 'features', 'issues',
   'login', 'join', 'marketplace', 'new', 'notifications', 'orgs', 'organizations', 'pricing', 'pulls', 'search', 'security', 'settings', 'site',
   'sponsors', 'team', 'topics', 'trending', 'codespaces', 'copilot', 'readme', 'stars', 'watching']);
-// what kind of link this is: { kind: 'invite', code } | { kind: 'github', owner, repo } | { kind: 'youtube', id } | null
+// what kind of link this is: { kind: 'invite', code } | { kind: 'github', owner, repo } | { kind: 'youtube', id } | { kind: 'site', url } | null
 export function kindOf(url) {
   let u; try { u = new URL(url); } catch { return null; }
   const inv = (u.hash || '').match(/invite=([0-9a-z]{4,32})/i);
@@ -21,6 +22,7 @@ export function kindOf(url) {
     const id = host === 'youtu.be' ? u.pathname.slice(1, 12) : u.searchParams.get('v') || (u.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/) || [])[1];
     if (id && /^[\w-]{11}$/.test(id)) return { kind: 'youtube', id };
   }
+  if (u.protocol === 'https:' && /^[a-z0-9-]+\.github\.io$/.test(u.hostname)) return { kind: 'site', url: u.origin + u.pathname + u.search };
   return null;
 }
 
@@ -44,6 +46,21 @@ const github = (owner, repo) => remembered(`gh:${owner}/${repo}`.toLowerCase(), 
 const youtube = (id) => remembered('yt:' + id, async () => {
   const j = await getJSON(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}`);
   return { title: j.title || 'YouTube', author: j.author_name || '', authorUrl: /^https:\/\/www\.youtube\.com\//.test(j.author_url || '') ? j.author_url : '' };
+});
+// a GitHub Pages site's own description of itself (its title, description, colour, and a picture on the same site)
+const site = (url) => remembered('site:' + url, async () => {
+  const stop = new AbortController(), t = setTimeout(() => stop.abort(), 6000);
+  try {
+    const r = await fetch(url, { mode: 'cors', credentials: 'omit', redirect: 'follow', signal: stop.signal, headers: { Accept: 'text/html' } });
+    if (!r.ok || !/text\/html/i.test(r.headers.get('content-type') || '')) return null;
+    const doc = new DOMParser().parseFromString((await r.text()).slice(0, 300000), 'text/html');      // (an inert copy: nothing in it runs or loads)
+    const meta = (k) => String((doc.querySelector(`meta[property="${k}"], meta[name="${k}"]`) || {}).content || '').trim();
+    const at = r.url || url, host = new URL(at).hostname;
+    let image = ''; try { const iu = new URL(meta('og:image'), at); if (iu.protocol === 'https:' && iu.hostname === host) image = iu.href; } catch {}
+    const color = meta('theme-color');
+    const title = meta('og:title') || String((doc.querySelector('title') || {}).textContent || '').trim();
+    return { site: meta('og:site_name') || host, title, description: meta('og:description') || meta('description'), color: /^#[0-9a-f]{6}$/i.test(color) ? color : '', image };
+  } finally { clearTimeout(t); }
 });
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 const ext = (href, text, cls = '') => el('a', { className: cls, href, target: '_blank', rel: 'noopener noreferrer nofollow' }, text);
@@ -70,6 +87,15 @@ export function embed(url, opts = {}) {
     fill(el('div', { className: 'embed yt' }, el('div', { className: 'em-provider' }, 'YouTube'),
       y && y.author ? (y.authorUrl ? ext(y.authorUrl, y.author, 'em-author') : el('div', { className: 'em-author' }, y.author)) : null,
       ext(watch, (y && y.title) || 'YouTube video', 'em-title'), thumb));
+  });
+  else if (k.kind === 'site') site(k.url).then((s) => {
+    if (!s || !(s.title || s.description)) return fill(null);
+    const card = el('div', { className: 'embed site' }, el('div', { className: 'em-provider' }, s.site),
+      s.title ? ext(k.url, cut(s.title, 120), 'em-title') : null,
+      s.description ? el('div', { className: 'em-desc' }, cut(s.description, 350)) : null,
+      s.image ? el('a', { className: 'em-img', href: k.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, el('img', { src: s.image, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' })) : null);
+    if (s.color) card.style.borderLeftColor = s.color;
+    fill(card);
   });
   else if (k.kind === 'invite') {
     box.append(el('div', { className: 'embed invite loading' }, el('div', { className: 'inv-h' }, 'Loading invite…')));

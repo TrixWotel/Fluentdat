@@ -6,6 +6,8 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const MENTION = new RegExp(`<@(${UUID})>`, 'gi');
 const CHANNEL = new RegExp(`<#(${UUID})>`, 'gi');
+// a server's own emoji: <:name:id>, or <a:name:id> for a moving one (a GIF)
+const CUSTOM = new RegExp(`<(a?):([A-Za-z0-9_]{2,32}):(${UUID})>`, 'gi');
 const EVERYONE = /(^|[^\w@])@(everyone|here)(?![\w])/g;
 // a web address in text: up to the first space, without the full stop or bracket that ends the sentence around it
 const BARE = /\bhttps?:\/\/[^\s<>"`]+/gi;
@@ -24,10 +26,11 @@ export function links(text) {
 }
 export const mentionIds = (text) => [...String(text || '').matchAll(MENTION)].map((m) => m[1].toLowerCase());
 export const mentionsEveryone = (text) => { EVERYONE.lastIndex = 0; return EVERYONE.test(String(text || '')); };
-// a message that's just a few emoji shows them big
+// a message that's just a few emoji (up to 30, a server's own too) shows them big
 const ONLY_EMOJI = /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|‍|️|\s)+$/u;
 
-// text → HTML. ctx.who(id) → { name } (or nothing for someone unknown); ctx.chan(id) → { name } for <#channel> links
+// text → HTML. ctx.who(id) → { name } (or nothing for someone unknown); ctx.chan(id) → { name } for <#channel> links;
+// ctx.emoji(id) → { url } for a server's own emoji (one that's gone shows its :name:)
 export function render(text, ctx = {}) {
   const src = String(text || '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n');
   const keep = [];                                   // finished pieces of HTML, held out of reach of the formatting below
@@ -69,6 +72,8 @@ export function render(text, ctx = {}) {
   // one line's worth: links and mentions are held first (so a _ or * in a link stays a link), then bold and the rest
   function inline(t) {
     t = t.replace(/`([^`\n]+)`/g, (_, code) => hold(`<code>${esc(code)}</code>`));
+    t = t.replace(CUSTOM, (_, a, name, id) => { const e = ctx.emoji && ctx.emoji(id.toLowerCase());
+      return hold(e && e.url ? `<img class="emoji custom" src="${esc(e.url)}" alt=":${esc(name)}:" title=":${esc(name)}:" draggable="false">` : `<span class="emoji-gone" title="This emoji isn’t there any more">:${esc(name)}:</span>`); });
     t = t.replace(MASKED, (_, label, url) => hold(`<a class="link" href="${esc(url)}" target="_blank" rel="noopener noreferrer nofollow" title="${esc(url)}">${esc(label)}</a>`));
     t = t.replace(BARE, (raw) => { const url = trimUrl(raw); return hold(`<a class="link" href="${esc(url)}" target="_blank" rel="noopener noreferrer nofollow">${esc(url)}</a>`) + raw.slice(url.length); });
     t = t.replace(MENTION, (_, id) => { const who = ctx.who && ctx.who(id.toLowerCase()); return hold(`<span class="mention" data-uid="${esc(id.toLowerCase())}">@${esc(who ? who.name : 'unknown-user')}</span>`); });
@@ -85,10 +90,16 @@ export function render(text, ctx = {}) {
       .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '<s>$1</s>');
   }
 }
-export const jumbo = (text) => { const t = String(text || '').trim(); return !!t && t.length <= 60 && ONLY_EMOJI.test(t) && /\p{Extended_Pictographic}/u.test(t); };
+export const jumbo = (text) => {
+  const t = String(text || '').trim();
+  if (!t || t.length > 1500) return false;
+  const rest = t.replace(CUSTOM, ''), n = (t.match(CUSTOM) || []).length + (rest.match(/\p{Extended_Pictographic}/gu) || []).length;
+  return n > 0 && n <= 30 && (!rest.trim() || ONLY_EMOJI.test(rest));
+};
 // a message as a line of plain text (notifications, reply previews): the formatting marks and mentions made readable
 export function plain(text, ctx = {}) {
   return String(text || '')
+    .replace(CUSTOM, (_, a, name) => ':' + name + ':')
     .replace(MENTION, (_, id) => '@' + ((ctx.who && ctx.who(id.toLowerCase())) || { name: 'unknown-user' }).name)
     .replace(CHANNEL, (_, id) => '#' + ((ctx.chan && ctx.chan(id.toLowerCase())) || { name: 'unknown' }).name)
     .replace(MASKED, '$1')

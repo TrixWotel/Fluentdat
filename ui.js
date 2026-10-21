@@ -30,6 +30,14 @@ export const ICON = {
   id: '<rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="12" r="2.5"/><path d="M14 10h5M14 14h5"/>',
   palette: '<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1 0 1.6-.8 1.6-1.6 0-.4-.2-.8-.5-1.1-.3-.3-.5-.7-.5-1.1 0-.9.7-1.6 1.6-1.6H16c3.3 0 6-2.7 6-6 0-4.9-4.5-9.6-10-9.6z"/><circle cx="7.5" cy="11" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="16.5" cy="11" r="1.3" fill="currentColor" stroke="none"/>',
   dot: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>', chevD: '<path d="M6 9l6 6 6-6"/>', chevR: '<path d="M9 18l6-6-6-6"/>',
+  forward: '<polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>',
+  bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/>',
+  unread: '<path d="M11.7 3H5a2 2 0 0 0-2 2v16l4-4h12a2 2 0 0 0 2-2v-2.7"/><circle cx="18" cy="6" r="3"/>',
+  share: '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" x2="12" y1="2" y2="15"/>',
+  userX: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" x2="22" y1="8" y2="13"/><line x1="22" x2="17" y1="8" y2="13"/>',
+  smilePlus: '<path d="M22 11v1a10 10 0 1 1-9-10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/><path d="M16 5h6"/><path d="M19 2v6"/>',
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
   bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
@@ -192,27 +200,44 @@ export function confirmBox({ title, text = '', ok = 'OK', danger = false, type =
 
 // ---------- right-click menus ----------
 // items: { label, icon, hint, color, danger, disabled, check (true/false shows a tick box), action, sub: () => items } or '-'
-let openMenu = null;
-export function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
-export function menu(items, x, y) {
-  closeMenu();
-  const m = el('div', { className: 'ctx', role: 'menu' });
+// A sub-menu opens beside its item when you point at it (or tap it), as on Discord.
+let openMenu = null, openSub = null;
+function closeSub() { if (openSub) { openSub.remove(); openSub = null; } if (openMenu) for (const b of openMenu.querySelectorAll('.has-sub.open')) b.classList.remove('open'); }
+export function closeMenu() { closeSub(); if (openMenu) { openMenu.remove(); openMenu = null; } }
+const inMenu = (t) => (openMenu && openMenu.contains(t)) || (openSub && openSub.contains(t));
+function menuBox(items, isSub) {
+  const m = el('div', { className: 'ctx' + (isSub ? ' ctx-sub' : ''), role: 'menu' });
   const list = items.filter(Boolean);
   list.forEach((it, i) => {
     if (it === '-') { if (i > 0 && i < list.length - 1 && list[i - 1] !== '-') m.append(el('hr')); return; }
     const right = it.check != null ? el('span', { className: 'tick' + (it.check ? ' on' : '') }, it.check ? icon('check', 13) : null)
       : it.sub ? icon('chevR', 15) : it.icon ? icon(it.icon, 16) : null;
-    const b = el('button', { className: it.danger ? 'danger' : '', role: 'menuitem', disabled: !!it.disabled },
+    const b = el('button', { className: (it.danger ? 'danger' : '') + (it.sub ? ' has-sub' : ''), role: 'menuitem', disabled: !!it.disabled },
       it.color ? el('span', { className: 'dotc', style: `background:${it.color}` }) : null,
       el('span', { className: 'lbl' }, it.label, it.hint ? el('small', {}, it.hint) : null), right);
+    const openHere = () => {
+      if (b.classList.contains('open')) return;
+      closeSub();
+      const s = menuBox(it.sub(), true); document.body.append(s);
+      const r = b.getBoundingClientRect(), w = s.offsetWidth, h = s.offsetHeight;
+      s.style.left = (r.right + 6 + w <= innerWidth - 8 ? r.right + 6 : Math.max(8, r.left - w - 6)) + 'px';
+      s.style.top = Math.max(8, Math.min(r.top - 7, innerHeight - h - 8)) + 'px';
+      openSub = s; b.classList.add('open');
+    };
+    if (!isSub) b.onmouseenter = () => { if (it.sub && !it.disabled) openHere(); else closeSub(); };
     b.onclick = (e) => {
       e.stopPropagation();
-      if (it.sub) { const r = b.getBoundingClientRect(); menu([{ label: '‹ ' + it.label, action: () => menu(items, x, y), keep: true }, '-', ...it.sub()], r.left, r.top); return; }
+      if (it.sub) return openHere();
       if (!it.keep) closeMenu();
       if (it.action) it.action();
     };
     m.append(b);
   });
+  return m;
+}
+export function menu(items, x, y) {
+  closeMenu();
+  const m = menuBox(items, false);
   document.body.append(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
@@ -220,8 +245,8 @@ export function menu(items, x, y) {
   openMenu = m;
   return m;
 }
-document.addEventListener('mousedown', (e) => { if (openMenu && !openMenu.contains(e.target)) closeMenu(); }, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openMenu) { e.stopPropagation(); closeMenu(); } }, true);
+document.addEventListener('mousedown', (e) => { if (openMenu && !inMenu(e.target)) closeMenu(); }, true);
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && openMenu) { e.stopPropagation(); closeMenu(); } }, true);      // (before a dialog under it)
 addEventListener('resize', closeMenu);
 addEventListener('blur', closeMenu);
-document.addEventListener('scroll', (e) => { if (openMenu && !openMenu.contains(e.target)) closeMenu(); }, true);
+document.addEventListener('scroll', (e) => { if (openMenu && !inMenu(e.target)) closeMenu(); }, true);
