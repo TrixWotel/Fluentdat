@@ -493,9 +493,10 @@
     .pv-desc { font-size: .86rem; margin-top: 8px; white-space: pre-wrap; color: var(--text); }
     .pv-row { background: var(--side); border-radius: 10px; cursor: default; }
     .grads { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; max-width: 460px; }
-    .grad { aspect-ratio: 16 / 10; border-radius: 9px; border: 2px solid transparent; display: grid; place-items: center; color: var(--muted); background: var(--input); overflow: hidden; padding: 0; }
-    .grad.on { border-color: var(--bright); box-shadow: 0 0 0 2px var(--accent); }
-    .grad:hover { filter: brightness(1.1); }
+    .grad { aspect-ratio: 16 / 10; border-radius: 10px; border: 0; display: grid; place-items: center; color: var(--muted); background: var(--input); box-shadow: inset 0 0 0 1px var(--edge-soft); overflow: hidden; padding: 0; transition: transform .15s cubic-bezier(.2, .9, .3, 1.5), box-shadow .15s; }
+    .grad.flat { box-shadow: none; }
+    .grad.on { box-shadow: 0 0 0 2px var(--side), 0 0 0 4px var(--bright); }
+    .grad:hover { transform: scale(1.06); color: var(--text); }
     .grad.up img { width: 100%; height: 100%; object-fit: cover; }
     .sub-h { margin: 18px 0 8px; font-size: .8rem; color: var(--bright); }
     .sx-list .it .sw { padding: 0; display: block; background: var(--input); border-radius: 13px; } .sx-list .it .sw.on { background: var(--accent); }
@@ -883,12 +884,12 @@
     .msg:not(.cont):not(.system) { margin-top: 1.0625rem; }
     .msgs > .msg:first-child, .msgs > .day + .msg, .msgs > .newline + .msg, .msgs > .start + .msg { margin-top: .5rem; }
     .msg.cont { padding-top: 2px; padding-bottom: 2px; }
-    .msg .nm { font-weight: 500; font-size: 1rem; line-height: 1.375rem; }
+    .msg .nm { font-weight: 500; font-size: 1em; line-height: 1.375; }
     .msg .meta { gap: 0; align-items: baseline; }
-    .msg .meta .when { margin-left: .5rem; font-size: .75rem; line-height: 1.375rem; }
+    .msg .meta .when { margin-left: .5em; font-size: .75em; line-height: 1.833; }
     .msg .meta .tag { margin-left: .3rem; align-self: center; }
-    .msg .text { line-height: 1.375rem; }
-    .msg > .gut { grid-column: 1; grid-row: 2; font-size: .6875rem; line-height: 1.375rem; color: var(--muted); text-align: right; opacity: 0; user-select: none; white-space: nowrap; overflow: hidden; }
+    .msg .text { line-height: 1.375; }
+    .msg > .gut { grid-column: 1; grid-row: 2; font-size: .6875em; line-height: 2; color: var(--muted); text-align: right; opacity: 0; user-select: none; white-space: nowrap; overflow: hidden; }
     .msg:hover > .gut { opacity: 1; }
     :root[data-timestamps="off"] .msg > .gut { visibility: hidden; }
     :root[data-avatars="off"] .msg > .gut { display: none; }
@@ -1346,7 +1347,7 @@
     .sx-backdrop.closing { animation: scrim-out .18s ease-in forwards; pointer-events: none; } .sx-backdrop.closing .sx { animation: dlg-out .18s ease-in forwards; }
     .sx-inner.enter { animation: section-in .24s cubic-bezier(.2, .8, .2, 1); }
     @keyframes section-in { from { opacity: 0; transform: translateX(10px); } }
-    .sx-nav button { transition: background-color .15s, color .15s, padding-left .15s; } .sx-nav button:hover { padding-left: 14px; }
+    .sx-nav button { transition: background-color .15s, color .15s, padding-left .18s cubic-bezier(.2, .8, .2, 1); } .sx-nav button:hover, .sx-nav button.on { padding-left: 16px; }
     #toast:not([hidden]) { animation: toast-up .26s cubic-bezier(.2, .9, .3, 1.25); }
     @keyframes toast-up { from { opacity: 0; transform: translate(-50%, 14px) scale(.96); } }
     .row2.faded { opacity: .5; }
@@ -1501,25 +1502,25 @@
   </div>
   <div id="ring" hidden></div>
   <script type="importmap">{ "imports": {
-    "./anim.js": "./anim.js?v=457cbced",
-    "./app.js": "./app.js?v=457cbced",
-    "./backend.js": "./backend.js?v=457cbced",
-    "./calls.js": "./calls.js?v=457cbced",
-    "./color.js": "./color.js?v=457cbced",
-    "./config.js": "./config.js?v=457cbced",
-    "./embeds.js": "./embeds.js?v=457cbced",
-    "./emoji-data.js": "./emoji-data.js?v=457cbced",
-    "./format.js": "./format.js?v=457cbced",
-    "./github.js": "./github.js?v=457cbced",
-    "./logo.js": "./logo.js?v=457cbced",
-    "./media.js": "./media.js?v=457cbced",
-    "./namestyle.js": "./namestyle.js?v=457cbced",
-    "./picker.js": "./picker.js?v=457cbced",
-    "./store.js": "./store.js?v=457cbced",
-    "./supabase.js": "./supabase.js?v=457cbced",
-    "./tags.js": "./tags.js?v=457cbced",
-    "./ui.js": "./ui.js?v=457cbced"
+    "./anim.js": "./anim.js?v=9ff37d1c",
+    "./app.js": "./app.js?v=9ff37d1c",
+    "./backend.js": "./backend.js?v=9ff37d1c",
+    "./calls.js": "./calls.js?v=9ff37d1c",
+    "./color.js": "./color.js?v=9ff37d1c",
+    "./config.js": "./config.js?v=9ff37d1c",
+    "./embeds.js": "./embeds.js?v=9ff37d1c",
+    "./emoji-data.js": "./emoji-data.js?v=9ff37d1c",
+    "./format.js": "./format.js?v=9ff37d1c",
+    "./github.js": "./github.js?v=9ff37d1c",
+    "./logo.js": "./logo.js?v=9ff37d1c",
+    "./media.js": "./media.js?v=9ff37d1c",
+    "./namestyle.js": "./namestyle.js?v=9ff37d1c",
+    "./picker.js": "./picker.js?v=9ff37d1c",
+    "./store.js": "./store.js?v=9ff37d1c",
+    "./supabase.js": "./supabase.js?v=9ff37d1c",
+    "./tags.js": "./tags.js?v=9ff37d1c",
+    "./ui.js": "./ui.js?v=9ff37d1c"
   } }</script>
-  <script type="module" src="app.js?v=457cbced"></script>
+  <script type="module" src="app.js?v=9ff37d1c"></script>
 </body>
 </html>

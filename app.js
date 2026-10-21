@@ -2884,26 +2884,30 @@ function overlay(navItems, firstSection, render) {
   }
   const esc = (e) => { if (e.key === 'Escape') shut(); };
   document.addEventListener('keydown', esc);
+  // (the list is made once: clicking an item doesn't replace it under the pointer, so its slide doesn't start over)
+  const navBtns = new Map(), heads = [];
+  let meBox = null;
+  for (const item of navItems) {
+    if (item.head) { const h = el('h4', {}, typeof item.head === 'function' ? item.head() : item.head); if (typeof item.head === 'function') heads.push([h, item.head]); nav.append(h); continue; }
+    if (item.hr) { nav.append(el('hr')); continue; }
+    if (item.profile) { meBox = el('div', { className: 'sx-me' }); nav.append(meBox); continue; }
+    if (item.search) {
+      const q = el('input', { type: 'text', placeholder: 'Search settings', value: navQuery,
+        style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);font:inherit;margin-bottom:6px' });
+      q.oninput = () => { navQuery = q.value.toLowerCase(); for (const b of nav.querySelectorAll('button')) b.hidden = !!navQuery && !b.textContent.toLowerCase().includes(navQuery); };
+      nav.append(q); continue;
+    }
+    const b = el('button', { className: item.cls || '', onclick: () => { if (item.action) return item.action(shut); if (section === item.id) return; section = item.id; draw(); } });
+    if (item.icon) b.append(icon(item.icon, 17));
+    b.append(el('span', {}, item.label));
+    navBtns.set(item.id, b); nav.append(b);
+  }
   function draw() {
-    nav.replaceChildren();
-    for (const item of navItems) {
-      if (item.head) { nav.append(el('h4', {}, typeof item.head === 'function' ? item.head() : item.head)); continue; }
-      if (item.hr) { nav.append(el('hr')); continue; }
-      if (item.profile) {
-        const edit = el('span', { className: 'sx-edit', onclick: () => { shut(); openProfileEditor(); } }, 'Edit Profile', icon('edit', 13));
-        nav.append(el('div', { className: 'sx-me' }, avatarEl(asMember(), { size: 42 }), el('div', { className: 'who' }, el('b', {}, me.name), edit)));
-        continue;
-      }
-      if (item.search) {
-        const q = el('input', { type: 'text', placeholder: 'Search settings', value: navQuery,
-          style: 'width:100%;background:var(--input);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);font:inherit;margin-bottom:6px' });
-        q.oninput = () => { navQuery = q.value.toLowerCase(); for (const b of nav.querySelectorAll('button')) b.hidden = !!navQuery && !b.textContent.toLowerCase().includes(navQuery); q.focus(); };
-        nav.append(q); continue;
-      }
-      const b = el('button', { className: (item.id === section ? 'on ' : '') + (item.cls || ''), onclick: () => { if (item.action) return item.action(shut); section = item.id; draw(); } });
-      if (item.icon) b.append(icon(item.icon, 17));
-      b.append(el('span', {}, item.label));
-      nav.append(b);
+    for (const [id, b] of navBtns) b.classList.toggle('on', id === section);
+    for (const [h, f] of heads) h.textContent = f();
+    if (meBox) {
+      const edit = el('span', { className: 'sx-edit', onclick: () => { shut(); openProfileEditor(); } }, 'Edit Profile', icon('edit', 13));
+      meBox.replaceChildren(avatarEl(asMember(), { size: 42 }), el('div', { className: 'who' }, styledName(el('b', {}, me.name), asMember()), edit));
     }
     const inner = el('div', { className: 'sx-inner' + (section !== shownSection ? ' enter' : '') }, ...[render(section, draw, shut)].flat().filter(Boolean));
     shownSection = section; body.replaceChildren(inner);
@@ -3141,14 +3145,18 @@ const pushProfile = () => {
 };
 
 // choose a banner or nameplate: nothing, one of the gradients, or your own picture (made small enough to keep)
+// plain colours to start a banner or nameplate from (flat, like the colour buttons elsewhere)
+const FLAT = [['#5865f2', 'Blurple'], ['#eb459e', 'Fuchsia'], ['#ed4245', 'Red'], ['#f57731', 'Orange'], ['#f0b232', 'Yellow'],
+  ['#23a55a', 'Green'], ['#1abc9c', 'Teal'], ['#00a8fc', 'Sky'], ['#9b59b6', 'Purple'], ['#2b2d31', 'Charcoal']];
 function picturePicker(value, onPick, { w = 960, h = 540, label = 'Upload a picture' } = {}) {
   const grid = el('div', { className: 'grads' });
   const isColor = (v) => /^#[0-9a-f]{6}(,#[0-9a-f]{6})?$/i.test(v || '');
   // any colour: the tile picks it; then "Fade to" (a second colour) appears beside the tiles
   const colorTile = (v) => {
     const [a, b] = isColor(v) ? v.split(',') : ['', ''];
-    const t = el('button', { className: 'grad color' + (isColor(v) ? ' on' : ''), title: 'Any colour' });
-    if (a) t.style.background = b ? `linear-gradient(135deg, ${a}, ${b})` : a; else t.append(icon('brush', 18));
+    const custom = isColor(v) && (!!b || !FLAT.some(([c]) => c === a.toLowerCase()));        // (a preset lights up its own tile instead)
+    const t = el('button', { className: 'grad color' + (custom ? ' on' : ''), title: 'Any colour' });
+    if (custom) t.style.background = b ? `linear-gradient(135deg, ${a}, ${b})` : a; else t.append(icon('brush', 18));
     t.onclick = (e) => { e.stopPropagation(); openColor({ anchor: t, value: a || '#5865f2', title: 'Colour',
       onInput: (c) => { const nv = b ? `${c},${b}` : c; t.style.background = b ? `linear-gradient(135deg, ${c}, ${b})` : c; onPick(nv); },
       onDone: (c) => { const nv = b ? `${c},${b}` : c; draw(nv); onPick(nv); } }); };
@@ -3162,7 +3170,7 @@ function picturePicker(value, onPick, { w = 960, h = 540, label = 'Upload a pict
   };
   const draw = (v) => { grid.replaceChildren(colorTile(v),
     el('button', { className: 'grad none' + (!v ? ' on' : ''), title: 'None', onclick: () => { draw(''); onPick(''); } }, icon('ban', 18)),
-    ...GRADS.map((g, i) => { const b = el('button', { className: 'grad' + (v === 'g:' + i ? ' on' : ''), title: 'Gradient ' + (i + 1), onclick: () => { draw('g:' + i); onPick('g:' + i); } }); b.style.background = g; return b; }),
+    ...FLAT.map(([c, name]) => { const b = el('button', { className: 'grad flat' + (String(v).toLowerCase() === c ? ' on' : ''), title: name, onclick: () => { draw(c); onPick(c); } }); b.style.background = c; return b; }),
     el('button', { className: 'grad up' + (v && v.startsWith('data:') ? ' on' : ''), title: label, onclick: () => pickFile(async (f) => {
       try { const d = await shrink(f, w, h, w > 600 ? 380000 : 190000); draw(d); onPick(d); } catch (e) { toast(String(e.message || e)); }
     }) }, v && v.startsWith('data:') ? el('img', { src: safeImg(v), alt: '' }) : icon('image', 18))); const f = fadeRow(v); if (f) grid.append(f); };
