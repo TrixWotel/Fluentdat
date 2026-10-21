@@ -17,6 +17,8 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Full profiles with mutual friends and servers, notes, blocking, ignoring and reports
 * Discord's message menu: forward, bookmark, reminders, mark unread, message links and speak message
 * Accounts with a username and a password (no email), from one-time links that only the people who run Fluentdat can make
+* Reactions, server tags (up to four letters and a badge, worn beside your name), profile themes in any colours, and display name styles (14 fonts, 8 effects)
+* A profile editor of its own with a live preview, 31 looks for the logo (themes can bring their own), and animations everywhere, each with its own switch
 
 Signed out, everything stays in your browser. Signed in (Discord, GitHub, email, or a username from a one-time link) it is shared and live.
 

@@ -115,6 +115,9 @@ The database checks these itself, so they hold even if someone changes the app:
 15. Blocking someone stops them messaging you, calling you, starting a DM or sending a friend request, and ends your friendship. Only you can see who you blocked.
 16. A server's admins add, rename and remove its emoji (up to 50) and stickers (up to 30). Everyone signed in can see and use them.
 17. Only the people who run Fluentdat make one-time links. Each link makes one account, then stops working. They also see what people report, and who reported it.
+18. Anyone who can read a message can react to it (up to 20 different emoji a message); only your own reactions come back off.
+19. A server's admins give it a tag. Its members can wear it on their profile; nobody can wear a tag from a server they aren't in, and leaving takes it off.
+20. Profile themes, name styles, banners and nameplates only take colours, pictures and names from Fluentdat's own lists, never web addresses.
 
 ## If something goes wrong
 

@@ -13,7 +13,8 @@ const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
 
-let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, active = null, following = false, providersOn = null, beat = 0;
+let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
+let styled = true;                  // (false on an older database: no profile themes, name styles or server tags there yet)
 let cache = blank();
 const pending = new Map();          // messages you've sent that the server hasn't confirmed yet (kept through reloads)
 const asking = new Set();           // profiles being fetched
@@ -26,7 +27,7 @@ const listeners = new Set(), messageListeners = new Set(), callListeners = new S
 function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
-    emoji: [], stickers: [], blocks: [], admin: false };
+    emoji: [], stickers: [], blocks: [], admin: false, reacts: {} };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -60,7 +61,10 @@ const myStatus = () => (cache.me && cache.me.status) || 'online';
 function toUser(p) {
   if (!p) return { name: 'Someone', color: '#8a8f98' };
   return { id: p.id, login: p.handle, name: p.name || p.handle, color: p.color, avatar: p.avatar, pronouns: p.pronouns, about: p.about,
-    plate: p.plate || '', since: p.created_at ? Date.parse(p.created_at) : 0, status: p.id === myId() ? myStatus() : online[p.id] || 'offline' };
+    plate: p.plate || '', since: p.created_at ? Date.parse(p.created_at) : 0, status: p.id === myId() ? myStatus() : online[p.id] || 'offline',
+    theme: p.theme1 || p.theme2 ? [p.theme1 || '', p.theme2 || ''] : null,
+    style: p.name_font || p.name_effect || p.name_color1 ? { font: p.name_font || '', effect: p.name_effect || '', c1: p.name_color1 || '', c2: p.name_color2 || '' } : null,
+    tag: p.tag && p.tag_server ? { text: p.tag, badge: p.tag_badge || '', color: p.tag_color || '', server: p.tag_server } : null };
 }
 const userOf = (id) => ({ ...toUser(cache.profiles[id]), id });
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
@@ -68,6 +72,7 @@ const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text
   files: Array.isArray(r.files) ? r.files : null, mine: r.author === myId(), sending: pending.has(r.id), progress: r._progress,
   user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : userOf(r.author) });
 const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, owner: r.owner, banner: r.banner || '', description: r.description || '',
+  tag: r.tag || '', tagBadge: r.tag_badge || '', tagColor: r.tag_color || '',
   category: r.category || '', public: !!r.public, since: Date.parse(r.created_at) || 0 });
 const toRole = (r) => ({ id: r.id, server: r.server_id, name: r.name, color: r.color, hoist: r.hoist, position: r.position });
 // someone's roles in a server, top one first
@@ -89,13 +94,20 @@ const toEmoji = (r) => ({ id: r.id, server: r.server_id, name: r.name, animated:
 const toSticker = (r) => ({ id: r.id, server: r.server_id, name: r.name, emoji: r.emoji || '', description: r.description || '', animated: !!r.animated, path: r.path, url: expressionUrl(r.path), by: r.created_by });
 
 // ---------- loading ----------
+const PROFILE_COLS = 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at';
+const PROFILE_STYLE = ',theme1,theme2,name_font,name_effect,name_color1,name_color2,tag_server,tag,tag_badge,tag_color';
+async function profilesQ(q) {
+  if (!styled) return q('profiles', PROFILE_COLS);
+  try { return await q('profiles', PROFILE_COLS + PROFILE_STYLE); }
+  catch (e) { if (!missing(e)) throw e; styled = false; state.needsSetup = true; return q('profiles', PROFILE_COLS); }
+}
 async function loadAll() {
   if (!session) return;
   state.loading = true; state.error = ''; emit();
   try {
     const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
     const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin] = await Promise.all([
-      q('profiles', 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at'),
+      profilesQ(q),
       sb.from('profiles').select('*').eq('id', myId()).then(must),
       q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles'),
       soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null),
@@ -133,6 +145,7 @@ async function loadMessages(a) {
   for (const p of pending.values()) if (p[col] === a.id && !rows.some((m) => m.id === p.id)) rows.push(p);
   (dm ? cache.dms : cache.msgs)[a.id] = rows;
   if (dm) cache.calls[a.id] = (await soft(sb.from('calls').select('*').eq('dm_id', a.id).order('created_at', { ascending: false }).limit(50).then(must), [])).reverse();
+  cache.reacts[a.id] = await soft(sb.from('reactions').select('message_id,place,user_id,emoji,active,created_at').eq('place', a.id).eq('active', true).then(must), []);
   cache.loaded.add(a.id);
 }
 // someone new spoke (they've only just joined): find out who they are
@@ -182,6 +195,16 @@ function watchMessages() {
       cache.reads[row.place] = row;
       const u = cache.unread[row.place];
       if (u && Date.parse(row.read_at) >= u.last) { u.unread = 0; u.mentions = 0; }
+      emit();
+    })
+    .subscribe();
+  reacts = sb.channel('fluentdat-reactions')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, ({ new: row }) => {
+      if (!row || !row.place) return;
+      const list = cache.reacts[row.place]; if (!list) return;          // (a conversation that isn't open learns them when it opens)
+      const i = list.findIndex((r) => r.message_id === row.message_id && r.user_id === row.user_id && r.emoji === row.emoji);
+      if (i >= 0) list[i] = row; else list.push(row);
+      if (row.user_id && !row.bot) meet(row.user_id);
       emit();
     })
     .subscribe();
@@ -445,8 +468,8 @@ export const SupabaseStore = {
     return found && found[0] ? { ...toUser(found[0]), id: found[0].id } : null;
   },
   async signOut() {
-    for (const ch of [feed, extras, structure, structure2, structure3, ...rooms.values()]) if (ch) sb.removeChannel(ch);
-    feed = extras = structure = structure2 = structure3 = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
+    for (const ch of [feed, extras, structure, structure2, structure3, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
+    feed = extras = structure = structure2 = structure3 = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
     if (sb) await sb.auth.signOut({ scope: 'local' });   // (just this browser — your phone stays signed in)
     session = null; cache = blank(); active = null; pending.clear(); emit();
   },
@@ -487,6 +510,7 @@ export const SupabaseStore = {
   updateServer(id, patch) {
     const s = SupabaseStore.server(id); if (s) Object.assign(s, patch); emit();
     const row = {}; for (const k of ['name', 'icon', 'img', 'banner', 'description', 'category', 'public']) if (k in patch) row[k] = patch[k];
+    for (const [k, col] of [['tag', 'tag'], ['tagBadge', 'tag_badge'], ['tagColor', 'tag_color']]) if (k in patch) row[col] = patch[k];
     push(sb.from('servers').update(row).eq('id', id).select('id').then(took('Only this server’s admins can change it.')), loadAll);
   },
   updateChannel(id, patch) {
@@ -751,6 +775,40 @@ export const SupabaseStore = {
     return rows.length === 2 ? Math.max(...rows.map((f) => Date.parse(f.created_at) || 0)) : 0;
   },
 
+  // ---- reactions: under each message, which emoji, how many, whether one is yours, and who (in the order they came) ----
+  reactions(place) {
+    const out = new Map(), me = myId();
+    for (const r of (cache.reacts[place] || []).filter((x) => x.active).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))) {
+      let list = out.get(r.message_id); if (!list) out.set(r.message_id, (list = []));
+      let e = list.find((x) => x.emoji === r.emoji); if (!e) list.push((e = { emoji: r.emoji, count: 0, me: false, users: [] }));
+      e.count++; e.users.push(r.user_id); if (r.user_id === me) e.me = true;
+    }
+    return out;
+  },
+  async react(place, messageId, emoji, on) {
+    const list = (cache.reacts[place] = cache.reacts[place] || []), me = myId();
+    const i = list.findIndex((r) => r.message_id === messageId && r.user_id === me && r.emoji === emoji), before = i >= 0 ? { ...list[i] } : null;
+    if (i >= 0) list[i] = { ...list[i], active: on };
+    else list.push({ message_id: messageId, place, user_id: me, emoji, active: on, created_at: new Date().toISOString() });
+    emit();                                 // (it shows at once; the database has the last word)
+    try {
+      if (on) must(await sb.from('reactions').upsert({ message_id: messageId, place, user_id: me, emoji, active: true }));
+      else must(await sb.from('reactions').update({ active: false }).eq('message_id', messageId).eq('user_id', me).eq('emoji', emoji));
+    } catch (e) {
+      const j = list.findIndex((r) => r.message_id === messageId && r.user_id === me && r.emoji === emoji);
+      if (j >= 0) { if (before) list[j] = before; else list.splice(j, 1); }
+      emit(); throw e;
+    }
+  },
+  // ---- server tags: a server's admins give it one; its members may wear it (only one at a time) ----
+  styled: () => styled,
+  async adoptTag(serverId) { must(await sb.rpc('adopt_tag', { p_server: serverId || null })); await loadAll(); },
+  async tagInfo(serverId) {
+    const r = must(await sb.rpc('tag_info', { p_server: serverId }));
+    const row = Array.isArray(r) ? r[0] : r;
+    return row ? { ...toServer(row), members: Number(row.members) || 0, joined: !!row.joined } : null;
+  },
+
   // ---- blocking: they can't message you or ask to be your friend, and you don't see their messages ----
   blocked: (uid) => cache.blocks.some((b) => b.blocked === uid),
   blockedIds: () => cache.blocks.map((b) => b.blocked),
@@ -813,7 +871,8 @@ export const SupabaseStore = {
   },
   setProfile(patch) {
     if (!cache.me) return;
-    const row = {}; for (const k of ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate']) if (k in patch) row[k] = patch[k] == null ? (k === 'stickers' ? [] : '') : patch[k];
+    const keys = ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate', ...(styled ? ['theme1', 'theme2', 'name_font', 'name_effect', 'name_color1', 'name_color2'] : [])];
+    const row = {}; for (const k of keys) if (k in patch) row[k] = patch[k] == null ? (k === 'stickers' ? [] : '') : patch[k];
     Object.assign(cache.me, row);
     if ('status' in row) for (const [sv, ch] of rooms) announce(ch, sv);
     emit();

@@ -1,6 +1,8 @@
 // Fluentdat's building blocks: elements, icons, pictures, little messages, windows and menus. Nothing here knows
 // about servers or messages; app.js puts them together. (Windows replace the browser's prompt() and confirm():
 // apps built on Electron, like the Fluent browser, don't have prompt(), so anything that used it did nothing there.)
+import { animOn } from './anim.js';
+
 export const $ = (s) => document.querySelector(s);
 export const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k)); return n; };
 
@@ -150,6 +152,7 @@ export function paint(v) {
   if (!v || typeof v !== 'string') return '';
   if (/^g:\d$/.test(v)) return GRADS[+v.slice(2)];
   if (/^#[0-9a-f]{6}$/i.test(v)) return v;
+  if (/^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(v)) { const [a, b] = v.split(','); return `linear-gradient(135deg, ${a}, ${b})`; }
   if (PICTURE.test(v)) return `center / cover no-repeat url("${v}")`;
   return '';
 }
@@ -161,7 +164,12 @@ export function modal({ title, sub, body = [], actions = [], wide = false, cls =
   const scrim = el('div', { className: 'scrim' }, box);
   let closed = false, downOnScrim = false;
   const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
-  function close(v) { if (closed) return; closed = true; scrim.remove(); document.removeEventListener('keydown', key, true); if (onClose) onClose(v); }
+  function close(v) {
+    if (closed) return; closed = true;
+    document.removeEventListener('keydown', key, true);
+    if (animOn('dialogs')) { scrim.classList.add('closing'); setTimeout(() => scrim.remove(), 160); } else scrim.remove();      // (it shrinks away)
+    if (onClose) onClose(v);
+  }
   const fill = (parts) => box.replaceChildren(...parts.flat().filter(Boolean));
   document.addEventListener('keydown', key, true);
   scrim.addEventListener('mousedown', (e) => { downOnScrim = e.target === scrim; });

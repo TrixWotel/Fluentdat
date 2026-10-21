@@ -8,7 +8,12 @@ import { render as richText, links as linksIn, plain as plainText, jumbo } from 
 import { embed } from './embeds.js';
 import { joinCall, mediaTrouble } from './calls.js';
 import { record, voicePlayer, fileSize, isImage, isVideo, pictureSize, extFor, clock } from './media.js';
-import { openPicker, closePicker as closeXp, isOpen as xpOpen, findEmoji, withEmoji, loadEmoji, noteUse } from './picker.js';
+import { openPicker, closePicker as closeXp, isOpen as xpOpen, findEmoji, withEmoji, loadEmoji, noteUse, frequent } from './picker.js';
+import { ANIMS, applyAnims, animOn } from './anim.js';
+import { LOGOS, THEME_LOGO, logoEl, logoInfo, setFavicon } from './logo.js';
+import { openColor, colorSwatch, closeColor } from './color.js';
+import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily, loadFont } from './namestyle.js';
+import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
 // (the test page hands in pretend cameras and microphones, and keeps everything quiet)
 const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
 
@@ -33,6 +38,8 @@ const DEFAULT_PREFS = {
   micMuted: false, deafened: false,
   // calls, link previews and the formatting bar
   sound: false, ring: true, embeds: 'on', formatBar: 'on',
+  // animations you turned off (Settings → Animations), and the logo ('theme': whatever the theme brings)
+  anim: {}, logo: 'theme',
 };
 const LAYOUT_PRESETS = {
   Default: {},
@@ -66,8 +73,10 @@ function loadMe() { try { const m = JSON.parse(localStorage.getItem('fluency.me'
 let me = loadMe();
 const saveMe = () => { try { localStorage.setItem('fluency.me', JSON.stringify(me)); } catch {} };
 const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
-const stamp = () => { const u = { name: me.name, color: me.color }; if (me.avatar) u.avatar = me.avatar; if (me.pronouns) u.pronouns = me.pronouns; if (me.about) u.about = me.about; return u; };
-const asMember = () => ({ id: 'me', name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, plate: me.plate || '', banner: me.banner || '', me: true });
+const stamp = () => { const u = { name: me.name, color: me.color }; if (me.avatar) u.avatar = me.avatar; if (me.pronouns) u.pronouns = me.pronouns; if (me.about) u.about = me.about; if (me.style) u.style = me.style; return u; };
+const myTag = () => (Store.kind === 'supabase' && Store.myProfile ? Store.myProfile().tag || null : null);
+const asMember = () => ({ id: 'me', name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, plate: me.plate || '', banner: me.banner || '',
+  theme: me.theme || null, style: me.style || null, tag: myTag(), me: true });
 
 // other people's profiles are theirs to fill in, so only colours and pictures of the expected shape are drawn
 // (a stray web address would let a stranger see who looked at their profile)
@@ -141,8 +150,27 @@ function applyTheme(id) {
     if (custom.css) document.head.append(el('style', { id: 'fluency-custom-css', textContent: custom.css }));
   } else document.documentElement.dataset.theme = BUILTIN.some((b) => b[0] === id) ? id : 'dark';
   try { localStorage.setItem('fluency.theme', id); } catch {}
+  setFavicon(appLogo());
+  if (document.body.dataset.booted) renderRail();            // (the Home button wears the theme's logo)
 }
 const currentTheme = () => { try { return localStorage.getItem('fluency.theme') || 'dark'; } catch { return 'dark'; } };
+// the logo you see (Home button, tab icon, sign-in): the one you picked, else the one your theme brings
+function appLogo() {
+  if (typeof prefs !== 'undefined' && prefs.logo && prefs.logo !== 'theme' && LOGOS.some((l) => l[0] === prefs.logo)) return prefs.logo;
+  const id = currentTheme(), custom = loadThemes().find((t) => t.id === id);
+  return (custom && custom.logo) || THEME_LOGO[id] || 'accent';
+}
+// a grid of every look, to pick one (for Appearance and the theme editor)
+function logoGrid(current, onPick, { withTheme = false } = {}) {
+  const grid = el('div', { className: 'lg-grid' });
+  const tile = (id, name, face) => {
+    const b = el('button', { className: 'lg-tile' + (current === id ? ' on' : ''), title: name, onclick: () => { current = id; for (const x of grid.children) x.classList.toggle('on', x === b); onPick(id); } }, face, el('span', {}, name));
+    return b;
+  };
+  if (withTheme) grid.append(tile('theme', 'Match Theme', el('div', { className: 'lg-match' }, icon('palette', 22))));
+  for (const [id, name] of LOGOS) grid.append(tile(id, name, logoEl(id, { size: 48 })));
+  return grid;
+}
 applyTheme(currentTheme());
 const cssVar = (v) => getComputedStyle(document.documentElement).getPropertyValue('--' + v).trim() || '#000000';
 
@@ -280,7 +308,7 @@ document.body.append(tipEl);
 function tipOn(node, content) {
   node.addEventListener('mouseenter', () => {
     const c = content(); if (!c) return;
-    tipEl.replaceChildren(...[].concat(c)); tipEl.hidden = false;
+    tipEl.replaceChildren(...[].concat(c)); tipEl.hidden = false; tipEl.classList.remove('show'); void tipEl.offsetWidth; tipEl.classList.add('show');
     const r = node.getBoundingClientRect();
     tipEl.style.left = r.right + 8 + 'px';
     tipEl.style.top = Math.max(8, Math.min(innerHeight - tipEl.offsetHeight - 8, r.top + r.height / 2 - tipEl.offsetHeight / 2)) + 'px';
@@ -292,47 +320,86 @@ function tipOn(node, content) {
 
 // ---------- the server rail ----------
 // Discord's: a pill on the left for where you are (a small one for unread), red counts for pings, a speaker when people
-// are in a voice channel, your unread DMs waiting under Home, and a name tag when you point at anything
+// are in a voice channel, your unread DMs waiting under Home, and a name tag when you point at anything. Its buttons stay
+// the same elements from one draw to the next, so the pill grows into a tall bar (and slowly shrinks away) and the icons
+// morph smoothly, even when you click from server to server faster than they can finish.
+const railKept = new Map();
+function railItem(key, build) {
+  let w = railKept.get(key);
+  if (!w) {
+    w = build(); w.dataset.key = key; railKept.set(key, w);
+    if (document.body.dataset.booted) { w.classList.add('enter'); setTimeout(() => w.classList.remove('enter'), 450); }
+  }
+  return w;
+}
+function railWrap(btn, open) {
+  const w = el('div', { className: 'srv-wrap' }, el('span', { className: 'pill' }), btn);
+  btn.addEventListener('click', () => w._open && w._open());
+  tipOn(w, () => (w._tip ? w._tip() : null));
+  return w;
+}
+function railState(w, { on, unread, ping, voice, tip, open }) {
+  w._tip = tip; w._open = open;
+  w.classList.toggle('on', !!on); w.classList.toggle('unread', !!unread);
+  const btn = w.querySelector('.srv'); if (btn) btn.classList.toggle('on', !!on);
+  const txt = ping ? (ping > 99 ? '99+' : String(ping)) : '';
+  let b = w.querySelector('.badge');
+  if (txt && !b) { b = el('span', { className: 'badge' }); w.append(b); }
+  if (b) {
+    if (!txt) b.remove();
+    else if (b.textContent !== txt) { b.textContent = txt; b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
+  }
+  const vb = w.querySelector('.vbadge');
+  if (voice && !vb) w.append(el('span', { className: 'vbadge pop' }, icon('volume', 11)));
+  if (!voice && vb) vb.remove();
+  return w;
+}
 function renderRail() {
-  tipEl.hidden = true;
-  const parts = [], open = (fn) => () => { fn(); renderAll(); };
-  const wrap = (btn, { on, unread, ping, voice, tip } = {}) => {
-    const w = el('div', { className: 'srv-wrap' + (on ? ' on' : '') + (unread ? ' unread' : '') }, el('span', { className: 'pill' }), btn);
-    if (ping) w.append(el('span', { className: 'badge' }, ping > 99 ? '99+' : String(ping)));
-    if (voice) w.append(el('span', { className: 'vbadge' }, icon('volume', 11)));
-    if (tip) tipOn(w, tip);
-    return w;
-  };
-  const railBtn = (ic, label, on, onclick, cls) => { const b = el('button', { className: 'srv ' + cls + (on ? ' on' : ''), onclick }); b.setAttribute('aria-label', label); b.append(icon(ic, 24)); return b; };
+  if (!document.querySelector('.srv-wrap:hover')) { tipEl.hidden = true; tipEl.classList.remove('show'); }
+  const parts = [], go = (fn) => () => { fn(); renderAll(); };
+  const railBtn = (ic, label, cls) => { const b = el('button', { className: 'srv ' + cls }); b.setAttribute('aria-label', label); b.append(icon(ic, 24)); return b; };
   for (const id of ordered('rail')) {
     if (!shown(id)) continue;
     if (id === 'home') {
-      parts.push(wrap(railBtn('logo', 'Direct Messages', view === 'home', open(() => { view = 'home'; }), 'home'), { on: view === 'home', ping: Store.friendRequests().incoming.length, tip: () => el('b', {}, 'Direct Messages') }));
+      const w = railItem('home', () => railWrap(el('button', { className: 'srv home', ariaLabel: 'Direct Messages' })));
+      const lg = appLogo(), btn = w.querySelector('.srv');
+      if (btn.dataset.logo !== lg) { btn.dataset.logo = lg; btn.replaceChildren(logoEl(lg, { square: true })); btn.classList.toggle('lg-plain', logoInfo(lg).tile === 'none'); }
+      parts.push(railState(w, { on: view === 'home', ping: Store.friendRequests().incoming.length, tip: () => el('b', {}, 'Direct Messages'), open: go(() => { view = 'home'; }) }));
       // unread DMs wait under Home, as on Discord
       for (const d of Store.dmList().filter((x) => dmUnread(x.id) && !(view === 'home' && dmId === x.id)).slice(0, 6)) {
-        const b = el('button', { className: 'srv dmu', onclick: open(() => { view = 'home'; dmId = d.id; }) }, dmAvatar(d));
-        b.setAttribute('aria-label', dmName(d));
-        parts.push(wrap(b, { unread: true, ping: dmUnread(d.id), tip: () => el('b', {}, dmName(d)) }));
+        const dw = railItem('dm:' + d.id, () => railWrap(el('button', { className: 'srv dmu' })));
+        const b = dw.querySelector('.srv'), sig = dmName(d) + String((d.user || {}).avatar || d.icon || '').length;
+        if (b.dataset.sig !== sig) { b.dataset.sig = sig; b.replaceChildren(dmAvatar(d)); b.setAttribute('aria-label', dmName(d)); }
+        parts.push(railState(dw, { unread: true, ping: dmUnread(d.id), tip: () => el('b', {}, dmName(d)), open: go(() => { view = 'home'; dmId = d.id; }) }));
       }
     }
-    else if (id === 'add') parts.push(wrap(railBtn('plus', 'Add a Server', false, () => addServerFlow(), 'add'), { tip: () => el('b', {}, 'Add a Server') }));
-    else if (id === 'discover') parts.push(wrap(railBtn('compass', 'Discover', view === 'discover', open(() => { view = 'discover'; }), 'add discover'), { on: view === 'discover', tip: () => el('b', {}, 'Discover') }));
+    else if (id === 'add') parts.push(railState(railItem('add', () => railWrap(railBtn('plus', 'Add a Server', 'add'))), { tip: () => el('b', {}, 'Add a Server'), open: () => addServerFlow() }));
+    else if (id === 'discover') parts.push(railState(railItem('discover', () => railWrap(railBtn('compass', 'Discover', 'add discover'))), { on: view === 'discover', tip: () => el('b', {}, 'Discover'), open: go(() => { view = 'discover'; }) }));
     else if (id === 'servers') {
-      if (parts.length) parts.push(el('hr'));
+      if (parts.length) parts.push(railItem('hr', () => el('hr')));
       for (const s of Store.servers()) {
         const on = view === 'server' && s.id === serverId, st = serverUnread(s.id);
-        const b = el('button', { className: 'srv' + (on ? ' on' : ''),
-          onclick: open(() => { view = 'server'; serverId = s.id; channelId = lastChannel(s.id); }),
-          oncontextmenu: (e) => { e.preventDefault(); serverCtx(s, e.clientX, e.clientY); } });
-        b.setAttribute('aria-label', s.name);
-        const img = safeImg(s.img);
-        if (img) b.append(el('img', { src: img, alt: '' })); else if (ICON[s.icon]) b.append(icon(s.icon, 24)); else b.textContent = initials(s.name);
-        parts.push(wrap(b, { on, unread: !on && st.unread > 0 && !Store.placeSettings(s.id).muted, ping: st.mentions,
-          voice: Object.values(Store.voice(s.id)).some((l) => l.length), tip: () => serverTip(s) }));
+        const w = railItem('sv:' + s.id, () => {
+          const b = el('button', { className: 'srv', oncontextmenu: (e) => { e.preventDefault(); serverCtx(w._s, e.clientX, e.clientY); } });
+          const ww = railWrap(b); return ww;
+        });
+        w._s = s;
+        const b = w.querySelector('.srv'), img = safeImg(s.img), sig = s.name + '|' + (img ? img.length : '') + '|' + s.icon;
+        if (b.dataset.sig !== sig) {
+          b.dataset.sig = sig; b.setAttribute('aria-label', s.name);
+          if (img) b.replaceChildren(el('img', { src: img, alt: '' })); else if (ICON[s.icon]) b.replaceChildren(icon(s.icon, 24)); else b.replaceChildren(initials(s.name));
+        }
+        parts.push(railState(w, { on, unread: !on && st.unread > 0 && !Store.placeSettings(s.id).muted, ping: st.mentions,
+          voice: Object.values(Store.voice(s.id)).some((l) => l.length), tip: () => serverTip(s),
+          open: go(() => { view = 'server'; serverId = s.id; channelId = lastChannel(s.id); }) }));
       }
     }
   }
-  $('#rail').replaceChildren(...parts);
+  const rail = $('#rail');
+  let i = 0;
+  for (const n of parts) { if (rail.children[i] !== n) rail.insertBefore(n, rail.children[i] || null); i++; }
+  while (rail.children.length > parts.length) rail.lastElementChild.remove();
+  for (const [k, n] of railKept) if (!parts.includes(n)) railKept.delete(k);
 }
 // a server's name tag: its name, and who's in which voice channel
 function serverTip(s) {
@@ -346,6 +413,7 @@ function serverTip(s) {
 }
 
 // ---------- the sidebar ----------
+let unfolding = null;             // (a category just opened: its channels unfold)
 function renderSide() {
   const head = $('#side-head'), body = $('#side-body');
   head.onclick = null; head.className = 'side-head'; head.style.removeProperty('--banner');
@@ -385,7 +453,7 @@ function renderSide() {
   for (const cat of groups) {
     const mine = chans.filter((c) => (cat.id ? c.category === cat.id : true));
     const isCollapsed = collapsed.has(cat.id);
-    body.append(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) collapsed.delete(cat.id); else collapsed.add(cat.id); renderSide(); },
+    body.append(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) { collapsed.delete(cat.id); unfolding = cat.id; } else collapsed.add(cat.id); renderSide(); unfolding = null; },
       oncontextmenu: (e) => { e.preventDefault(); categoryCtx(cat, e.clientX, e.clientY); } },
       el('span', { className: 'caret' }, icon('chevD')), el('span', { className: 'nm' }, cat.name),
       can && shown('newChannel') ? el('span', { className: 'add', title: 'Create Channel', onclick: (e) => { e.stopPropagation(); newChannelFlow(cat.id); } }, icon('plus')) : null));
@@ -399,6 +467,7 @@ function renderSide() {
         onclick: () => openChannel(c),
         oncontextmenu: (e) => { e.preventDefault(); channelCtx(c, e.clientX, e.clientY); } },
         icon(c.kind === 'voice' ? 'volume' : 'hash', 18), el('span', { className: 'nm' }, c.name));
+      if (unfolding === cat.id) { rowc.classList.add('unfold'); rowc.style.animationDelay = (mine.indexOf(c) * 0.03) + 's'; }
       if (ping) rowc.append(el('span', { className: 'mbadge' }, u.mentions > 99 ? '99+' : String(u.mentions)));
       for (const id of ordered('channels')) {
         if (id === 'chanInvite' && shown(id) && inviting) rowc.append(el('span', { className: 'x ci', title: 'Create Invite', onclick: (e) => { e.stopPropagation(); inviteFriends(serverId); } }, icon('personAdd')));
@@ -492,7 +561,7 @@ function renderMe() {
     if (id === 'me') {
       const av = avatarEl(asMember()); av.onclick = (e) => { e.stopPropagation(); showAccount(av); };
       const stName = (STATUSES.find((s) => s[0] === me.status) || [, 'Online'])[1];
-      parts.push(av, el('div', { className: 'who', onclick: (e) => { e.stopPropagation(); showAccount(av); } }, el('div', { className: 'nm' }, me.name), el('div', { className: 'st' }, me.pronouns || stName)));
+      parts.push(av, el('div', { className: 'who', onclick: (e) => { e.stopPropagation(); showAccount(av); } }, styledName(el('div', { className: 'nm' }, me.name), asMember()), el('div', { className: 'st' }, me.pronouns || stName)));
     } else if (id === 'settings') parts.push(pbtn('gear', 'User Settings', () => openUserSettings('account'), false, 'gear'));
     else if (id === 'mic' && shown('mic')) parts.push(pbtn(quiet ? 'micOff' : 'mic', quiet ? 'Unmute' : 'Mute', toggleMic, quiet));
     else if (id === 'deafen' && shown('deafen')) parts.push(pbtn(prefs.deafened ? 'headphonesOff' : 'headphones', prefs.deafened ? 'Undeafen' : 'Deafen', toggleDeafen, prefs.deafened));
@@ -608,11 +677,129 @@ function pingsMe(m, all) {
   return false;
 }
 // the conversation's messages, drawn into wrap. Each message keeps its own piece of the page while it doesn't change, so
+// ---------- reactions: emoji under a message, counted, yours lit up; click one to add yours or take it back ----------
+// (they're kept up to date in place, so a count bounces when it changes instead of the message being drawn again)
+const reactKey = (k) => { if (!String(k).startsWith('c:')) return k; const e = emojiIndex.get(k.slice(2)); return e ? `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>` : null; };
+const CUSTOM_RE = /^<(a?):([A-Za-z0-9_]{2,32}):([0-9a-f-]{36})>$/;
+function emojiFace(emoji, cls) {
+  const c = String(emoji).match(CUSTOM_RE);
+  if (c) { const e = emojiIndex.get(c[3]), src = e ? safeImg(e.url) : ''; return src ? el('img', { className: cls + ' custom', src, alt: ':' + c[2] + ':', draggable: false }) : el('span', { className: cls + ' gone' }, ':' + c[2] + ':'); }
+  return el('span', { className: cls }, emoji);
+}
+const emojiLabel = (emoji) => { const c = String(emoji).match(CUSTOM_RE); return c ? ':' + c[2] + ':' : emoji; };
+async function toggleReact(m, emoji, on) {
+  const place = placeNow(); if (!place || !emoji || m.sending) return;
+  if (on) { const c = String(emoji).match(CUSTOM_RE); noteUse(c ? 'c:' + c[3] : emoji); }
+  await attempt(() => Store.react(place, m.id, emoji, on));
+}
+// pick any emoji to react with
+function reactPicker(m, anchor) {
+  const live = Store.kind === 'supabase';
+  openPicker({ tab: 'emoji', emojiOnly: true, anchor, still: motionOff(),
+    servers: live ? Store.servers().map((sv) => ({ id: sv.id, name: sv.name, face: () => serverFace(sv, 24) })) : [],
+    emojiOf: (sv) => Store.serverEmoji(sv), stickersOf: () => [], own: [], builtin: [], safeImg, canManage: () => false, manage: () => {},
+    onEmoji: (text, keep, c) => toggleReact(m, c ? `<${c.animated ? 'a' : ''}:${c.name}:${c.id}>` : text, true), onSticker: () => {} });
+}
+// the emoji you react with most (for the toolbar and the menu)
+const quickReacts = (n) => frequent().map(reactKey).filter(Boolean).concat(['👍', '❤️', '😂', '🔥', '👀', '🎉', '😮', '🙏']).filter((x, i, a) => a.indexOf(x) === i).slice(0, n);
+function whoReacted(r) {
+  const names = r.users.map((id) => (id === 'me' || id === Store.myId() ? 'You' : person(id).name));
+  const list = names.length > 3 ? [...names.slice(0, 3), `${names.length - 3} other${names.length === 4 ? '' : 's'}`] : names;
+  const shown = list.length > 1 ? list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1] : list[0];
+  return `${shown} reacted with ${emojiLabel(r.emoji)}`;
+}
+function reactTip(b) {
+  const r = b._r; if (!r) return;
+  tipEl.replaceChildren(el('div', { className: 'rtip' }, emojiFace(r.emoji, 'rtip-e'), el('span', {}, whoReacted(r))));
+  tipEl.hidden = false; tipEl.classList.remove('show'); void tipEl.offsetWidth; tipEl.classList.add('show', 'above');
+  const rr = b.getBoundingClientRect();
+  tipEl.style.left = Math.max(8, Math.min(innerWidth - tipEl.offsetWidth - 8, rr.left + rr.width / 2 - tipEl.offsetWidth / 2)) + 'px';
+  tipEl.style.top = Math.max(8, rr.top - tipEl.offsetHeight - 8) + 'px';
+}
+const hideTip = () => { tipEl.hidden = true; tipEl.classList.remove('show', 'above'); };
+function syncReacts(node, m, list, animate) {
+  const body = node.querySelector(':scope > .body'); if (!body || m.call) return;
+  let row = body.querySelector(':scope > .reacts');
+  if (!list.length) { if (row) row.remove(); return; }
+  if (!row) { row = el('div', { className: 'reacts' }); body.append(row); }
+  const have = new Map([...row.querySelectorAll(':scope > .react')].map((b) => [b.dataset.e, b]));
+  const out = [];
+  for (const r of list) {
+    let b = have.get(r.emoji);
+    if (!b) {
+      b = el('button', { className: 'react' + (animate ? ' new' : '') }, emojiFace(r.emoji, 're'), el('span', { className: 'rn' }));
+      b.dataset.e = r.emoji;
+      b.onclick = (e) => { e.stopPropagation(); b.classList.remove('hit'); void b.offsetWidth; b.classList.add('hit'); toggleReact(m, r.emoji, !b._r.me); };
+      b.onmouseenter = () => reactTip(b); b.onmouseleave = hideTip;
+    }
+    b._r = r;
+    b.classList.toggle('me', !!r.me);
+    const now = String(r.count);
+    if (b.dataset.n !== now) {
+      const was = b.dataset.n; b.dataset.n = now; b.querySelector('.rn').textContent = now;
+      if (was && animate) { b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); }
+    }
+    out.push(b);
+  }
+  out.push(row.querySelector(':scope > .react-add') || el('button', { className: 'react-add', title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)));
+  let i = 0;
+  for (const n of out) { if (row.children[i] !== n) row.insertBefore(n, row.children[i] || null); i++; }
+  while (row.children.length > out.length) row.lastElementChild.remove();
+}
+
+// ---------- server tags beside names ----------
+function tagFor(u) { return u && u.tag && u.tag.text ? u.tag : null; }
+// the card that opens from someone's tag: its server, and wearing the tag yourself
+let tagCardEl = null;
+function closeTagCard() { if (tagCardEl) { tagCardEl.remove(); tagCardEl = null; } }
+async function showTagCard(tag, anchor) {
+  closeTagCard();
+  const box = el('div', { className: 'pop tagcard' }, el('div', { className: 'tc-load' }, 'Loading…'));
+  tagCardEl = box; document.body.append(box);
+  const place = () => { const r = anchor.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight; box.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px'; box.style.top = (r.bottom + 6 + h < innerHeight ? r.bottom + 6 : Math.max(12, r.top - h - 6)) + 'px'; };
+  place();
+  let info = null; try { info = await Store.tagInfo(tag.server); } catch {}
+  if (tagCardEl !== box) return;
+  const mine = (Store.myProfile && (Store.myProfile().tag || {}).server) === tag.server;
+  const chip = tagChip(tag); chip.classList.add('big');
+  box.replaceChildren(
+    el('div', { className: 'tc-head' }, info ? serverFace(info, 44) : el('div', { className: 'sv-face', style: 'width:44px;height:44px' }, icon('tag', 22)),
+      el('div', { className: 'tc-who' }, el('b', {}, info ? info.name : 'A server'), el('small', {}, info ? plural(info.members, 'Member') : 'This tag’s server is private'))),
+    el('div', { className: 'tc-tag' }, chip),
+    info && info.joined ? (mine ? el('button', { className: 'btn wide', onclick: async () => { if ((await attempt(() => Store.adoptTag(null))) !== null) { toast('Tag taken off.'); closeTagCard(); renderAll(); } } }, 'Take Off This Tag')
+      : el('button', { className: 'btn primary wide', onclick: async () => { if ((await attempt(() => Store.adoptTag(tag.server))) !== null) { toast(`You’re wearing ${tag.text}.`); closeTagCard(); renderAll(); } } }, icon('tag', 16), 'Adopt Tag'))
+      : info && info.public ? el('button', { className: 'btn primary wide', onclick: async () => { closeTagCard(); const ok = await attempt(() => Store.joinPublic(info.id)); if (ok !== null) go(info.id); } }, 'Join Server')
+      : el('div', { className: 'tc-note' }, 'You need an invite to join this server.'));
+  place();
+}
+document.addEventListener('mousedown', (e) => { if (tagCardEl && !tagCardEl.contains(e.target) && !(e.target.closest && e.target.closest('.stag'))) closeTagCard(); }, true);
+const tagChipFor = (u) => { const t = tagFor(u); return t ? tagChip(t, (e) => showTagCard(t, e.currentTarget)) : null; };
+
+// ---------- profile themes and display name styles ----------
+const hexOk = (c) => (/^#[0-9a-f]{6}$/i.test(c || '') ? c : '');
+const lum = (hex) => { const n = parseInt(hex.slice(1), 16); return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255; };
+// a profile's own colours: its card fades from the first to the second, as on Discord
+function themeCard(node, theme) {
+  const t1 = theme ? hexOk(theme[0]) : '', t2 = theme ? hexOk(theme[1]) : '';
+  node.classList.toggle('themed', !!(t1 || t2));
+  if (!(t1 || t2)) { node.style.removeProperty('--t1'); node.style.removeProperty('--t2'); node.classList.remove('themed-light'); return node; }
+  const a = t1 || t2, b = t2 || t1;
+  node.style.setProperty('--t1', a); node.style.setProperty('--t2', b);
+  node.classList.toggle('themed-light', (lum(a) + lum(b)) / 2 > 0.6);
+  return node;
+}
+// someone's name with their style (in a server, a role's colour wins over the style's colours, but the font stays)
+function styledName(node, u, { roleColored = false } = {}) {
+  return styleName(node, u && u.style, { colors: !roleColored, fallback: safeColor(u && u.color, '#ffffff') });
+}
+
 // a video or voice message keeps playing (and a link's card stays put) while new messages arrive around it.
 function fillMessages(wrap, msgs, place, start) {
   const keep = wrap._nodes || new Map(), next = new Map(), order = [];
-  const put = (key, make) => { let n = keep.get(key); if (!n) n = make(); next.set(key, n); order.push(n); };
+  const put = (key, make) => { let n = keep.get(key), made = false; if (!n) { n = make(); made = true; } next.set(key, n); order.push(n); return [n, made]; };
   const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars].join();
+  const first = !wrap._seen; if (first) wrap._seen = new Set();
+  const reacts = Store.reactions ? Store.reactions(place) : new Map();
   if (start) put('start:' + start.key, start.make);
   if (!Store.loaded(place) && !msgs.length) put('loading', skeleton);
   if (searchQ) {
@@ -642,8 +829,12 @@ function fillMessages(wrap, msgs, place, start) {
     const cont = prefs.group && last && !last.call && !m.reply && last.user.name === m.user.name && !last.user.bot === !m.user.bot && last.user.via === m.user.via && (m.ts - last.ts) < 7 * 60000;
     const to = m.reply ? all.find((x) => x.id === m.reply) : null;
     const key = 'm:' + m.id + ':' + JSON.stringify([m.text, m.sticker && String(m.sticker.data || m.sticker.path || m.sticker).length, (m.files || []).map((f) => f.path || f.name), !!m.sending, cont, style,
-      m.user.name, m.user.color, String(m.user.avatar || '').length, nameColor(m.user), to ? [to.user.name, to.text, !!to.files] : m.reply, m.forwarded, emojiIndex.size, bookmarked(m.id)]);
-    put(key, () => messageNode(m, cont, to, all, ctx));
+      m.user.name, m.user.color, String(m.user.avatar || '').length, nameColor(m.user), to ? [to.user.name, to.text, !!to.files] : m.reply, m.forwarded, emojiIndex.size, bookmarked(m.id),
+      m.user.style, m.user.tag]);
+    const [node, made] = put(key, () => messageNode(m, cont, to, all, ctx));
+    if (made && !first && !wrap._seen.has(m.id)) node.classList.add('arrive');
+    wrap._seen.add(m.id);
+    syncReacts(node, m, reacts.get(m.id) || [], !made);
     last = m;
   }
   fold();
@@ -658,7 +849,10 @@ function messageNode(m, cont, to, all, ctx) {
   if (!cont) {
     const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, m.user.name);
     nm.style.setProperty('--who', nameColor(m.user));
-    const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : ''); meta.append(el('span', { className: 'when', title: full }, when(m.ts, true)));
+    styledName(nm, m.user, { roleColored: view === 'server' && !!(serverId && m.user.id && Store.memberColor(serverId, m.user.id)) });
+    const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : '');
+    const tg = tagChipFor(m.user); if (tg) meta.append(tg);
+    meta.append(el('span', { className: 'when', title: full }, when(m.ts, true)));
     body.append(meta);
   }
   // (a forwarded message's own content sits in a box that says where it came from, as on Discord)
@@ -687,6 +881,8 @@ function messageNode(m, cont, to, all, ctx) {
   }
   const av = avatarEl(m.user); av.onclick = (e) => showProfile(m.user, e.currentTarget);
   const tools = el('div', { className: 'msg-tools' },
+    ...(!m.sending ? quickReacts(3).map((q) => el('button', { className: 'qr', title: 'React with ' + emojiLabel(q), onclick: (e) => { e.stopPropagation(); toggleReact(m, q, true); } }, emojiFace(q, 'qre'))) : []),
+    !m.sending ? el('button', { title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)) : null,
     !m.sending ? el('button', { title: 'Reply', onclick: (e) => { e.stopPropagation(); startReply(m); } }, icon('reply', 18)) : null,
     !m.sending && Store.kind === 'supabase' ? el('button', { title: 'Forward', onclick: (e) => { e.stopPropagation(); forwardFlow(m); } }, icon('forward', 18)) : null,
     el('button', { title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); messageCtx(m, r.left - 200, r.bottom + 4); } }, icon('more', 18)));
@@ -853,7 +1049,7 @@ function renderContent() {
   const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 80, was = content.scrollTop;
   const whole = Store.kind !== 'supabase' || msgs.length < 300;            // (the start banner only when the start is loaded)
   let wrap = same ? content.querySelector(':scope > .msgs') : null;
-  if (!wrap) { wrap = el('div', { className: 'msgs' }); content.replaceChildren(wrap); }
+  if (!wrap) { wrap = el('div', { className: 'msgs swap' }); content.replaceChildren(wrap); setTimeout(() => wrap.classList.remove('swap'), 400); }
   fillMessages(wrap, msgs, place, whole && !searchQ ? startHeader() : null);
   content.dataset.key = key;
   if (Store.kind === 'supabase' && document.visibilityState === 'visible' && document.hasFocus() && keepUnread !== place && Store.unread(place).unread) Store.markRead(place);
@@ -933,22 +1129,31 @@ function renderMembers() {
   const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null;
   if (g && g.kind === 'group') {
     if (!showMembers) return box.replaceChildren();
-    const row = (m) => { const nm = el('div', { className: 'nm' }, m.name, m.id === g.owner ? roleMark('crown', 'Group owner') : null);
+    const row = (m) => { const nmText = styledName(el('span', { className: 'nmt' }, m.name), m); const nm = el('div', { className: 'nm' }, nmText, tagChipFor(m), m.id === g.owner ? roleMark('crown', 'Group owner') : null);
       return plateOn(el('button', { className: 'mem' + (m.status && m.status !== 'offline' ? '' : ' off'), onclick: (e) => showProfile(m, e.currentTarget), oncontextmenu: (e) => { e.preventDefault(); memberCtx(m, e.clientX, e.clientY); } }, avatarEl(m), el('div', { className: 'who' }, nm)), m.plate); };
     box.replaceChildren(el('div', { className: 'mem-cat' }, `Members — ${g.people.length}`), ...g.people.map(row),
       el('button', { className: 'btn small wide', style: 'margin-top:12px', onclick: () => addPeopleFlow() }, icon('usersPlus', 15), 'Add Friends'));
     return;
   }
-  if (view === 'home' && dmId && prefs.dmPanel) { const u = Store.dmUser(dmId); box.replaceChildren(u ? dmPanel(u) : ''); return; }
+  if (view === 'home' && dmId && prefs.dmPanel) {
+    const u = Store.dmUser(dmId), key = u ? JSON.stringify([u.id, u.name, u.login, u.pronouns, u.about, u.since, String(u.avatar || '').length, u.color, u.theme, u.style, u.tag, u.status,
+      friendState(u), Store.kind === 'supabase' && Store.blocked(u.id), Store.mutualServerList(u.id).map((x) => x.id), noteOn(u.id)]) : '';
+    if (box.dataset.dmp !== key) { box.dataset.dmp = key; box.replaceChildren(u ? dmPanel(u) : ''); }
+    return;
+  }
+  box.dataset.dmp = '';
   if (view !== 'server' || !showMembers) { box.replaceChildren(); return; }
   const all = memberList(), isOn = (m) => m.status && m.status !== 'offline' && m.status !== 'invisible';
   const online = all.filter(isOn), offline = all.filter((m) => !isOn(m));
   const member = (m) => {
-    const nm = el('div', { className: 'nm' }, m.name, m.role === 'owner' ? roleMark('crown', 'Server owner') : m.role === 'admin' ? roleMark('shield', 'Admin') : null);
+    const nmText = el('span', { className: 'nmt' }, m.name);
+    const nm = el('div', { className: 'nm' }, nmText, tagChipFor(m), m.role === 'owner' ? roleMark('crown', 'Server owner') : m.role === 'admin' ? roleMark('shield', 'Admin') : null);
     nm.style.setProperty('--who', safeColor(m.roleColor || m.color, 'var(--text)'));
+    styledName(nmText, m, { roleColored: !!m.roleColor });
     const who = el('div', { className: 'who' }, nm);
     if (prefs.memberStatusText) who.append(el('div', { className: 'mem-sub' }, m.about || (m.bot ? 'Bot' : (m.status || 'offline'))));
-    const row = el('button', { className: 'mem' + (isOn(m) ? '' : ' off'), onclick: (e) => showProfile(m, e.currentTarget),
+    const open = pop && pop.dataset.src === 'members' && pop.dataset.uid === String(m.id || m.name);
+    const row = el('button', { className: 'mem' + (isOn(m) ? '' : ' off') + (open ? ' open' : ''), onclick: (e) => showProfile(m, e.currentTarget),
       oncontextmenu: (e) => { e.preventDefault(); memberCtx(m, e.clientX, e.clientY); } }, avatarEl(m), who);
     return plateOn(row, m.plate);
   };
@@ -979,7 +1184,7 @@ function renderBanner() {
   const b = $('#banner'), st = Store.syncState(), acc = Store.account();
   b.replaceChildren();
   if (Store.resuming) b.append('Signing you in…');
-  else if (Store.kind === 'supabase' && Store.needsSetup() && !st.error) { b.append('Run the newest supabase/setup.sql in Supabase to turn on server emoji and stickers, blocking, reports and one-time links (and calls, files and group DMs if they’re off). '); b.append(el('a', { href: '#' }, 'How')); b.onclick = (e) => { e.preventDefault(); setupHelp(); }; return; }
+  else if (Store.kind === 'supabase' && Store.needsSetup() && !st.error) { b.append('Run the newest supabase/setup.sql in Supabase to turn on reactions, server tags, profile themes and name styles (and emoji, stickers, blocking and one-time links if they’re off). '); b.append(el('a', { href: '#' }, 'How')); b.onclick = (e) => { e.preventDefault(); setupHelp(); }; return; }
   else if (Store.kind === 'supabase') b.append(st.error ? `Trouble: ${st.error}` : `Live, signed in as @${acc.login}`);
   else if (acc) {
     const when = st.lastSync ? 'synced ' + new Date(st.lastSync).toLocaleTimeString() : 'syncing…';
@@ -990,7 +1195,7 @@ function renderBanner() {
 
 // what to do in Supabase to turn the new things on
 function setupHelp() {
-  const m = modal({ title: 'One step in Supabase', sub: 'Fluentdat’s database needs its newest rules: servers’ own emoji and stickers, blocking, reports, one-time links to make an account, and everything before them (calls, attachments, group DMs, friend requests, unread counts).',
+  const m = modal({ title: 'One step in Supabase', sub: 'Fluentdat’s database needs its newest rules: reactions, server tags, profile themes and display name styles, and everything before them (emoji and stickers, blocking, reports, one-time links, calls, attachments, group DMs, friend requests, unread counts).',
     body: [el('div', { className: 'note-box' }, el('ol', {},
       el('li', {}, 'Open your project at ', el('a', { href: 'https://supabase.com/dashboard', target: '_blank', rel: 'noopener noreferrer' }, 'supabase.com/dashboard'), '.'),
       el('li', {}, 'SQL Editor → New query.'),
@@ -1102,24 +1307,34 @@ function friendItem(u) {
 
 // ---------- popouts ----------
 let pop = null;
-const closePop = () => { if (pop) { pop.remove(); pop = null; } };
+function closePop() {
+  if (!pop) return;
+  const p = pop; pop = null;
+  for (const m of document.querySelectorAll('.mem.open')) m.classList.remove('open');
+  if (!animOn('popouts') || p.classList.contains('bm')) return p.remove();
+  p.classList.add('out'); setTimeout(() => p.remove(), 170);
+}
 function placePop(anchor, h) {
   const r = anchor.getBoundingClientRect(), w = pop.offsetWidth || 300, ph = h || pop.offsetHeight;
   const beside = (x) => { pop.style.left = Math.max(12, Math.min(x, innerWidth - w - 12)) + 'px'; pop.style.top = Math.max(12, Math.min(r.top, innerHeight - ph - 12)) + 'px'; };
   const list = anchor.closest && anchor.closest('#members');
-  if (list && innerWidth > 720) return beside(list.getBoundingClientRect().left - w - 8);                 // (a member: to the left of the list)
-  if (anchor.closest && anchor.closest('#content .msg') && r.right + 8 + w <= innerWidth - 12) return beside(r.right + 8);    // (a name in the chat: to its right)
+  if (list && innerWidth > 720) { pop.classList.add('from-right'); return beside(list.getBoundingClientRect().left - w - 8); }     // (a member: to the left of the list)
+  if (anchor.closest && anchor.closest('#content .msg') && r.right + 8 + w <= innerWidth - 12) { pop.classList.add('from-left'); return beside(r.right + 8); }    // (a name in the chat: to its right)
   pop.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px';
   pop.style.top = (r.bottom + ph + 8 > innerHeight ? Math.max(12, r.top - ph - 8) : r.bottom + 8) + 'px';
 }
 function showProfile(user, anchor) {
+  // (clicking the same person again closes their card)
+  const src = anchor.closest ? (anchor.closest('#members') ? 'members' : anchor.closest('#content') ? 'chat' : 'other') : 'other';
+  const again = pop && pop.classList.contains('prof') && pop.dataset.uid === String(user.id || user.name) && pop.dataset.src === src && src !== 'other';
   closePop();
+  if (again) return;
   const mine = isMe(user), sv = view === 'server' ? serverId : null, live = Store.kind === 'supabase';
   const u = mine ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, plate: me.plate } : user;
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, u.banner, u.color);
   const toFull = () => fullProfile(user);
   const inner = el('div', { className: 'inner' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: toFull }, avatarEl(u, { size: 74 })),
-    el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, u.name, u.bot ? el('span', { className: 'tag' }, 'bot') : null),
+    el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null, tagChipFor(u)),
     u.login && !u.bot ? el('div', { className: 'pr' }, u.login + (u.pronouns ? ' · ' + u.pronouns : '')) : u.pronouns ? el('div', { className: 'pr' }, u.pronouns) : null,
     u.bot && u.via ? el('div', { className: 'pr' }, 'Run by @' + u.via + ' (Flubot speaks for whoever types the command)') : null);
   const sec = (title, ...kids) => el('div', { className: 'psec' }, el('h4', {}, title), ...kids);
@@ -1138,7 +1353,7 @@ function showProfile(user, anchor) {
       ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), r.name)),
       Store.canManage(sv) && all.length ? el('button', { className: 'rchip add', title: 'Give a role', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu(roleItems(sv, u), r.left, r.bottom + 4); } }, icon('plus', 13)) : null)));
   }
-  if (mine) inner.append(el('div', { className: 'card' }, el('button', { onclick: () => { closePop(); openUserSettings('profile'); } }, icon('edit'), 'Edit Profile')));
+  if (mine) inner.append(el('div', { className: 'card' }, el('button', { onclick: () => { closePop(); openProfileEditor(); } }, icon('edit'), 'Edit Profile')));
   else if (!u.bot) {
     const say = el('input', { type: 'text', placeholder: 'Message @' + (u.login || u.name), maxLength: 4000 });
     say.onkeydown = async (e) => {
@@ -1153,7 +1368,10 @@ function showProfile(user, anchor) {
       el('button', { className: 'btn small', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); closePop(); profileMenu(u, r.left, r.bottom + 4); } }, icon('more', 16))));
   }
   pop = el('div', { className: 'pop prof' }, banner, inner);
+  pop.dataset.uid = String(user.id || user.name); pop.dataset.src = src;
+  themeCard(pop, u.theme);
   document.body.append(pop); placePop(anchor);
+  if (anchor.classList && anchor.classList.contains('mem')) anchor.classList.add('open');
   if (!u.banner && u.id && !mine) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
 }
 const normFriend = (u) => ({ id: u.id || 'u_' + String(u.name).toLowerCase(), name: u.name, login: u.login, color: u.color, avatar: u.avatar, bot: u.bot, status: u.status || 'offline', plate: u.plate, about: u.about });
@@ -1205,8 +1423,8 @@ function dmPanel(u) {
     more);
   const av = el('button', { className: 'dmp-av', title: 'View Full Profile', onclick: () => fullProfile(u) }, avatarEl(u, { size: 80 }));
   const id = el('div', { className: 'dmp-id' },
-    el('button', { className: 'dmp-name', title: 'View Full Profile', onclick: () => fullProfile(u) }, u.name, u.bot ? el('span', { className: 'tag' }, 'bot') : null),
-    el('div', { className: 'dmp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null));
+    el('button', { className: 'dmp-name', title: 'View Full Profile', onclick: () => fullProfile(u) }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
+    el('div', { className: 'dmp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null));
   const body = el('div', { className: 'dmp-body' });
   if (live && Store.blocked(u.id)) body.append(el('div', { className: 'dmp-card dmp-blocked' }, icon('ban', 16), el('span', {}, 'You blocked them. ', el('button', { className: 'link-btn', onclick: () => unblockUser(u) }, 'Unblock'))));
   if (u.about) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'About Me'), el('div', { className: 'dmp-about' }, u.about)));
@@ -1226,8 +1444,8 @@ function dmPanel(u) {
   const note = noteOn(u.id);
   if (note) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Note'), el('div', { className: 'dmp-about' }, note)));
   if (!u.banner && u.id) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
-  return el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, el('div', { className: 'dmp-top' }, banner, tools, av), id, body),
-    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile')));
+  return themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, el('div', { className: 'dmp-top' }, banner, tools, av), id, body),
+    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'))), u.theme);
 }
 
 // the whole profile, in the middle of the screen: their card on the left (message them, befriend them, your note on them),
@@ -1241,7 +1459,7 @@ function fullProfile(user, tab = 'friends') {
   const acts = el('div', { className: 'fp-acts' });
   const drawActs = () => {
     const s = friendState(u);
-    acts.replaceChildren(...(self ? [el('button', { className: 'btn primary', onclick: () => { w.close(); openUserSettings('profile'); } }, icon('edit', 16), 'Edit Profile')] : [
+    acts.replaceChildren(...(self ? [el('button', { className: 'btn primary', onclick: () => { w.close(); openProfileEditor(); } }, icon('edit', 16), 'Edit Profile')] : [
       !u.bot ? el('button', { className: 'btn primary', onclick: async () => { w.close(); await openDM(normFriend(u)); } }, icon('message', 16), 'Message') : null,
       !u.bot && s === 'none' && !(live && Store.blocked(u.id)) ? el('button', { className: 'btn fp-icon', title: 'Add Friend', onclick: async () => { await befriend(u); drawActs(); } }, icon('personAdd', 18)) : null,
       !u.bot && s === 'outgoing' ? el('button', { className: 'btn fp-icon', title: 'Friend Request Sent (click to cancel)', onclick: async () => { await attempt(() => Store.cancelFriend(u.id)); renderAll(); drawActs(); } }, icon('clock', 18)) : null,
@@ -1251,8 +1469,8 @@ function fullProfile(user, tab = 'friends') {
   drawActs();
   const sec = (title, ...kids) => el('section', { className: 'fp-sec' }, el('h4', {}, title), ...kids);
   const left = el('div', { className: 'fp-left' }, el('div', { className: 'fp-top' }, banner, el('div', { className: 'fp-av' }, avatarEl(u, { size: 120 })), acts),
-    el('div', { className: 'fp-id' }, el('h2', { className: 'fp-name' }, u.name, u.bot ? el('span', { className: 'tag' }, 'bot') : null),
-      el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null)));
+    el('div', { className: 'fp-id' }, el('h2', { className: 'fp-name' }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
+      el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null)));
   const card = el('div', { className: 'fp-card' });
   if (u.about) card.append(sec('About Me', el('div', { className: 'fp-about' }, u.about)));
   const since = [u.since && el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong(u.since)))].filter(Boolean);
@@ -1268,6 +1486,7 @@ function fullProfile(user, tab = 'friends') {
   }
   if (!card.childElementCount) card.append(el('div', { className: 'fp-quiet' }, 'Nothing here yet.'));
   left.append(card);
+  themeCard(left, u.theme);
   // the right side: what you share
   const right = el('div', { className: 'fp-right' });
   const ms = live && !self ? Store.mutualServerList(u.id) : [];
@@ -1304,17 +1523,18 @@ function showAccount(anchor) {
   closePop();
   const row = (ic, label, extra, onclick) => el('button', { onclick }, icon(ic), el('span', {}, label), extra || null);
   const card = el('div', { className: 'card' },
-    row('edit', 'Edit Profile', null, () => { closePop(); openUserSettings('profile'); }),
+    row('edit', 'Edit Profile', null, () => { closePop(); openProfileEditor(); }),
     el('hr'), row('dot', 'Set Status', el('span', { className: 'chev' }, icon('chevR', 16)), (e) => { e.stopPropagation(); statusMenu(); }),
     el('hr'), row('palette', 'Themes', el('span', { className: 'chev' }, icon('chevR', 16)), () => { closePop(); openThemes(); }),
     el('hr'), Store.kind === 'supabase'
       ? row('id', 'Copy My @handle', null, () => copyText('@' + (Store.account() || {}).login, 'Handle copied.'))
       : row('id', 'Copy User ID', null, () => copyText(me.id, 'User ID copied.')));
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, me.banner, me.color);
-  pop = el('div', { className: 'pop' }, banner,
+  pop = el('div', { className: 'pop acct' }, banner,
     el('div', { className: 'inner' }, avatarEl(asMember(), { size: 74 }),
-      el('div', { className: 'pn' }, me.name), el('div', { className: 'pr' }, me.pronouns || (STATUSES.find((s) => s[0] === me.status) || [, 'Online'])[1]),
+      el('div', { className: 'pn' }, styledName(el('span', {}, me.name), asMember()), tagChipFor(asMember())), el('div', { className: 'pr' }, me.pronouns || (STATUSES.find((s) => s[0] === me.status) || [, 'Online'])[1]),
       me.about ? el('div', { className: 'ab' }, me.about) : null, card));
+  themeCard(pop, me.theme);
   document.body.append(pop); placePop(anchor);
 }
 function statusMenu() {
@@ -1806,7 +2026,9 @@ function editTheme(id) {
   const base = {}; VARS.forEach((v) => { base[v] = (existing && existing.vars[v]) || cssVar(v) || '#222222'; });
   const name = el('input', { value: existing ? existing.name : 'My Theme', maxLength: 30 });
   const inputs = {};
-  const grid = el('div', { className: 'vars-grid' }, ...VARS.map((v) => { const c = el('input', { type: 'color', value: toHex(base[v]) }); inputs[v] = c; c.oninput = live; return el('div', { className: 'var-row' }, c, el('label', {}, v)); }));
+  const grid = el('div', { className: 'vars-grid' }, ...VARS.map((v) => { const c = colorSwatch(toHex(base[v]), () => live(), { title: v }); inputs[v] = c; return el('div', { className: 'var-row' }, c, el('label', {}, v)); }));
+  let logo = (existing && existing.logo) || 'accent';
+  const logos = logoGrid(logo, (id) => { logo = id; });
   const css = el('textarea', { className: 'code', placeholder: '/* optional extra CSS, e.g. .msg .text { font-style: italic } */', value: existing ? existing.css || '' : '' }); css.oninput = live;
   function vals() { const vars = {}; VARS.forEach((v) => vars[v] = inputs[v].value); return vars; }
   function live() { const tmp = { id: '__preview', vars: vals(), css: css.value }; VARS.forEach((v) => document.documentElement.style.setProperty('--' + v, tmp.vars[v])); const s = document.getElementById('fluency-custom-css'); if (s) s.remove(); if (css.value) document.head.append(el('style', { id: 'fluency-custom-css', textContent: css.value })); }
@@ -1815,12 +2037,13 @@ function editTheme(id) {
     el('h3', {}, existing ? 'Edit theme' : 'New theme'),
     el('div', { className: 'field' }, el('label', {}, 'Name'), name),
     el('div', { className: 'field' }, el('label', {}, 'Colours'), grid),
+    el('div', { className: 'field' }, el('label', {}, 'Logo (the Home button and tab icon, when App Icon is Match Theme)'), logos),
     el('div', { className: 'field' }, el('label', {}, 'Advanced CSS (optional)'), css),
     el('div', { className: 'row' },
       el('button', { className: 'btn', textContent: 'Cancel', onclick: () => { applyTheme(currentTheme()); scrim.remove(); } }),
       el('button', { className: 'btn primary', textContent: 'Save & apply', onclick: () => {
         const themes = loadThemes(); const tid = id || 'custom_' + Math.random().toString(36).slice(2, 8);
-        const t = { id: tid, name: name.value.trim() || 'My Theme', vars: vals(), css: css.value };
+        const t = { id: tid, name: name.value.trim() || 'My Theme', vars: vals(), css: css.value, logo };
         const i = themes.findIndex((x) => x.id === tid); if (i >= 0) themes[i] = t; else themes.push(t);
         saveThemes(themes); applyTheme(tid); renderAll(); scrim.remove();
       } }))));
@@ -2215,6 +2438,8 @@ function messageCtx(m, x, y) {
   const saved = bookmarked(m.id), speakable = typeof speechSynthesis !== 'undefined' && !!(m.text || '').trim();
   if (m.call) return menu([{ label: 'Copy Message ID', icon: 'id', action: () => copyText(String(m.call.id), 'Copied.') }], x, y);
   menu([
+    !m.sending && { label: 'Add Reaction', sub: () => [...quickReacts(8).map((q) => ({ label: emojiLabel(q), hint: null, action: () => toggleReact(m, q, true) })), '-',
+      { label: 'View More', icon: 'smilePlus', action: () => { const anchor = document.querySelector(`.msg[data-id="${CSS.escape(m.id)}"] .msg-tools`) || $('#composer'); reactPicker(m, anchor); } }] },
     !m.sending && { label: 'Reply', icon: 'reply', action: () => startReply(m) },
     live && !m.sending && { label: 'Forward', icon: 'forward', action: () => forwardFlow(m) },
     m.text && { label: 'Copy Text', icon: 'copy', action: () => copyText(plainText(m.text, fmtCtx()), 'Copied.') },
@@ -2502,6 +2727,7 @@ function blip() {
 }
 Store.init();
 renderAll();
+document.body.dataset.booted = '1';
 // a link to a channel opens it once your servers have loaded
 function followLink(tries = 0) {
   const h = location.hash, clear = () => history.replaceState(null, '', location.pathname + location.search);
@@ -2554,13 +2780,15 @@ function loadPrefs() {
   return p;
 }
 // what a layout preset or reset leaves alone (they're not about layout)
-const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar'];
+const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo'];
 const keepOf = () => Object.fromEntries(KEEP.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
 function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
 function applyPrefs() {
   const d = document.documentElement, S = (k, v) => d.setAttribute('data-' + k, v), V = (k, v) => d.style.setProperty(k, v + 'px');
   S('density', prefs.density);
   S('motion', prefs.reduceMotion ? 'off' : 'on');
+  applyAnims(prefs.anim || {});
+  setFavicon(appLogo());
   S('contrast', prefs.highContrast ? 'high' : 'normal');
   for (const [attr, val] of [['rail', prefs.rail], ['iconshape', prefs.iconShape],
     ['chanicons', prefs.chanIcons], ['cats', prefs.cats], ['sidehead', prefs.sideHead], ['userpanel', prefs.userPanel],
@@ -2639,7 +2867,13 @@ function overlay(navItems, firstSection, render) {
   let downOutside = false;
   box.addEventListener('mousedown', (e) => { downOutside = e.target === box; });
   box.addEventListener('click', (e) => { if (downOutside && e.target === box) shut(); });
-  function shut() { box.remove(); document.removeEventListener('keydown', esc); renderAll(); }
+  let gone = false;
+  function shut() {
+    if (gone) return; gone = true;
+    document.removeEventListener('keydown', esc); closeColor();
+    if (animOn('settings')) { box.classList.add('closing'); setTimeout(() => box.remove(), 180); } else box.remove();
+    renderAll();
+  }
   const esc = (e) => { if (e.key === 'Escape') shut(); };
   document.addEventListener('keydown', esc);
   function draw() {
@@ -2648,7 +2882,7 @@ function overlay(navItems, firstSection, render) {
       if (item.head) { nav.append(el('h4', {}, typeof item.head === 'function' ? item.head() : item.head)); continue; }
       if (item.hr) { nav.append(el('hr')); continue; }
       if (item.profile) {
-        const edit = el('span', { className: 'sx-edit', onclick: () => { section = 'profile'; draw(); } }, 'Edit Profile', icon('edit', 13));
+        const edit = el('span', { className: 'sx-edit', onclick: () => { shut(); openProfileEditor(); } }, 'Edit Profile', icon('edit', 13));
         nav.append(el('div', { className: 'sx-me' }, avatarEl(asMember(), { size: 42 }), el('div', { className: 'who' }, el('b', {}, me.name), edit)));
         continue;
       }
@@ -2663,13 +2897,17 @@ function overlay(navItems, firstSection, render) {
       b.append(el('span', {}, item.label));
       nav.append(b);
     }
-    body.replaceChildren(el('div', { className: 'sx-inner' }, ...[render(section, draw, shut)].flat().filter(Boolean)));
+    const inner = el('div', { className: 'sx-inner' + (section !== shownSection ? ' enter' : '') }, ...[render(section, draw, shut)].flat().filter(Boolean));
+    shownSection = section; body.replaceChildren(inner);
   }
+  let shownSection = null;
   draw();
   document.body.append(box);
   return { shut, go: (s) => { section = s; draw(); } };
 }
 
+// the logo at the top of the sign-in windows (in the look you picked)
+const sgLogo = () => el('div', { className: 'sg-logo lgwrap' }, logoEl(appLogo()));
 // ===================== signing in =====================
 // Discord, GitHub or an emailed link/code (Supabase), and the older paste-a-GitHub-token way for the data repository
 function signInDialog(after, title, startWith) {
@@ -2708,7 +2946,7 @@ function signInDialog(after, title, startWith) {
       if (!on.email) { or.remove(); byEmail.remove(); }
     });
     box.replaceChildren(
-      el('img', { className: 'sg-logo', src: 'icons/logo.svg', alt: '' }),
+      sgLogo(),
       el('h3', {}, title || 'Sign in to Fluentdat'),
       el('p', { className: 'sg-sub' }, 'Chat with your team: servers, DMs and friends, live on every device.'),
       btns, or, byEmail,
@@ -2732,7 +2970,7 @@ function signInDialog(after, title, startWith) {
       catch (e) { say(e); go.disabled = false; go.textContent = 'Log In'; pw.select(); }
     };
     for (const i of [user, pw]) i.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
-    box.replaceChildren(el('img', { className: 'sg-logo', src: 'icons/logo.svg', alt: '' }),
+    box.replaceChildren(sgLogo(),
       el('h3', {}, 'Welcome back!'), el('p', { className: 'sg-sub' }, 'Log in with the username and password you made from your invite link.'),
       el('div', { className: 'field jf' }, el('label', {}, 'Username', el('span', { className: 'req' }, ' *')), user),
       el('div', { className: 'field jf' }, el('label', {}, 'Password', el('span', { className: 'req' }, ' *')), pw),
@@ -2797,11 +3035,11 @@ const keepJoin = (code) => { try { if (code) sessionStorage.setItem(JOIN_KEY, co
 async function appJoin(code) {
   keepJoin(code);
   if (!Store.configured) { keepJoin(null); return toast('Making an account needs Fluentdat’s sign-in, which isn’t set up here.'); }
-  const w = modal({ cls: 'sg join', body: [el('img', { className: 'sg-logo', src: 'icons/logo.svg', alt: '' }), el('h3', {}, 'Checking your invite…')] });
+  const w = modal({ cls: 'sg join', body: [sgLogo(), el('h3', {}, 'Checking your invite…')] });
   const shut = () => { keepJoin(null); w.close(); };
   if (Store.kind === 'supabase') {
     const acc = Store.account() || {};
-    return w.fill([el('img', { className: 'sg-logo', src: 'icons/logo.svg', alt: '' }), el('h3', {}, 'You’re already signed in'),
+    return w.fill([sgLogo(), el('h3', {}, 'You’re already signed in'),
       el('p', { className: 'sg-sub' }, `You’re signed in as @${acc.login}. This link makes a new account: keep it for whoever it’s for, or sign out here to make one.`),
       el('div', { className: 'row' }, el('button', { className: 'btn', onclick: shut }, 'Stay Signed In'),
         el('button', { className: 'btn primary', onclick: async () => { w.close(); await Store.signOut(); renderAll(); appJoin(code); } }, 'Sign Out'))]);
@@ -2843,7 +3081,7 @@ async function appJoin(code) {
     keepJoin(null); w.close(); adoptProfile(); renderAll(); welcomeSetup();
   };
   for (const i of [name, user, pw, pw2]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
-  w.fill([el('img', { className: 'sg-logo', src: 'icons/logo.svg', alt: '' }),
+  w.fill([sgLogo(),
     el('div', { className: 'join-by' }, el('b', {}, info.by), ' invited you to Fluentdat'),
     el('h3', { className: 'center' }, 'Create an account'),
     field('Display Name', name, 'What others see. Emoji and spaces are fine; you can change it any time.'),
@@ -2855,7 +3093,7 @@ async function appJoin(code) {
       el('button', { className: 'link-btn', onclick: () => { w.close(); signInDialog(null, null, 'username'); } }, 'Already have an account?'))]);
   setTimeout(() => name.focus(), 0);
 }
-// just made an account: make it yours (or skip it; it's all in Settings → Profile later)
+// just made an account: make it yours (or skip it; it's all in the profile editor later)
 function welcomeSetup() {
   let avatar = me.avatar || '', color = me.color;
   const pv = el('div', { className: 'ws-av' });
@@ -2865,7 +3103,7 @@ function welcomeSetup() {
   const pron = el('input', { type: 'text', maxLength: 24, placeholder: 'she/her, they/them…', value: me.pronouns || '' });
   const about = el('textarea', { maxLength: 300, placeholder: 'A little about you', className: 'area', value: me.about || '' });
   const w = modal({ cls: 'sg ws', body: [
-    el('h3', { className: 'center' }, `Welcome, ${me.name}!`), el('p', { className: 'sg-sub center' }, 'Make your profile yours. You can skip this and do it later in Settings → Profile.'),
+    el('h3', { className: 'center' }, `Welcome, ${me.name}!`), el('p', { className: 'sg-sub center' }, 'Make your profile yours. You can skip this and do it later: click your name at the bottom left, then Edit Profile.'),
     el('div', { className: 'ws-top' }, pv, el('div', { className: 'ws-pick' }, up, swatches)),
     el('div', { className: 'field' }, el('label', {}, 'Pronouns'), pron), el('div', { className: 'field' }, el('label', {}, 'About Me'), about)],
     actions: [el('button', { className: 'btn ghost', onclick: () => { w.close(); toast(`You’re in, @${(Store.account() || {}).login}!`); } }, 'Skip'), el('span', { style: 'flex:1' }),
@@ -2881,25 +3119,226 @@ function adoptProfile() {
   const p = Store.myProfile();
   if (p && p.name) {
     const next = { ...me, name: p.name, color: p.color || me.color, avatar: p.avatar || '', pronouns: p.pronouns || '', about: p.about || '', status: p.status || me.status,
-      banner: p.banner || '', plate: p.plate || '' };
+      banner: p.banner || '', plate: p.plate || '', ...(Store.styled && Store.styled() ? { theme: p.theme || null, style: p.style || null } : {}) };
     if (p.id) next.id = p.id;
     if (JSON.stringify(next) !== JSON.stringify(me)) { me = next; saveMe(); }
   }
   else pushProfile();
 }
-const pushProfile = () => { if (Store.signedIn) Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, banner: me.banner || '', plate: me.plate || '' }); };
+const pushProfile = () => {
+  if (!Store.signedIn) return;
+  const t = me.theme || [], st = me.style || {};
+  Store.setProfile({ name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, banner: me.banner || '', plate: me.plate || '',
+    theme1: t[0] || '', theme2: t[1] || '', name_font: st.font || '', name_effect: st.effect || '', name_color1: st.c1 || '', name_color2: st.c2 || '' });
+};
 
 // choose a banner or nameplate: nothing, one of the gradients, or your own picture (made small enough to keep)
 function picturePicker(value, onPick, { w = 960, h = 540, label = 'Upload a picture' } = {}) {
   const grid = el('div', { className: 'grads' });
-  const draw = (v) => grid.replaceChildren(
+  const isColor = (v) => /^#[0-9a-f]{6}(,#[0-9a-f]{6})?$/i.test(v || '');
+  // any colour: the tile picks it; then "Fade to" (a second colour) appears beside the tiles
+  const colorTile = (v) => {
+    const [a, b] = isColor(v) ? v.split(',') : ['', ''];
+    const t = el('button', { className: 'grad color' + (isColor(v) ? ' on' : ''), title: 'Any colour' });
+    if (a) t.style.background = b ? `linear-gradient(135deg, ${a}, ${b})` : a; else t.append(icon('brush', 18));
+    t.onclick = (e) => { e.stopPropagation(); openColor({ anchor: t, value: a || '#5865f2', title: 'Colour',
+      onInput: (c) => { const nv = b ? `${c},${b}` : c; t.style.background = b ? `linear-gradient(135deg, ${c}, ${b})` : c; onPick(nv); },
+      onDone: (c) => { const nv = b ? `${c},${b}` : c; draw(nv); onPick(nv); } }); };
+    return t;
+  };
+  const fadeRow = (v) => {
+    if (!isColor(v)) return null;
+    const [a, b] = v.split(',');
+    const sw2 = colorSwatch(b || '', (c, done) => { const nv = `${a},${c}`; if (done) draw(nv); onPick(nv); }, { title: 'Fade to' });
+    return el('div', { className: 'grad-fade' }, el('span', {}, 'Fade to'), sw2, b ? el('button', { className: 'link-btn', onclick: () => { draw(a); onPick(a); } }, 'No fade') : null);
+  };
+  const draw = (v) => { grid.replaceChildren(colorTile(v),
     el('button', { className: 'grad none' + (!v ? ' on' : ''), title: 'None', onclick: () => { draw(''); onPick(''); } }, icon('ban', 18)),
     ...GRADS.map((g, i) => { const b = el('button', { className: 'grad' + (v === 'g:' + i ? ' on' : ''), title: 'Gradient ' + (i + 1), onclick: () => { draw('g:' + i); onPick('g:' + i); } }); b.style.background = g; return b; }),
     el('button', { className: 'grad up' + (v && v.startsWith('data:') ? ' on' : ''), title: label, onclick: () => pickFile(async (f) => {
       try { const d = await shrink(f, w, h, w > 600 ? 380000 : 190000); draw(d); onPick(d); } catch (e) { toast(String(e.message || e)); }
-    }) }, v && v.startsWith('data:') ? el('img', { src: safeImg(v), alt: '' }) : icon('image', 18)));
+    }) }, v && v.startsWith('data:') ? el('img', { src: safeImg(v), alt: '' }) : icon('image', 18))); const f = fadeRow(v); if (f) grid.append(f); };
   draw(value || '');
   return grid;
+}
+
+// ===================== the profile editor =====================
+// Its own window, like Discord's: what you can change down the left, and your profile as everyone sees it in the middle,
+// changing as you go. Nothing is saved until Save Changes; the bar that says so slides up, and shakes if you try to leave.
+function openProfileEditor() {
+  closePop(); closeTagCard();
+  if (document.querySelector('.pe-dlg')) return;
+  const live = Store.kind === 'supabase';
+  const fromMe = () => ({ name: me.name, pronouns: me.pronouns || '', about: me.about || '', color: me.color, avatar: me.avatar || '', banner: me.banner || '', plate: me.plate || '',
+    theme: me.theme ? [me.theme[0] || '', me.theme[1] || ''] : ['', ''], style: { font: '', effect: '', c1: '', c2: '', ...(me.style || {}) }, tag: (myTag() || {}).server || '' });
+  let base = fromMe(), d = JSON.parse(JSON.stringify(base));
+  const dirty = () => JSON.stringify(d) !== JSON.stringify(base);
+  const asUser = () => ({ name: d.name || 'You', color: d.color, avatar: d.avatar, status: me.status, me: true, style: hasStyle(d.style) ? d.style : null,
+    login: (Store.account() || {}).login || '', pronouns: d.pronouns, theme: d.theme[0] || d.theme[1] ? d.theme : null,
+    tag: live && d.tag ? (() => { const sv = Store.server(d.tag); return sv && sv.tag ? { text: sv.tag, badge: sv.tagBadge, color: sv.tagColor, server: sv.id } : null; })() : null });
+  // ---- the left: what you can change ----
+  const sec = (title, ...kids) => el('section', { className: 'pe-sec' }, el('h4', {}, title), ...kids);
+  const name = el('input', { type: 'text', value: d.name, maxLength: 32, placeholder: 'Your name' });
+  name.oninput = () => { d.name = name.value; update(); };
+  const pron = el('input', { type: 'text', value: d.pronouns, maxLength: 40, placeholder: 'Add your pronouns' });
+  pron.oninput = () => { d.pronouns = pron.value; update(); };
+  const about = el('textarea', { value: d.about, maxLength: 300, placeholder: 'Tell people a little about you', rows: 4 });
+  const count = el('span', { className: 'pe-count' });
+  about.oninput = () => { d.about = about.value; update(); };
+  const avTile = el('button', { className: 'pe-tile pe-av', title: 'Change Avatar', onclick: () => pickFile(async (f) => { try { d.avatar = await shrink(f, 256, 256, 150000); update(); } catch (e) { toast(String(e.message || e)); } }) });
+  const avColor = colorSwatch(d.color, (c) => { d.color = c; update(); }, { title: 'Avatar colour (behind your initials)' });
+  const styleBtn = el('button', { className: 'pe-tile pe-style', title: 'Change Display Name Style', onclick: () => nameStyleDialog(d.style, (st) => { d.style = st; update(); }, asUser) });
+  const t1 = colorSwatch(d.theme[0], (c) => { d.theme[0] = c; update(); }, { title: 'Primary colour (the top of your profile)' });
+  const t2 = colorSwatch(d.theme[1], (c) => { d.theme[1] = c; update(); }, { title: 'Accent colour (the bottom of your profile)' });
+  const tagPick = live ? (() => {
+    const mine = Store.servers().filter((sv) => sv.tag);
+    if (!mine.length) return el('p', { className: 'hint' }, 'None of your servers has a tag yet. A server’s admins can make one in Server Settings → Server Tag.');
+    return sel(d.tag, [['', 'No tag'], ...mine.map((sv) => [sv.id, `${sv.tag} · ${sv.name}`])], (v) => { d.tag = v; update(); });
+  })() : el('p', { className: 'hint' }, 'Sign in to wear a server’s tag.');
+  const side = el('div', { className: 'pe-side' },
+    el('div', { className: 'pe-title' }, icon('edit', 18), el('b', {}, 'Main Profile')),
+    sec('Display Name', name),
+    sec('Pronouns', pron),
+    sec('Avatar', el('div', { className: 'pe-row' }, avTile,
+      el('div', { className: 'pe-avbtns' },
+        el('button', { className: 'btn small', onclick: () => avTile.click() }, icon('image', 15), 'Change Avatar'),
+        el('button', { className: 'btn small ghost', onclick: () => { d.avatar = ''; update(); } }, 'Remove'),
+        el('label', { className: 'pe-inline' }, avColor, el('span', {}, 'Colour'))))),
+    sec('Display Name Style', styleBtn),
+    sec('Profile Theme', el('div', { className: 'pe-theme' }, el('label', {}, t1, el('span', {}, 'Primary')), el('label', {}, t2, el('span', {}, 'Accent')),
+      el('button', { className: 'link-btn', onclick: () => { d.theme = ['', '']; t1.set(''); t2.set(''); update(); } }, 'Reset'))),
+    sec('Banner', picturePicker(d.banner, (v) => { d.banner = v; update(); }, { w: 680, h: 240, label: 'Upload a banner' })),
+    sec('Nameplate', picturePicker(d.plate, (v) => { d.plate = v; update(); }, { w: 480, h: 96, label: 'Upload a nameplate' })),
+    sec('Server Tag', tagPick),
+    sec('About Me', about, count));
+  // ---- the middle: your profile, as others see it ----
+  const card = el('div', { className: 'pe-card' }), chat = el('div', { className: 'pe-chat' }), memRow = el('div', { className: 'mem pe-mem' });
+  const preview = el('div', { className: 'pe-main' }, el('div', { className: 'pe-label' }, 'Preview'), card,
+    el('div', { className: 'pe-label' }, 'In a conversation'), chat, el('div', { className: 'pe-label' }, 'In the member list'), memRow);
+  const bar = el('div', { className: 'pe-bar' }, el('span', {}, 'Careful — you have unsaved changes!'),
+    el('button', { className: 'btn ghost', onclick: () => { d = JSON.parse(JSON.stringify(base)); refill(); update(); } }, 'Reset'),
+    el('button', { className: 'btn primary', onclick: save }, 'Save Changes'));
+  function refill() { name.value = d.name; pron.value = d.pronouns; about.value = d.about; avColor.set(d.color); t1.set(d.theme[0]); t2.set(d.theme[1]); }
+  function update() {
+    const u = asUser();
+    avTile.replaceChildren(avatarEl(u, { size: 72 }), el('span', { className: 'pe-cam' }, icon('image', 16)));
+    styleBtn.replaceChildren(styledName(el('span', { className: 'pe-sname' }, d.name || 'You'), u), el('span', { className: 'pe-chg' }, 'Change'));
+    count.textContent = `${d.about.length}/300`;
+    // the card
+    const banner = el('div', { className: 'pe-banner' }); setBanner(banner, d.banner, d.color);
+    card.replaceChildren(banner, el('div', { className: 'pe-cav' }, avatarEl(u, { size: 92 })),
+      el('div', { className: 'pe-cbody' },
+        el('h2', { className: 'pe-cname' }, styledName(el('span', {}, d.name || 'You'), u)),
+        el('div', { className: 'fp-tags' }, u.login ? el('span', {}, u.login) : null, d.pronouns ? el('span', { className: 'dmp-pro' }, d.pronouns) : null, u.tag ? el('span', { className: 'dmp-tagwrap' }, tagChip(u.tag)) : null),
+        d.about ? el('section', { className: 'pe-csec' }, el('h4', {}, 'About Me'), el('div', { className: 'fp-about' }, d.about)) : null,
+        el('section', { className: 'pe-csec' }, el('h4', {}, 'Member Since'), el('div', { className: 'fp-since' }, icon('logo', 16), el('span', {}, dateLong((Store.myProfile && Store.myProfile().since) || Date.now()))))));
+    themeCard(card, u.theme);
+    // a message, and a member-list row
+    const nm = styledName(el('span', { className: 'nm' }, d.name || 'You'), u); nm.style.setProperty('--who', safeColor(d.color));
+    chat.replaceChildren(el('div', { className: 'msg' }, avatarEl(u), el('div', { className: 'body' },
+      el('div', { className: 'meta' }, nm, u.tag ? tagChip(u.tag) : null, el('span', { className: 'when' }, 'Today at ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))),
+      el('div', { className: 'text' }, 'Hey! This is how my messages look.'))));
+    const mnm = el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, d.name || 'You'), u), u.tag ? tagChip(u.tag) : null); mnm.style.setProperty('--who', safeColor(d.color));
+    memRow.replaceChildren(avatarEl(u), el('div', { className: 'who' }, mnm)); plateOn(memRow, d.plate);
+    bar.classList.toggle('on', dirty());
+  }
+  async function save() {
+    const st = d.style, theme = d.theme[0] || d.theme[1] ? [d.theme[0], d.theme[1]] : null;
+    me = { ...me, name: d.name.trim().slice(0, 32) || 'You', pronouns: d.pronouns.trim(), about: d.about.trim(), color: d.color, avatar: d.avatar, banner: d.banner, plate: d.plate,
+      theme, style: hasStyle(st) ? { font: st.font, effect: st.effect, c1: st.c1, c2: st.c2 } : null };
+    saveMe(); pushProfile();
+    if (live && d.tag !== base.tag && (await attempt(() => Store.adoptTag(d.tag || null))) === null) return;
+    base = fromMe(); d = JSON.parse(JSON.stringify(base)); refill(); update(); renderAll();
+    toast('Profile saved.');
+  }
+  const leave = () => {
+    if (!dirty()) return w.close();
+    bar.classList.remove('shake'); void bar.offsetWidth; bar.classList.add('shake');
+  };
+  const w = modal({ cls: 'pe-dlg', body: [el('div', { className: 'pe' }, side, preview), bar], onClose: () => closeColor() });
+  // (Escape and the backdrop only close it when nothing is unsaved; otherwise the bar shakes)
+  const guard = (e) => { if (e.key === 'Escape' && document.querySelector('.pe-dlg') && dirty() && !document.querySelector('.cp, .ns-dlg, .ctx')) { e.stopImmediatePropagation(); leave(); } };
+  addEventListener('keydown', guard, true);
+  const off = new MutationObserver(() => { if (!w.scrim.isConnected) { removeEventListener('keydown', guard, true); off.disconnect(); } });
+  off.observe(document.body, { childList: true });
+  w.scrim.addEventListener('mousedown', (e) => { if (e.target === w.scrim && dirty()) { e.stopImmediatePropagation(); leave(); } }, true);
+  w.scrim.addEventListener('click', (e) => { if (e.target === w.scrim && dirty()) e.stopImmediatePropagation(); }, true);
+  w.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: leave }, icon('x', 20)));
+  update();
+}
+
+// Discord's "Change Display Name Style": a font, an effect and colours, with a preview, Surprise Me and Apply
+function nameStyleDialog(start, onApply, who) {
+  let st = { font: '', effect: '', c1: '', c2: '', ...(start || {}) };
+  if (!st.effect) st.effect = 'solid';
+  const fonts = el('div', { className: 'ns-grid' }), effects = el('div', { className: 'ns-grid fx' }), colors = el('div', { className: 'ns-colors' }), colors2 = el('div', { className: 'ns-colors' });
+  const pv = el('div', { className: 'ns-pv' });
+  const two = () => ['gradient', 'pop', 'gummy', 'toon', 'glow'].includes(st.effect);
+  const c2row = el('div', { className: 'ns-c2' }, el('h5', {}, 'Second Colour'), colors2);
+  function draw() {
+    fonts.replaceChildren(...FONTS.map(([id, label]) => { if (id) loadFont(id); const b = el('button', { className: 'ns-tile' + (st.font === id ? ' on' : ''), title: label, onclick: () => { st.font = id; draw(); } }, el('span', { style: id ? `font-family:${fontFamily(id)}` : '' }, 'Gg'), el('small', {}, label)); return b; }));
+    effects.replaceChildren(...EFFECTS.map(([id, label]) => { const t = el('span', {}, label); styleName(t, { font: '', effect: id, c1: st.c1 || '#ffffff', c2: st.c2 || st.c1 || '#ffffff' }); return el('button', { className: 'ns-tile fx' + (st.effect === id ? ' on' : ''), onclick: () => { st.effect = id; draw(); } }, t); }));
+    const swatches = (key, box) => {
+      const custom = colorSwatch(st[key], (c) => { st[key] = c; drawPreview(); markColors(); }, { title: 'Any colour' });
+      custom.classList.add('ns-custom'); custom.append(icon('brush', 14));
+      box.replaceChildren(custom, ...NAME_COLORS.map((c) => el('button', { className: 'ns-sw' + (st[key] === c ? ' on' : ''), style: `background:${c}`, title: c, onclick: () => { st[key] = c; draw(); } })));
+    };
+    swatches('c1', colors); swatches('c2', colors2);
+    c2row.hidden = !two();
+    drawPreview();
+  }
+  const markColors = () => { for (const [key, box] of [['c1', colors], ['c2', colors2]]) for (const b of box.querySelectorAll('.ns-sw')) b.classList.toggle('on', b.title === st[key]); };
+  function drawPreview() {
+    const u = { ...who(), style: { ...st, c1: st.c1 || '#ffffff' } };
+    const nm = styledName(el('span', { className: 'nm' }, u.name), u);
+    pv.replaceChildren(
+      el('div', { className: 'ns-pcard' }, avatarEl(u, { size: 56 }), el('div', {}, el('div', { className: 'ns-pname' }, styledName(el('span', {}, u.name), u)), el('div', { className: 'ns-phandle' }, u.login || 'you'))),
+      el('div', { className: 'msg ns-pmsg' }, avatarEl(u), el('div', { className: 'body' }, el('div', { className: 'meta' }, nm, el('span', { className: 'when' }, 'Today at 11:15 PM')), el('div', { className: 'text' }, 'does anyone read this?'))),
+      el('div', { className: 'mem ns-pmem' }, avatarEl(u), el('div', { className: 'who' }, el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, u.name), u)))));
+  }
+  const w = modal({ cls: 'ns-dlg', body: [el('div', { className: 'ns-wrap' },
+    el('div', { className: 'ns-left' }, el('h3', {}, 'Change Display Name Style'),
+      el('h5', {}, 'Choose Font'), fonts, el('h5', {}, 'Choose Effect'), effects, el('h5', {}, 'Choose Colour'), colors, c2row),
+    el('div', { className: 'ns-right' }, pv, el('p', { className: 'hint' }, 'In a server, a role’s colour shows instead of these colours (your font stays).')))],
+    actions: [el('button', { className: 'btn ghost', onclick: () => { onApply({ font: '', effect: '', c1: '', c2: '' }); w.close(); } }, 'Remove Style'), el('span', { style: 'flex:1' }),
+      el('button', { className: 'btn', onclick: () => { st = surprise(); draw(); } }, icon('sparkle', 16), 'Surprise Me'),
+      el('button', { className: 'btn primary', onclick: () => { if (!st.c1 && st.effect !== 'prism') st.c1 = '#ffffff'; onApply({ ...st }); w.close(); } }, 'Apply')], onClose: () => closeColor() });
+  draw();
+}
+
+// ===================== a server's tag (Server Settings → Server Tag) =====================
+function svTag(sv, redraw) {
+  let text = sv.tag || '', badge = sv.tagBadge || 'star', color = sv.tagColor || TAG_COLORS[0];
+  const input = el('input', { type: 'text', value: text, maxLength: 4, placeholder: 'ROBO', className: 'tag-in', spellcheck: false });
+  const pv = el('div', { className: 'tag-pv' }), badges = el('div', { className: 'tag-badges' }), colors = el('div', { className: 'ns-colors' });
+  const draw = () => {
+    const chip = tagChip({ text: text || 'TAG', badge, color }); chip.classList.add('big');
+    const nm = el('span', { className: 'nm' }, me.name); nm.style.setProperty('--who', safeColor(me.color));
+    pv.replaceChildren(el('div', { className: 'tag-big' }, chip),
+      el('div', { className: 'msg' }, avatarEl(asMember()), el('div', { className: 'body' }, el('div', { className: 'meta' }, nm, tagChip({ text: text || 'TAG', badge, color }), el('span', { className: 'when' }, 'Today at 4:20 PM')), el('div', { className: 'text' }, 'This is how members wearing the tag look.'))));
+    badges.replaceChildren(...BADGES.map(([id, label]) => { const b = el('button', { className: 'tag-badge' + (id === badge ? ' on' : ''), title: label, onclick: () => { badge = id; draw(); } }); b.innerHTML = badgeSVG(id, 20); b.style.setProperty('--tc', color); return b; }));
+    const custom = colorSwatch(color, (c) => { color = c; draw(); }, { title: 'Any colour' }); custom.classList.add('ns-custom'); custom.append(icon('brush', 14));
+    colors.replaceChildren(custom, ...TAG_COLORS.map((c) => el('button', { className: 'ns-sw' + (c === color ? ' on' : ''), style: `background:${c}`, title: c, onclick: () => { color = c; draw(); } })));
+  };
+  input.oninput = () => { const v = input.value.replace(/[^A-Za-z0-9]/g, '').slice(0, 4); if (v !== input.value) input.value = v; text = v.toUpperCase() === v ? v : v; draw(); };
+  const save = el('button', { className: 'btn primary', onclick: async () => {
+    if (text.length < 2) return toast('A tag is 2 to 4 letters or numbers.');
+    if ((await attempt(() => Promise.resolve(Store.updateServer(sv.id, { tag: text, tagBadge: badge, tagColor: color })))) === null) return;
+    toast(`${sv.name}’s tag is ${text}. Members can wear it from their profile.`); redraw();
+  } }, 'Save Tag');
+  const drop = sv.tag ? el('button', { className: 'btn danger', onclick: async () => {
+    if (!(await confirmBox({ title: 'Remove the server tag?', text: 'It comes off everyone wearing it.', ok: 'Remove Tag', danger: true }))) return;
+    Store.updateServer(sv.id, { tag: '', tagBadge: '', tagColor: '' }); toast('Server tag removed.'); redraw();
+  } }, 'Remove Tag') : null;
+  draw();
+  return [el('h2', {}, 'Server Tag'),
+    el('p', { className: 'sub' }, 'Give your server a tag: up to four letters and a badge. Members can wear it beside their name everywhere in Fluentdat, and anyone can click it to see where it’s from.'),
+    pv,
+    el('h3', {}, 'Tag'), row2('Letters', '2 to 4 letters or numbers.', input),
+    el('h3', {}, 'Badge'), badges,
+    el('h3', {}, 'Colour'), colors,
+    el('div', { className: 'row', style: 'justify-content:flex-start;gap:8px;margin-top:14px' }, save, drop),
+    Store.kind === 'supabase' && !(Store.styled && Store.styled()) ? el('div', { className: 'note-box', style: 'margin-top:12px' }, 'Server tags need the newest supabase/setup.sql.') : null];
 }
 
 // ===================== user settings =====================
@@ -2909,12 +3348,13 @@ function openUserSettings(section = 'account') {
     { search: true },
     { head: 'User Settings' },
     { id: 'account', label: 'My Account', icon: 'user' },
-    { id: 'profile', label: 'Profile', icon: 'edit' },
+    { id: 'profile', label: 'Profile', icon: 'edit', action: (shut) => { shut(); openProfileEditor(); } },
     { id: 'sync', label: 'Data & Sync', icon: 'cloud' },
     Store.kind === 'supabase' && Store.isAppAdmin() && { id: 'admin', label: 'Invites & Reports', icon: 'key' },
     { hr: true }, { head: 'App Settings' },
     { id: 'appearance', label: 'Appearance', icon: 'palette' },
     { id: 'layout', label: 'Layout', icon: 'layout' },
+    { id: 'animations', label: 'Animations', icon: 'sparkle' },
     { id: 'notifications', label: 'Notifications', icon: 'bell' },
     { id: 'privacy', label: 'Privacy & Safety', icon: 'shield' },
     { id: 'accessibility', label: 'Accessibility', icon: 'eye' },
@@ -2928,11 +3368,11 @@ function openUserSettings(section = 'account') {
   ].filter(Boolean);
   openUserSettings.ref = overlay(nav, section, (sec, redraw, shut) => {
     if (sec === 'account') return accountPane(redraw);
-    if (sec === 'profile') return profilePane(redraw);
     if (sec === 'sync') return syncPane(redraw);
     if (sec === 'appearance') return appearancePane(redraw);
     if (sec === 'layout') return layoutPane(redraw);
     if (sec === 'notifications') return notificationsPane(redraw);
+    if (sec === 'animations') return animationsPane(redraw);
     if (sec === 'privacy') return privacyPane(redraw);
     if (sec === 'admin') return adminPane();
     if (sec === 'accessibility') return accessibilityPane(redraw);
@@ -3039,7 +3479,7 @@ function accountPane(redraw) {
       el('div', { style: 'font-weight:700;color:var(--bright);font-size:1.15rem' }, me.name),
       el('div', { style: 'color:var(--muted);font-size:.86rem' }, live ? `@${acc.login} · signed in with ${via}` : acc ? '@' + acc.login + ' on GitHub' : 'Signed out — this browser only'),
       me.about ? el('div', { style: 'margin-top:6px;font-size:.88rem' }, me.about) : null),
-    el('button', { className: 'btn', onclick: () => openUserSettings.ref.go('profile') }, 'Edit Profile')));
+    el('button', { className: 'btn', onclick: () => { openUserSettings.ref.shut(); openProfileEditor(); } }, 'Edit Profile')));
   out.push(el('h3', {}, 'Account'));
   const signOut = el('button', { className: 'btn', onclick: async () => { if (await confirmBox({ title: 'Log Out', text: live ? 'Sign out of Fluentdat in this browser?' : 'Sign out of GitHub?', ok: 'Log Out', danger: true })) { await Store.signOut(); redraw(); renderAll(); } } }, 'Sign Out');
   if (live) {
@@ -3055,47 +3495,6 @@ function accountPane(redraw) {
   }
   out.push(row2('Status', 'How you show up to everyone else.', sel(me.status, STATUSES, (v) => { me.status = v; saveMe(); pushProfile(); renderAll(); })));
   return out;
-}
-
-function profilePane(redraw) {
-  const name = el('input', { type: 'text', value: me.name, maxLength: 24 });
-  const pron = el('input', { type: 'text', value: me.pronouns || '', maxLength: 24, placeholder: 'she/her, they/them…' });
-  const about = el('textarea', { value: me.about || '', maxLength: 300, placeholder: 'A little about you', className: 'area' });
-  let color = me.color, avatar = me.avatar || '', banner = me.banner || '', plate = me.plate || '';
-  // a live preview: your card, and your nameplate as it shows in member lists
-  const pvBanner = el('div', { className: 'pv-banner' }), pvAv = el('div', { className: 'pv-av' }), pvName = el('div', { className: 'pv-name' }), pvAbout = el('div', { className: 'pv-desc' });
-  const pvRow = el('div', { className: 'mem pv-row' });
-  const draw = () => {
-    const u = { name: name.value || 'You', color, avatar, status: me.status, me: true };
-    setBanner(pvBanner, banner, color);
-    pvAv.replaceChildren(avatarEl(u, { size: 64 })); pvName.textContent = u.name; pvAbout.textContent = about.value;
-    const nm = el('div', { className: 'nm' }, u.name); nm.style.setProperty('--who', safeColor(color));
-    pvRow.replaceChildren(avatarEl(u), el('div', { className: 'who' }, nm)); plateOn(pvRow, plate);
-  };
-  name.oninput = draw; about.oninput = draw;
-  const swatches = el('div', { className: 'swatches' }, ...COLORS.map((c) => { const b = el('button', { className: c === color ? 'on' : '' }); b.style.background = c; b.onclick = () => { color = c; [...swatches.children].forEach((x) => x.classList.remove('on')); b.classList.add('on'); draw(); }; return b; }));
-  const save = () => {
-    me = { ...me, name: name.value.trim().slice(0, 24) || 'You', color, avatar, pronouns: pron.value.trim(), about: about.value.trim(), banner, plate };
-    saveMe(); pushProfile(); renderAll(); toast('Profile saved.');
-  };
-  draw();
-  return [el('h2', {}, 'Profile'), el('p', { className: 'sub' }, Store.signedIn ? 'This is what everyone else sees.' : 'Saved in this browser. Sign in to share it.'),
-    el('div', { className: 'sv-prof' }, el('div', { className: 'sv-form' },
-      el('h3', {}, 'Avatar'),
-      el('div', { className: 'btn-row' },
-        el('button', { className: 'btn primary', onclick: () => pickFile(async (f) => { try { avatar = await shrink(f, 256, 256, 150000); draw(); } catch (e) { toast(String(e.message || e)); } }) }, 'Change Avatar'),
-        el('button', { className: 'btn ghost', onclick: () => { avatar = ''; draw(); } }, 'Use colour')),
-      el('div', { style: 'margin-top:10px' }, swatches),
-      el('h3', {}, 'Profile banner'), el('p', { className: 'hint' }, 'The top of your profile card.'),
-      picturePicker(banner, (v) => { banner = v; draw(); }, { w: 680, h: 240, label: 'Upload a banner' }),
-      el('h3', {}, 'Nameplate'), el('p', { className: 'hint' }, 'Behind your name in member lists, DMs and your panel.'),
-      picturePicker(plate, (v) => { plate = v; draw(); }, { w: 480, h: 96, label: 'Upload a nameplate' }),
-      el('h3', {}, 'Details'),
-      row2('Display name', 'Shown on every message you send.', name),
-      row2('Pronouns', 'Under your name on your profile card.', pron),
-      el('div', { style: 'padding:14px 0' }, el('div', { style: 'font-weight:600;color:var(--bright);margin-bottom:6px' }, 'About me'), about),
-      el('div', { className: 'row', style: 'justify-content:flex-start' }, el('button', { className: 'btn primary', onclick: save }, 'Save Profile'))),
-    el('div', { className: 'pv-col' }, el('div', { className: 'pv-label' }, 'Preview'), el('div', { className: 'pv-card' }, pvBanner, el('div', { className: 'pv-body' }, pvAv, pvName, pvAbout)), el('div', { className: 'pv-label' }, 'Nameplate'), pvRow))];
 }
 
 function syncPane(redraw) {
@@ -3137,11 +3536,36 @@ function appearancePane(redraw) {
     el('div', { className: 'row', style: 'justify-content:flex-start' },
       el('button', { className: 'btn primary', onclick: () => editTheme(null) }, 'Make a Theme'),
       el('button', { className: 'btn', onclick: () => openThemes() }, 'Manage Themes…')),
+    el('h3', {}, 'App Icon'),
+    el('p', { className: 'hint' }, 'Fluentdat’s logo on the Home button and the browser tab. Match Theme uses the one your theme brings.'),
+    logoGrid(prefs.logo || 'theme', (id) => { prefs.logo = id; savePrefs(); renderRail(); }, { withTheme: true }),
     el('h3', {}, 'Messages'),
     row2('Display', 'Cozy gives each message room. Compact fits more on screen.', sel(prefs.density, [['cozy', 'Cozy'], ['compact', 'Compact']], (v) => { prefs.density = v; savePrefs(); })),
     row2('Text size', 'Everything in the app scales with this.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })()),
     row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos under the messages that link to them.', sw(prefs.embeds !== 'off', (on) => { prefs.embeds = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
     row2('Formatting bar', 'Bold, italics, code and more above the message box when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => { prefs.formatBar = on ? 'on' : 'off'; savePrefs(); }))];
+}
+
+// every animation, each with its own switch (and all of them at once)
+function animationsPane(redraw) {
+  const off = prefs.anim || (prefs.anim = {});
+  const set = (id, on) => { if (on) delete off[id]; else off[id] = true; savePrefs(); };
+  const groups = [...new Set(ANIMS.map((a) => a[1]))];
+  const allOn = !prefs.reduceMotion;
+  const out = [el('h2', {}, 'Animations'), el('p', { className: 'sub' }, 'Fluentdat moves a lot. Turn off anything you’d rather stayed still, one by one, or all at once.'),
+    row2('Animations', 'Everything below. (Reduce Motion in Accessibility is the same switch.)', sw(allOn, (on) => { prefs.reduceMotion = !on; savePrefs(); redraw(); })),
+    el('div', { className: 'row', style: 'justify-content:flex-start;gap:8px;margin:4px 0 6px' },
+      el('button', { className: 'btn small', onclick: () => { prefs.anim = {}; prefs.reduceMotion = false; savePrefs(); redraw(); } }, 'Turn All On'),
+      el('button', { className: 'btn small', onclick: () => { prefs.anim = Object.fromEntries(ANIMS.map((a) => [a[0], true])); savePrefs(); redraw(); } }, 'Turn All Off'))];
+  for (const g of groups) {
+    out.push(el('h3', {}, g));
+    for (const [id, , name, desc] of ANIMS.filter((a) => a[1] === g)) {
+      const row = row2(name, desc, sw(!off[id], (on) => set(id, on)));
+      if (!allOn) row.classList.add('faded');
+      out.push(row);
+    }
+  }
+  return out;
 }
 
 function notificationsPane(redraw) {
@@ -3200,7 +3624,7 @@ function keysPane() {
 }
 
 function aboutPane() {
-  return [el('div', { className: 'about-head' }, el('img', { src: 'icons/logo.svg', alt: '' }), el('div', {}, el('h2', {}, 'About Fluentdat'), el('p', { className: 'sub' }, 'A chat app built from scratch, running entirely in your browser.'))),
+  return [el('div', { className: 'about-head' }, logoEl(appLogo(), { size: 64 }), el('div', {}, el('h2', {}, 'About Fluentdat'), el('p', { className: 'sub' }, 'A chat app built from scratch, running entirely in your browser.'))),
     el('div', { className: 'note-box' },
       el('div', {}, el('b', {}, 'Fluentdat'), ' — servers, channels, DMs, friends, stickers and themes. The app is a static site; your data is in this browser, in Fluentdat’s Supabase database when you sign in, or in a private GitHub repository the older way.'),
       el('ol', {}, el('li', {}, 'Built by TrixWotel'), el('li', {}, 'Map of the stack: static HTML, CSS and JavaScript modules — no framework, no build step'), el('li', {}, 'Data layer swaps between this browser, Supabase and GitHub without the UI knowing'))),
@@ -3220,6 +3644,7 @@ function openServerSettings(svId, section = 'profile') {
     live && can && { id: 'discovery', label: 'Discovery', icon: 'compass' },
     can && { id: 'channels', label: 'Channels', icon: 'hash' },
     can && { id: 'categories', label: 'Categories', icon: 'menu' },
+    live && can && { id: 'tag', label: 'Server Tag', icon: 'tag' },
     live && can && { id: 'emoji', label: 'Emoji', icon: 'smile' },
     live && can && { id: 'stickers', label: 'Stickers', icon: 'sticker' },
     { head: 'People' },
@@ -3238,6 +3663,7 @@ function openServerSettings(svId, section = 'profile') {
     if (sec === 'channels') return svChannels(cur, redraw);
     if (sec === 'categories') return svCategories(cur, redraw);
     if (sec === 'emoji') return svEmoji(cur, redraw);
+    if (sec === 'tag') return svTag(cur, redraw);
     if (sec === 'stickers') return svStickers(cur, redraw);
     if (sec === 'members') return svMembers(cur, redraw);
     if (sec === 'roles') return svRoles(cur, redraw, state);
@@ -3998,7 +4424,7 @@ function layoutStudio(redraw) {
       row2('Position', 'Across the top or the bottom of the window.', el('div', { className: 'btn-row' }, ...[['top', 'Top'], ['bottom', 'Bottom']].map(([v, l]) =>
         el('button', { className: 'btn small' + (prefs.statusPos === v || (v === 'top' && prefs.statusPos !== 'bottom') ? ' primary' : ''), onclick: () => { remember(); prefs.statusPos = v; commit(); } }, l)))));
     if (id === 'rail') out.push(flag('rail', 'Show the server rail', 'The strip of server icons.'), size('railW', 'Server icons grow with it.'), sideways('cols', COLS),
-      pickRow('iconShape', 'Icon shape', [['squircle', 'Squircle'], ['round', 'Circle'], ['square', 'Rounded square']]), ...buttonRows('rail'));
+      pickRow('iconShape', 'Icon shape', [['squircle', 'Circle, squircle when open (Discord)'], ['round', 'Always a circle'], ['square', 'Always a rounded square']]), ...buttonRows('rail'));
     if (id === 'side') out.push(size('sideW'), sideways('cols', COLS), size('chanH'), flag('cats', 'Category headings', 'TEXT CHANNELS, VOICE CHANNELS…'), flag('chanIcons', 'Channel icons', 'The # and speaker marks.'), ...buttonRows('dms'));
     if (id === 'head') out.push(flag('sideHead', 'Show the server header', 'The server’s name and menu.'), flag('serverBanner', 'Server banners', 'A server’s picture at the top of its channels.'),
       size('bannerH', 'When a server has a banner.'), updown('sideOrder', SIDE_PARTS), ...buttonRows('header'));

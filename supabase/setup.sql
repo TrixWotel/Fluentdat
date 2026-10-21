@@ -17,6 +17,9 @@
 --   * Someone new can also make an account with a username and a password (no email), from a one-time link that only
 --     the people who run Fluentdat (TrixWotel) can make.
 --   * A server's admins add its own emoji and stickers (pictures, GIFs too); everyone signed in can see them.
+--   * Reactions: anyone who can read a message can react to it (up to 20 different emoji a message); only your own come back off.
+--   * A server's admins can give it a tag (up to 4 letters and a badge); its members may wear it on their profile, and
+--     nobody can wear a tag that isn't from a server they're in.
 
 -- ===================== tables =====================
 -- (passwords for accounts made from a one-time link are hashed with pgcrypto, which Supabase keeps in "extensions")
@@ -249,10 +252,40 @@ create table if not exists public.server_stickers (
   check (path ~ ('^' || server_id::text || '/sticker/[0-9a-f-]{36}\.(png|gif|webp|jpg)$'))
 );
 
+-- reactions: an emoji under a message, from one person. Taking one back keeps its row, switched off, so the change
+-- reaches everyone live (a deleted row couldn't say which conversation it was in)
+create table if not exists public.reactions (
+  message_id uuid not null,
+  place uuid not null,                                   -- the channel or DM the message is in
+  user_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  emoji text not null check (char_length(emoji) between 1 and 80 and emoji !~ '\s'
+    and (emoji ~ '^<a?:[A-Za-z0-9_]{2,32}:[0-9a-f-]{36}>$' or (char_length(emoji) <= 16 and emoji !~ '[<>]'))),
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (message_id, user_id, emoji)
+);
+create index if not exists reactions_place on public.reactions (place);
+
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
 alter table public.profiles add column if not exists plate text not null default '';
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
+-- a profile's theme (two colours: the top and bottom of the card) and display name style (a font, an effect, colours)
+alter table public.profiles add column if not exists theme1 text not null default '';
+alter table public.profiles add column if not exists theme2 text not null default '';
+alter table public.profiles add column if not exists name_font text not null default '';
+alter table public.profiles add column if not exists name_effect text not null default '';
+alter table public.profiles add column if not exists name_color1 text not null default '';
+alter table public.profiles add column if not exists name_color2 text not null default '';
+-- the server tag someone wears: copied from the server (by adopt_tag) so everyone who sees the profile sees the tag
+alter table public.profiles add column if not exists tag_server uuid references public.servers (id) on delete set null;
+alter table public.profiles add column if not exists tag text not null default '';
+alter table public.profiles add column if not exists tag_badge text not null default '';
+alter table public.profiles add column if not exists tag_color text not null default '';
+alter table public.servers add column if not exists tag text not null default '';
+alter table public.servers add column if not exists tag_badge text not null default '';
+alter table public.servers add column if not exists tag_color text not null default '';
 alter table public.servers add column if not exists banner text not null default '';
 alter table public.servers add column if not exists description text not null default '';
 alter table public.servers add column if not exists category text not null default '';
@@ -284,16 +317,22 @@ do $$ begin
     and char_length(description) <= 300 and char_length(category) <= 30);
 exception when duplicate_object then null; end $$;
 -- colours are colours and pictures are pictures (a web address here would let its owner see who looked at a profile)
-do $$ begin
-  alter table public.profiles add constraint profiles_shapes check (color ~ '^#[0-9a-fA-F]{6}$'
-    and (avatar = '' or avatar ~ '^data:image/(png|jpeg|webp|gif);base64,' or avatar ~ '^https://(cdn\.discordapp\.com|avatars\.githubusercontent\.com)/')
-    and (banner = '' or banner ~ '^g:[0-9]$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,')
-    and (plate = '' or plate ~ '^g:[0-9]$' or plate ~ '^data:image/(png|jpeg|webp|gif);base64,'));
-exception when duplicate_object then null; end $$;
-do $$ begin
-  alter table public.servers add constraint servers_shapes check ((img = '' or img ~ '^data:image/(png|jpeg|webp|gif);base64,')
-    and (banner = '' or banner ~ '^g:[0-9]$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,'));
-exception when duplicate_object then null; end $$;
+-- (a banner or nameplate: a picture, one of the ten gradients, or any colour or two)
+alter table public.profiles drop constraint if exists profiles_shapes;
+alter table public.profiles add constraint profiles_shapes check (color ~ '^#[0-9a-fA-F]{6}$'
+  and (avatar = '' or avatar ~ '^data:image/(png|jpeg|webp|gif);base64,' or avatar ~ '^https://(cdn\.discordapp\.com|avatars\.githubusercontent\.com)/')
+  and (banner = '' or banner ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,')
+  and (plate = '' or plate ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or plate ~ '^data:image/(png|jpeg|webp|gif);base64,'));
+alter table public.profiles drop constraint if exists profiles_style;
+alter table public.profiles add constraint profiles_style check ((theme1 = '' or theme1 ~ '^#[0-9a-fA-F]{6}$') and (theme2 = '' or theme2 ~ '^#[0-9a-fA-F]{6}$')
+  and name_font ~ '^[a-z0-9]{0,16}$' and name_effect ~ '^[a-z]{0,16}$'
+  and (name_color1 = '' or name_color1 ~ '^#[0-9a-fA-F]{6}$') and (name_color2 = '' or name_color2 ~ '^#[0-9a-fA-F]{6}$')
+  and tag ~ '^[A-Za-z0-9]{0,4}$' and tag_badge ~ '^[a-z0-9]{0,20}$' and (tag_color = '' or tag_color ~ '^#[0-9a-fA-F]{6}$'));
+alter table public.servers drop constraint if exists servers_shapes;
+alter table public.servers add constraint servers_shapes check ((img = '' or img ~ '^data:image/(png|jpeg|webp|gif);base64,')
+  and (banner = '' or banner ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,'));
+alter table public.servers drop constraint if exists servers_tag;
+alter table public.servers add constraint servers_tag check (tag ~ '^[A-Za-z0-9]{0,4}$' and tag_badge ~ '^[a-z0-9]{0,20}$' and (tag_color = '' or tag_color ~ '^#[0-9a-fA-F]{6}$'));
 do $$ begin
   alter table public.dms add constraint dms_shape check ((kind = 'dm' and user_a is not null and user_b is not null and user_a < user_b)
     or (kind = 'group' and user_a is null and user_b is null and char_length(name) <= 100
@@ -443,6 +482,17 @@ begin
      or split_part(p_name, '/', 3) !~ '^[0-9a-f-]{36}\.(png|gif|webp|jpg)$' or split_part(p_name, '/', 4) <> '' then return false; end if;
   return is_admin(sv::uuid);
 end $$;
+
+-- can you read this channel or DM? and is this message in it?
+create or replace function public.place_ok(p_place uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select is_member(channel_server(p_place)) or in_dm(p_place);
+$$;
+create or replace function public.message_in(p_message uuid, p_place uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from messages where id = p_message and channel_id = p_place)
+      or exists (select 1 from dm_messages where id = p_message and dm_id = p_place);
+$$;
 
 -- ===================== row level security =====================
 alter table public.profiles enable row level security;
@@ -609,6 +659,19 @@ create policy "admins change stickers" on public.server_stickers for update to a
 drop policy if exists "admins remove stickers" on public.server_stickers;
 create policy "admins remove stickers" on public.server_stickers for delete to authenticated using (is_admin(server_id));
 
+-- reactions: seen and made by whoever can read the message; only your own can be switched off (or deleted)
+alter table public.reactions enable row level security;
+drop policy if exists "see reactions where you read" on public.reactions;
+create policy "see reactions where you read" on public.reactions for select to authenticated using (place_ok(place));
+drop policy if exists "react where you read" on public.reactions;
+create policy "react where you read" on public.reactions for insert to authenticated
+  with check (user_id = auth.uid() and place_ok(place) and message_in(message_id, place));
+drop policy if exists "switch your reactions on and off" on public.reactions;
+create policy "switch your reactions on and off" on public.reactions for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid() and place_ok(place));
+drop policy if exists "remove your reactions" on public.reactions;
+create policy "remove your reactions" on public.reactions for delete to authenticated using (user_id = auth.uid());
+
 -- an emoji or sticker keeps its server, picture and maker (only its name, and a sticker's emoji and description, change),
 -- and a server holds up to 50 emoji and 30 stickers
 create or replace function public.guard_expression() returns trigger
@@ -701,6 +764,71 @@ drop trigger if exists guard_reply on public.messages;
 create trigger guard_reply before insert on public.messages for each row execute function public.guard_reply();
 drop trigger if exists guard_reply on public.dm_messages;
 create trigger guard_reply before insert on public.dm_messages for each row execute function public.guard_reply();
+
+-- a reaction keeps its message, person and emoji (only whether it's on changes), and a message holds up to 20 different ones
+create or replace function public.guard_reaction() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if TG_OP = 'UPDATE' and (new.message_id, new.place, new.user_id, new.emoji, new.created_at)
+      is distinct from (old.message_id, old.place, old.user_id, old.emoji, old.created_at) then
+    raise exception 'Only whether a reaction is on can change.';
+  end if;
+  new.updated_at := now();
+  if new.active and (TG_OP = 'INSERT' or not old.active)
+     and not exists (select 1 from reactions where message_id = new.message_id and emoji = new.emoji and active and user_id <> new.user_id)
+     and (select count(distinct emoji) from reactions where message_id = new.message_id and active) >= 20 then
+    raise exception 'A message can have up to 20 different reactions.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_reaction on public.reactions;
+create trigger guard_reaction before insert or update on public.reactions for each row execute function public.guard_reaction();
+-- a deleted message takes its reactions with it
+create or replace function public.drop_reactions() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from reactions where message_id = old.id;
+  return old;
+end $$;
+drop trigger if exists drop_reactions on public.messages;
+create trigger drop_reactions after delete on public.messages for each row execute function public.drop_reactions();
+drop trigger if exists drop_reactions on public.dm_messages;
+create trigger drop_reactions after delete on public.dm_messages for each row execute function public.drop_reactions();
+
+-- a server tag on a profile is only ever its server's own: set by adopt_tag, kept up to date when the server changes
+-- its tag, and taken off when the person leaves (or the tag or server goes). Taking it off yourself is always fine.
+create or replace function public.guard_profile_tag() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if new.tag_server is null then new.tag := ''; new.tag_badge := ''; new.tag_color := ''; return new; end if;
+  if (new.tag_server, new.tag, new.tag_badge, new.tag_color) is distinct from (old.tag_server, old.tag, old.tag_badge, old.tag_color)
+     and coalesce(current_setting('fluentdat.tag', true), '') <> 'ok' then
+    raise exception 'A server tag comes from its server: pick one from your profile.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_profile_tag on public.profiles;
+create trigger guard_profile_tag before update on public.profiles for each row execute function public.guard_profile_tag();
+create or replace function public.sync_server_tag() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (new.tag, new.tag_badge, new.tag_color) is not distinct from (old.tag, old.tag_badge, old.tag_color) then return new; end if;
+  perform set_config('fluentdat.tag', 'ok', true);
+  if new.tag = '' then update profiles set tag_server = null where tag_server = new.id;
+  else update profiles set tag = new.tag, tag_badge = new.tag_badge, tag_color = new.tag_color where tag_server = new.id; end if;
+  perform set_config('fluentdat.tag', '', true);
+  return new;
+end $$;
+drop trigger if exists sync_server_tag on public.servers;
+create trigger sync_server_tag after update on public.servers for each row execute function public.sync_server_tag();
+create or replace function public.drop_tag_on_leave() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  update profiles set tag_server = null where id = old.user_id and tag_server = old.server_id;
+  return old;
+end $$;
+drop trigger if exists drop_tag_on_leave on public.server_members;
+create trigger drop_tag_on_leave after delete on public.server_members for each row execute function public.drop_tag_on_leave();
 
 -- ===================== actions (the only ways to do these) =====================
 -- a new server: you own it, with a Text Channels category and #general
@@ -929,6 +1057,29 @@ end $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
 
+-- wear a server's tag on your profile (null: none). Only a server you're in, and only while it has a tag
+create or replace function public.adopt_tag(p_server uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare s servers%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  if p_server is null then update profiles set tag_server = null where id = auth.uid(); return; end if;
+  if not is_member(p_server) then raise exception 'Join that server to wear its tag.'; end if;
+  select * into s from servers where id = p_server;
+  if coalesce(s.tag, '') = '' then raise exception 'That server doesn''t have a tag.'; end if;
+  perform set_config('fluentdat.tag', 'ok', true);
+  update profiles set tag_server = s.id, tag = s.tag, tag_badge = s.tag_badge, tag_color = s.tag_color where id = auth.uid();
+  perform set_config('fluentdat.tag', '', true);
+end $$;
+-- a tag's server, for the card that opens when you click someone's tag (only servers that have a tag say anything)
+create or replace function public.tag_info(p_server uuid)
+returns table (id uuid, name text, icon text, img text, tag text, tag_badge text, tag_color text, members bigint, public boolean, joined boolean)
+language sql stable security definer set search_path = public as $$
+  select s.id, s.name, s.icon, s.img, s.tag, s.tag_badge, s.tag_color,
+         (select count(*) from server_members m where m.server_id = s.id), s.public, is_member(s.id)
+  from servers s where s.id = p_server and s.tag <> '' and auth.uid() is not null;
+$$;
+
 -- ===================== Fluentdat's own one-time invites, blocking, reports, mutual friends =====================
 -- a one-time link that lets someone make an account (only the people who run Fluentdat); good for p_days days
 create or replace function public.create_app_invite(p_note text default '', p_days int default 7)
@@ -1048,13 +1199,13 @@ revoke all on function public.create_server(text, text), public.create_invite(uu
   public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid), public.create_group(uuid[], text),
   public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat(),
   public.create_app_invite(text, int), public.app_invites_list(), public.revoke_app_invite(text), public.block_user(uuid),
-  public.unblock_user(uuid), public.mutual_friends(uuid), public.app_reports() from public, anon;
+  public.unblock_user(uuid), public.mutual_friends(uuid), public.app_reports(), public.adopt_tag(uuid), public.tag_info(uuid) from public, anon;
 grant execute on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
   public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid), public.create_group(uuid[], text),
   public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat(),
   public.create_app_invite(text, int), public.app_invites_list(), public.revoke_app_invite(text), public.block_user(uuid),
-  public.unblock_user(uuid), public.mutual_friends(uuid), public.app_reports() to authenticated;
+  public.unblock_user(uuid), public.mutual_friends(uuid), public.app_reports(), public.adopt_tag(uuid), public.tag_info(uuid) to authenticated;
 -- a one-time link is opened signed out: checking it, making the account with it, and signing in with a username need no sign-in
 revoke all on function public.app_invite_check(text), public.redeem_app_invite(text, text, text, text), public.login_email(text) from public;
 grant execute on function public.app_invite_check(text), public.redeem_app_invite(text, text, text, text), public.login_email(text) to anon, authenticated;
@@ -1062,7 +1213,8 @@ grant execute on function public.app_invite_check(text), public.redeem_app_invit
 -- project's defaults, so it works however the project was set up)
 grant execute on function public.is_member(uuid), public.is_admin(uuid), public.is_owner(uuid), public.channel_server(uuid),
   public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean),
-  public.is_app_admin(), public.blocked_with(uuid), public.dm_blocked(uuid), public.expression_ok(text) to authenticated;
+  public.is_app_admin(), public.blocked_with(uuid), public.dm_blocked(uuid), public.expression_ok(text),
+  public.place_ok(uuid), public.message_in(uuid, uuid) to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -1070,11 +1222,11 @@ grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers to authenticated;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions to authenticated;
 revoke all on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers from anon;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
@@ -1098,6 +1250,7 @@ do $$ begin
     begin alter publication supabase_realtime add table public.reads; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.server_emoji; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.server_stickers; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.reactions; exception when duplicate_object then null; end;
   end if;
 end $$;
 

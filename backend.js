@@ -59,6 +59,11 @@ const fallback = {
   mutualFriends: async () => [],
   friendSince: () => 0,
   blockedIds: () => [],
+  reactions: () => new Map(),
+  react: async () => { throw new Error(SIGN_IN + 'react to messages.'); },
+  styled: () => false,
+  adoptTag: async () => { throw new Error(SIGN_IN + 'wear a server tag.'); },
+  tagInfo: async () => null,
   findUser: async () => null,
   changePassword: async () => { throw new Error('Sign in first.'); },
   // blocking, reports, server emoji and stickers, and Fluentdat's own one-time links: these come with signing in

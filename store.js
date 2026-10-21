@@ -121,6 +121,18 @@ export const LocalStore = {
   removeFriend(id) { const d = load(); d.friends = (d.friends || []).filter((f) => f.id !== id); save(); emit(); },
 
   // stickers you make
+  // reactions, in this browser: under each message, which emoji (here, only yours)
+  reactions(place) {
+    const r = (load().reacts || {})[place] || {};
+    return new Map(Object.entries(r).map(([mid, byEmoji]) => [mid, Object.entries(byEmoji).filter(([, ids]) => ids.length).map(([emoji, ids]) => ({ emoji, count: ids.length, me: ids.includes('me'), users: ids }))]));
+  },
+  react(place, messageId, emoji, on) {
+    const d = load(); d.reacts = d.reacts || {};
+    const byEmoji = ((d.reacts[place] = d.reacts[place] || {})[messageId] = d.reacts[place][messageId] || {});
+    const ids = new Set(byEmoji[emoji] || []); if (on) ids.add('me'); else ids.delete('me');
+    if (ids.size) byEmoji[emoji] = [...ids]; else delete byEmoji[emoji];
+    save(); emit();
+  },
   stickers: () => (load().stickers || []).slice(),
   addSticker(s) { const d = load(); (d.stickers = d.stickers || []).push({ id: 's_' + uid(), ...s }); save(); emit(); },
   removeSticker(id) { const d = load(); d.stickers = (d.stickers || []).filter((x) => x.id !== id); save(); emit(); },
