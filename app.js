@@ -1365,7 +1365,7 @@ function showProfile(user, anchor) {
     if (fb) fb.addEventListener('click', closePop);
     inner.append(el('div', { className: 'pmsg' }, say), el('div', { className: 'pacts' },
       fb,
-      el('button', { className: 'btn small', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); closePop(); profileMenu(u, r.left, r.bottom + 4); } }, icon('more', 16))));
+      el('button', { className: 'btn small p-more', title: 'More', onclick: (e) => { e.stopPropagation(); openBeside(e.currentTarget, (r) => profileMenu(u, r.left, r.bottom + 4)); } }, icon('more', 16))));
   }
   pop = el('div', { className: 'pop prof' }, banner, inner);
   pop.dataset.uid = String(user.id || user.name); pop.dataset.src = src;
@@ -2530,6 +2530,14 @@ function reportFlow({ user, message = null, place = null }) {
     if (ok === null) { send.disabled = false; return; }
     w.close(); toast('Thanks. Your report was sent.');
   };
+}
+// a menu from a button inside a card: the card stays open under it, and the button looks pressed while the menu is up
+function openBeside(btn, open) {
+  const r = btn.getBoundingClientRect();
+  open(r);
+  btn.classList.add('on');
+  const off = (e) => { if (e.type === 'keydown' && e.key !== 'Escape') return; btn.classList.remove('on'); removeEventListener('mousedown', off, true); removeEventListener('keydown', off, true); };
+  setTimeout(() => { addEventListener('mousedown', off, true); addEventListener('keydown', off, true); }, 0);
 }
 // a profile card at a spot on the screen (from a menu)
 function profileAt(u, x, y) { const spot = el('div', { style: `position:fixed;left:${x}px;top:${y}px;width:1px;height:1px` }); document.body.append(spot); showProfile(u, spot); spot.remove(); }
