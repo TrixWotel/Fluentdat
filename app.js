@@ -1103,7 +1103,15 @@ function friendItem(u) {
 // ---------- popouts ----------
 let pop = null;
 const closePop = () => { if (pop) { pop.remove(); pop = null; } };
-function placePop(anchor, h) { const r = anchor.getBoundingClientRect(), w = pop.offsetWidth || 300; pop.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px'; pop.style.top = (r.bottom + (h || pop.offsetHeight) + 8 > innerHeight ? Math.max(12, r.top - (h || pop.offsetHeight) - 8) : r.bottom + 8) + 'px'; }
+function placePop(anchor, h) {
+  const r = anchor.getBoundingClientRect(), w = pop.offsetWidth || 300, ph = h || pop.offsetHeight;
+  const beside = (x) => { pop.style.left = Math.max(12, Math.min(x, innerWidth - w - 12)) + 'px'; pop.style.top = Math.max(12, Math.min(r.top, innerHeight - ph - 12)) + 'px'; };
+  const list = anchor.closest && anchor.closest('#members');
+  if (list && innerWidth > 720) return beside(list.getBoundingClientRect().left - w - 8);                 // (a member: to the left of the list)
+  if (anchor.closest && anchor.closest('#content .msg') && r.right + 8 + w <= innerWidth - 12) return beside(r.right + 8);    // (a name in the chat: to its right)
+  pop.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px';
+  pop.style.top = (r.bottom + ph + 8 > innerHeight ? Math.max(12, r.top - ph - 8) : r.bottom + 8) + 'px';
+}
 function showProfile(user, anchor) {
   closePop();
   const mine = isMe(user), sv = view === 'server' ? serverId : null, live = Store.kind === 'supabase';
@@ -1126,7 +1134,7 @@ function showProfile(user, anchor) {
   // their roles in this server (admins can hand them out from here)
   if (live && sv && u.id && !u.bot) {
     const all = Store.roles(sv), has = all.filter((r) => ((Store.members(sv) || []).find((m) => m.id === u.id) || {}).roles?.includes(r.id));
-    if (has.length || Store.canManage(sv)) inner.append(sec('Roles', el('div', { className: 'role-chips' },
+    if (has.length || (Store.canManage(sv) && all.length)) inner.append(sec('Roles', el('div', { className: 'role-chips' },
       ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), r.name)),
       Store.canManage(sv) && all.length ? el('button', { className: 'rchip add', title: 'Give a role', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu(roleItems(sv, u), r.left, r.bottom + 4); } }, icon('plus', 13)) : null)));
   }
@@ -2429,7 +2437,7 @@ $('#side-body').addEventListener('scroll', () => {
 }, { passive: true });
 $('#sticker-btn').onclick = (e) => { e.stopPropagation(); togglePicker('stickers'); };
 document.addEventListener('click', (e) => {
-  if (pop && !pop.contains(e.target) && !e.target.closest('.msg .nm, .msg .avatar, #me-panel .avatar, #me-panel .who, .mem, .side-head, .ctx')) closePop();
+  if (pop && !pop.contains(e.target) && !(e.target.closest && e.target.closest('.msg .nm, .msg .avatar, #me-panel .avatar, #me-panel .who, .mem, .side-head, .ctx'))) closePop();
 });
 addEventListener('resize', closePop);
 
@@ -3709,7 +3717,7 @@ function layoutStudio(redraw) {
   function chipEl(group, id) {
     const [, label, ic, fixed] = BUTTONS[group][1].find((b) => b[0] === id);
     const na = (studio.view === 'dm' && id === 'members') || (studio.view === 'server' && id === 'dmProfile');
-    const c = el('span', { className: 'chip' + (WIDE_CHIPS.has(id) ? ' wide' : '') + (na ? ' na' : ''), title: label + (na ? ' (only shows in ' + (id === 'members' ? 'servers' : 'DMs') + ')' : '') + (fixed ? '' : '. Drag along the bar to move it, or into the tray to hide it.') });
+    const c = el('span', { className: 'mchip' + (WIDE_CHIPS.has(id) ? ' wide' : '') + (na ? ' na' : ''), title: label + (na ? ' (only shows in ' + (id === 'members' ? 'servers' : 'DMs') + ')' : '') + (fixed ? '' : '. Drag along the bar to move it, or into the tray to hide it.') });
     if (id === 'servers') c.append(el('i'), el('i'), el('i'));
     else if (id === 'input') c.append(el('em', {}, studio.view === 'dm' ? 'Message @Bee' : 'Message #general'));
     else if (id === 'me') c.append(el('i'), el('em', {}, me.name));
@@ -3920,7 +3928,7 @@ function layoutStudio(redraw) {
         if (overTray) { target = { hide: true }; showMarker(null); return; }
         const barEl = under && under.closest('[data-bar]');
         if (!barEl || barEl.dataset.bar !== group || !mini.contains(barEl)) { showMarker(null); return; }
-        const down = barEl.classList.contains('vertical'), chips = [...barEl.querySelectorAll('.chip')].filter((c) => c !== node);
+        const down = barEl.classList.contains('vertical'), chips = [...barEl.querySelectorAll('.mchip')].filter((c) => c !== node);
         const p = down ? ev.clientY : ev.clientX;
         const i = chips.filter((c) => { const r = c.getBoundingClientRect(); return (down ? r.top + r.height / 2 : r.left + r.width / 2) < p; }).length;
         target = { before: chips[i] ? chips[i].dataset.chip : null };
@@ -3952,10 +3960,10 @@ function layoutStudio(redraw) {
     const parts = [['status', prefs.banner === 'off', () => { prefs.banner = 'on'; }], ['rail', prefs.rail === 'off', () => { prefs.rail = 'on'; }],
       ['head', prefs.sideHead === 'off', () => { prefs.sideHead = 'on'; }], ['panel', prefs.userPanel === 'off', () => { prefs.userPanel = 'on'; }],
       ['top', prefs.topbar === 'off', () => { prefs.topbar = 'on'; }], ['members', prefs.membersDefault === false, () => { prefs.membersDefault = true; showMembers = true; }]];
-    for (const [id, off, on] of parts) if (off) items.push(el('button', { className: 'chip tchip part', title: 'Show the ' + PARTS[id].toLowerCase() + ' again', onclick: () => { remember(); on(); studio.sel = id; commit(); } }, icon('eye'), el('span', {}, PARTS[id])));
+    for (const [id, off, on] of parts) if (off) items.push(el('button', { className: 'mchip tchip part', title: 'Show the ' + PARTS[id].toLowerCase() + ' again', onclick: () => { remember(); on(); studio.sel = id; commit(); } }, icon('eye'), el('span', {}, PARTS[id])));
     for (const [group, [title, list]] of Object.entries(BUTTONS)) for (const [id, label, ic] of list) {
       if (shown(id)) continue;
-      const c = el('span', { className: 'chip tchip', title: `${label}, in the ${title.toLowerCase()}. Drag it back onto its bar, or tap it, to show it.` }, icon(ic), el('span', {}, label));
+      const c = el('span', { className: 'mchip tchip', title: `${label}, in the ${title.toLowerCase()}. Drag it back onto its bar, or tap it, to show it.` }, icon(ic), el('span', {}, label));
       c.dataset.chip = id;
       c.addEventListener('pointerdown', (e) => chipDown(e, group, id, c, true));
       items.push(c);
