@@ -7,6 +7,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 ## What it does
 
 * Servers with categories, text channels and voice channels, invites, Discover for public servers, roles, bans and banners
+* Category settings and permissions like Discord's: private categories, and what @everyone, each role and each member may do there
 * Direct messages and group DMs (up to 10 people), with friend requests you accept or ignore
 * Voice and video calls in DMs and groups (they ring), voice channels you just join, and screen sharing
 * Voice messages, pictures and files (dragged in, pasted or picked, sent when you press Enter)

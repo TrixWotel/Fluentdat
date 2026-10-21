@@ -62,6 +62,13 @@ const fallback = {
   reactions: () => new Map(),
   react: async () => { throw new Error(SIGN_IN + 'react to messages.'); },
   styled: () => false,
+  // a category's permissions (in your own browser, everything is yours)
+  can: () => true,
+  canAnywhere: () => true,
+  categoryPerms: () => [],
+  setCategoryPerm: async () => { throw new Error(SIGN_IN + 'set permissions.'); },
+  removeCategoryPerm: async () => {},
+  moveCategories: (sv, ids) => ids.forEach((id, i) => Store.updateCategory(id, { position: i })),
   adoptTag: async () => { throw new Error(SIGN_IN + 'wear a server tag.'); },
   tagInfo: async () => null,
   findUser: async () => null,

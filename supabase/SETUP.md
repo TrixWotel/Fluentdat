@@ -115,9 +115,10 @@ The database checks these itself, so they hold even if someone changes the app:
 15. Blocking someone stops them messaging you, calling you, starting a DM or sending a friend request, and ends your friendship. Only you can see who you blocked.
 16. A server's admins add, rename and remove its emoji (up to 50) and stickers (up to 30). Everyone signed in can see and use them.
 17. Only the people who run Fluentdat make one-time links. Each link makes one account, then stops working. They also see what people report, and who reported it.
-18. Anyone who can read a message can react to it (up to 20 different emoji a message); only your own reactions come back off.
+18. Anyone who may react where a message is can react to it (up to 20 different emoji a message), and anyone who can read it can join in with a reaction already there; only your own reactions come back off.
 19. A server's admins give it a tag. Its members can wear it on their profile; nobody can wear a tag from a server they aren't in, and leaving takes it off.
 20. Profile themes, name styles, banners and nameplates only take colours, pictures and names from Fluentdat's own lists, never web addresses.
+21. A category can have its own permissions, like Discord's: for @everyone, for a role, or for one member, each allowed or denied (viewing its channels, sending, attaching, reacting, pinging @everyone, deleting others' messages, managing its channels or its permissions, making invites, joining its voice channels). A denial for @everyone gives way to a role that's allowed, and a member's own setting beats both. Owners and admins can always do everything. Making a category private (@everyone may not view it) hides its channels, their messages, files, unread counts and calls from everyone else. Whoever may manage a category's permissions can only allow or deny what they may do themselves.
 
 ## If something goes wrong
 

@@ -20,6 +20,9 @@
 --   * Reactions: anyone who can read a message can react to it (up to 20 different emoji a message); only your own come back off.
 --   * A server's admins can give it a tag (up to 4 letters and a badge); its members may wear it on their profile, and
 --     nobody can wear a tag that isn't from a server they're in.
+--   * A category's permissions (like Discord's) say who may see its channels, post, attach files, react, ping @everyone,
+--     delete others' messages, manage its channels or its permissions, make invites and join its voice channels, for
+--     @everyone, a role or one member. Owners and admins may do everything. A private category is one @everyone can't see.
 
 -- ===================== tables =====================
 -- (passwords for accounts made from a one-time link are hashed with pgcrypto, which Supabase keeps in "extensions")
@@ -267,6 +270,17 @@ create table if not exists public.reactions (
 );
 create index if not exists reactions_place on public.reactions (place);
 
+-- a category's permissions for @everyone, a role ('role:<id>') or one member ('member:<id>'): what they're allowed and denied
+create table if not exists public.category_perms (
+  category_id uuid not null references public.categories (id) on delete cascade,
+  server_id uuid not null references public.servers (id) on delete cascade,
+  target text not null check (target = 'everyone' or target ~ '^(role|member):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+  allow text[] not null default '{}',
+  deny text[] not null default '{}',
+  primary key (category_id, target),
+  check (allow <@ array['view','manage_channels','manage_perms','invite','send','attach','react','mention_everyone','manage_messages','connect']::text[] and deny <@ array['view','manage_channels','manage_perms','invite','send','attach','react','mention_everyone','manage_messages','connect']::text[])
+);
+
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
 alter table public.profiles add column if not exists plate text not null default '';
@@ -436,7 +450,7 @@ begin
   k := split_part(t, ':', 1); v := split_part(t, ':', 2);
   if v !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or split_part(t, ':', 3) <> '' then return false; end if;
   if k = 'call' then return exists (select 1 from calls c where c.id = v::uuid and in_dm(c.dm_id)); end if;
-  if k = 'vc' then return exists (select 1 from channels c where c.id = v::uuid and c.kind = 'voice' and is_member(c.server_id)); end if;
+  if k = 'vc' then return exists (select 1 from channels c where c.id = v::uuid and c.kind = 'voice' and chan_can(c.id, 'connect')); end if;
   return false;
 end $$;
 
@@ -450,7 +464,7 @@ begin
   if place !~ re or who !~ re or split_part(p_name, '/', 4) !~ '^[0-9a-f-]{36}\.[a-z0-9]{1,8}$' or split_part(p_name, '/', 5) <> '' then return false; end if;
   if p_write and who <> auth.uid()::text then return false; end if;
   if k = 'dm' then return in_dm(place::uuid); end if;
-  if k = 'ch' then return is_member(channel_server(place::uuid)); end if;
+  if k = 'ch' then return chan_can(place::uuid, case when p_write then 'attach' else 'view' end); end if;
   return false;
 end $$;
 
@@ -483,10 +497,74 @@ begin
   return is_admin(sv::uuid);
 end $$;
 
+-- what someone may do in a category: owners and admins anything; members see, post, attach, react and join voice unless
+-- the category says otherwise (@everyone first, then their roles, denies before allows, then them by name)
+create or replace function public.perm_for(p_user uuid, p_category uuid, p_perm text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare sv uuid; r text; ok boolean; o category_perms%rowtype;
+begin
+  if p_user is null then return false; end if;
+  select server_id into sv from categories where id = p_category;
+  if sv is null then return false; end if;
+  select role into r from server_members where server_id = sv and user_id = p_user;
+  if r is null then return false; end if;
+  if r in ('owner', 'admin') then return true; end if;
+  ok := p_perm in ('view', 'send', 'attach', 'react', 'connect');
+  select * into o from category_perms where category_id = p_category and target = 'everyone';
+  if found then
+    if p_perm = any(o.deny) then ok := false; end if;
+    if p_perm = any(o.allow) then ok := true; end if;
+  end if;
+  if exists (select 1 from category_perms cp join member_roles mr on cp.target = 'role:' || mr.role_id::text
+             where cp.category_id = p_category and mr.server_id = sv and mr.user_id = p_user and p_perm = any(cp.deny)) then ok := false; end if;
+  if exists (select 1 from category_perms cp join member_roles mr on cp.target = 'role:' || mr.role_id::text
+             where cp.category_id = p_category and mr.server_id = sv and mr.user_id = p_user and p_perm = any(cp.allow)) then ok := true; end if;
+  select * into o from category_perms where category_id = p_category and target = 'member:' || p_user::text;
+  if found then
+    if p_perm = any(o.deny) then ok := false; end if;
+    if p_perm = any(o.allow) then ok := true; end if;
+  end if;
+  return ok;
+end $$;
+-- …in a channel: its category's say (nothing works where you can't see), or a member's usual rights outside any category
+create or replace function public.chan_perm(p_user uuid, p_channel uuid, p_perm text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare c channels%rowtype; r text;
+begin
+  select * into c from channels where id = p_channel;
+  if not found or p_user is null then return false; end if;
+  if c.category_id is null then
+    select role into r from server_members where server_id = c.server_id and user_id = p_user;
+    return r in ('owner', 'admin') or (r is not null and p_perm in ('view', 'send', 'attach', 'react', 'connect'));
+  end if;
+  if p_perm <> 'view' and not perm_for(p_user, c.category_id, 'view') then return false; end if;
+  return perm_for(p_user, c.category_id, p_perm);
+end $$;
+-- …and for you (what the rules ask)
+create or replace function public.cat_can(p_category uuid, p_perm text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select perm_for(auth.uid(), p_category, p_perm);
+$$;
+create or replace function public.chan_can(p_channel uuid, p_perm text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select chan_perm(auth.uid(), p_channel, p_perm);
+$$;
+
 -- can you read this channel or DM? and is this message in it?
 create or replace function public.place_ok(p_place uuid) returns boolean
 language sql stable security definer set search_path = public as $$
-  select is_member(channel_server(p_place)) or in_dm(p_place);
+  select case when exists (select 1 from channels where id = p_place) then chan_can(p_place, 'view') else in_dm(p_place) end;
+$$;
+-- may you react there?
+create or replace function public.react_ok(p_place uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select case when exists (select 1 from channels where id = p_place) then chan_can(p_place, 'react') else in_dm(p_place) end;
+$$;
+-- …or join in with an emoji someone already put on that message (as on Discord: Add Reactions is about new ones)
+create or replace function public.react_with(p_place uuid, p_message uuid, p_emoji text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select react_ok(p_place) or (place_ok(p_place) and exists (select 1 from reactions
+    where message_id = p_message and place = p_place and emoji = p_emoji and active and user_id <> auth.uid()));
 $$;
 create or replace function public.message_in(p_message uuid, p_place uuid) returns boolean
 language sql stable security definer set search_path = public as $$
@@ -534,23 +612,38 @@ create policy "leave, or admins remove" on public.server_members for delete to a
       or (role = 'admin' and is_owner(server_id)));          -- only the owner removes admins
 
 drop policy if exists "members see categories" on public.categories;
-create policy "members see categories" on public.categories for select to authenticated using (is_member(server_id));
+create policy "members see categories" on public.categories for select to authenticated using (is_member(server_id) and cat_can(id, 'view'));
 drop policy if exists "admins manage categories" on public.categories;
 create policy "admins manage categories" on public.categories for all to authenticated using (is_admin(server_id)) with check (is_admin(server_id));
+drop policy if exists "managers rename categories" on public.categories;
+create policy "managers rename categories" on public.categories for update to authenticated using (cat_can(id, 'manage_channels')) with check (cat_can(id, 'manage_channels'));
 
 drop policy if exists "members see channels" on public.channels;
-create policy "members see channels" on public.channels for select to authenticated using (is_member(server_id));
+create policy "members see channels" on public.channels for select to authenticated using (is_member(server_id) and chan_can(id, 'view'));
 drop policy if exists "admins manage channels" on public.channels;
 create policy "admins manage channels" on public.channels for all to authenticated using (is_admin(server_id)) with check (is_admin(server_id));
+drop policy if exists "managers manage their category's channels" on public.channels;
+create policy "managers manage their category's channels" on public.channels for all to authenticated
+  using (category_id is not null and cat_can(category_id, 'manage_channels')) with check (category_id is not null and cat_can(category_id, 'manage_channels'));
+
+-- a category's permissions: seen by the server's members (so a category made private for you leaves your screen at
+-- once), changed by admins and whoever may manage its permissions
+alter table public.category_perms enable row level security;
+drop policy if exists "see a category's permissions" on public.category_perms;
+create policy "see a category's permissions" on public.category_perms for select to authenticated using (is_member(server_id));
+drop policy if exists "change a category's permissions" on public.category_perms;
+create policy "change a category's permissions" on public.category_perms for all to authenticated
+  using (cat_can(category_id, 'manage_perms')) with check (cat_can(category_id, 'manage_perms'));
 
 drop policy if exists "members read messages" on public.messages;
-create policy "members read messages" on public.messages for select to authenticated using (is_member(channel_server(channel_id)));
+create policy "members read messages" on public.messages for select to authenticated using (chan_can(channel_id, 'view'));
 drop policy if exists "members post as themselves" on public.messages;
 create policy "members post as themselves" on public.messages for insert to authenticated
-  with check (author = auth.uid() and is_member(channel_server(channel_id)));
+  with check (author = auth.uid() and chan_can(channel_id, 'send')
+    and (files is null or jsonb_array_length(files) = 0 or chan_can(channel_id, 'attach')));
 drop policy if exists "authors or admins delete" on public.messages;
 create policy "authors or admins delete" on public.messages for delete to authenticated
-  using (author = auth.uid() or is_admin(channel_server(channel_id)));
+  using (author = auth.uid() or is_admin(channel_server(channel_id)) or chan_can(channel_id, 'manage_messages'));
 
 drop policy if exists "admins see invites" on public.invites;
 create policy "admins see invites" on public.invites for select to authenticated using (is_admin(server_id));
@@ -659,16 +752,17 @@ create policy "admins change stickers" on public.server_stickers for update to a
 drop policy if exists "admins remove stickers" on public.server_stickers;
 create policy "admins remove stickers" on public.server_stickers for delete to authenticated using (is_admin(server_id));
 
--- reactions: seen and made by whoever can read the message; only your own can be switched off (or deleted)
+-- reactions: seen by whoever can read the message, and made by whoever may react there (or joins in with one already
+-- on it); only your own can be switched off (or deleted), and switching one off is always allowed
 alter table public.reactions enable row level security;
 drop policy if exists "see reactions where you read" on public.reactions;
 create policy "see reactions where you read" on public.reactions for select to authenticated using (place_ok(place));
 drop policy if exists "react where you read" on public.reactions;
 create policy "react where you read" on public.reactions for insert to authenticated
-  with check (user_id = auth.uid() and place_ok(place) and message_in(message_id, place));
+  with check (user_id = auth.uid() and react_with(place, message_id, emoji) and message_in(message_id, place));
 drop policy if exists "switch your reactions on and off" on public.reactions;
 create policy "switch your reactions on and off" on public.reactions for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid() and place_ok(place));
+  using (user_id = auth.uid()) with check (user_id = auth.uid() and (not active or react_with(place, message_id, emoji)));
 drop policy if exists "remove your reactions" on public.reactions;
 create policy "remove your reactions" on public.reactions for delete to authenticated using (user_id = auth.uid());
 
@@ -783,6 +877,53 @@ begin
 end $$;
 drop trigger if exists guard_reaction on public.reactions;
 create trigger guard_reaction before insert or update on public.reactions for each row execute function public.guard_reaction();
+-- a channel or category stays in its server, and a channel's category is one of that server's
+create or replace function public.guard_place() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if TG_OP = 'UPDATE' and new.server_id is distinct from old.server_id then raise exception 'A channel or category stays in its server.'; end if;
+  -- (to_jsonb: a category has no category_id of its own, and plpgsql can't name a field a row doesn't have)
+  if TG_TABLE_NAME = 'channels' and to_jsonb(new) ->> 'category_id' is not null
+     and not exists (select 1 from categories where id = (to_jsonb(new) ->> 'category_id')::uuid and server_id = new.server_id) then
+    raise exception 'That category is in another server.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_place on public.channels;
+create trigger guard_place before insert or update on public.channels for each row execute function public.guard_place();
+drop trigger if exists guard_place on public.categories;
+create trigger guard_place before update on public.categories for each row execute function public.guard_place();
+
+-- a category's permissions belong to its server, and someone who isn't an admin can only change the permissions they
+-- have themselves (allowing, denying or clearing them)
+create or replace function public.guard_category_perms() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare k text; was text; now_ text;
+begin
+  if TG_OP = 'DELETE' then
+    if not is_admin(old.server_id) then
+      foreach k in array (old.allow || old.deny) loop
+        if not cat_can(old.category_id, k) then raise exception 'You can only allow or deny what you may do yourself.'; end if;
+      end loop;
+    end if;
+    return old;
+  end if;
+  select server_id into new.server_id from categories where id = new.category_id;
+  if new.server_id is null then raise exception 'There''s no such category.'; end if;
+  new.deny := array(select distinct unnest(new.deny));
+  new.allow := array(select distinct unnest(new.allow) except select unnest(new.deny));      -- (one setting each)
+  if not is_admin(new.server_id) then
+    foreach k in array (new.allow || new.deny || case when TG_OP = 'UPDATE' then old.allow || old.deny else '{}'::text[] end) loop
+      was := case when TG_OP = 'UPDATE' and k = any(old.deny) then 'deny' when TG_OP = 'UPDATE' and k = any(old.allow) then 'allow' else '' end;
+      now_ := case when k = any(new.deny) then 'deny' when k = any(new.allow) then 'allow' else '' end;
+      if was <> now_ and not cat_can(new.category_id, k) then raise exception 'You can only allow or deny what you may do yourself.'; end if;
+    end loop;
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_category_perms on public.category_perms;
+create trigger guard_category_perms before insert or update or delete on public.category_perms for each row execute function public.guard_category_perms();
+
 -- a deleted message takes its reactions with it
 create or replace function public.drop_reactions() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -849,7 +990,9 @@ create or replace function public.create_invite(p_server uuid, p_max_uses int de
 returns text language plpgsql security definer set search_path = public as $$
 declare c text;
 begin
-  if not is_admin(p_server) then raise exception 'Only this server''s admins can make invites.'; end if;
+  if not (is_admin(p_server) or exists (select 1 from categories where server_id = p_server and cat_can(id, 'invite'))) then
+    raise exception 'Only this server''s admins (and whoever a category lets) can make invites.';
+  end if;
   c := substr(replace(gen_random_uuid()::text, '-', ''), 1, 10);
   insert into invites (code, server_id, created_by, max_uses, expires_at)
     values (c, p_server, auth.uid(), p_max_uses, case when p_hours is null then null else now() + make_interval(hours => p_hours) end);
@@ -951,13 +1094,13 @@ language sql stable security definer set search_path = public as $$
     (select count(*)::int from messages x where x.channel_id = c.id and x.author <> auth.uid() and x.created_at > coalesce(r.read_at, m.joined_at)),
     (select count(*)::int from messages x where x.channel_id = c.id and x.author <> auth.uid() and x.created_at > coalesce(r.read_at, m.joined_at)
        and (strpos(coalesce(x.text, ''), '<@' || auth.uid()::text || '>') > 0
-            or (coalesce(x.text, '') ~ '(^|[^[:alnum:]_])@(everyone|here)([^[:alnum:]_]|$)'
-                and exists (select 1 from server_members a where a.server_id = c.server_id and a.user_id = x.author and a.role in ('owner', 'admin')))
+            or (coalesce(x.text, '') ~ '(^|[^[:alnum:]_])@(everyone|here)([^[:alnum:]_]|$)' and chan_perm(x.author, c.id, 'mention_everyone'))
             or exists (select 1 from messages y where y.id = x.reply_to and y.author = auth.uid()))),
     (select max(x.created_at) from messages x where x.channel_id = c.id)
   from channels c
   join server_members m on m.server_id = c.server_id and m.user_id = auth.uid()
   left join reads r on r.user_id = auth.uid() and r.place = c.id
+  where chan_can(c.id, 'view')
   union all
   select d.id, n.k, n.k, (select max(x.created_at) from dm_messages x where x.dm_id = d.id)
   from dms d
@@ -1214,7 +1357,8 @@ grant execute on function public.app_invite_check(text), public.redeem_app_invit
 grant execute on function public.is_member(uuid), public.is_admin(uuid), public.is_owner(uuid), public.channel_server(uuid),
   public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean),
   public.is_app_admin(), public.blocked_with(uuid), public.dm_blocked(uuid), public.expression_ok(text),
-  public.place_ok(uuid), public.message_in(uuid, uuid) to authenticated;
+  public.place_ok(uuid), public.message_in(uuid, uuid), public.react_ok(uuid), public.react_with(uuid, uuid, text), public.cat_can(uuid, text), public.chan_can(uuid, text) to authenticated;
+revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text) from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -1222,11 +1366,11 @@ grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions to authenticated;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms to authenticated;
 revoke all on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions from anon;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
@@ -1251,6 +1395,7 @@ do $$ begin
     begin alter publication supabase_realtime add table public.server_emoji; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.server_stickers; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.reactions; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.category_perms; exception when duplicate_object then null; end;
   end if;
 end $$;
 

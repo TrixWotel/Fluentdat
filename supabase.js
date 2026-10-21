@@ -13,7 +13,7 @@ const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
 
-let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
+let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, structure4 = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
 let styled = true;                  // (false on an older database: no profile themes, name styles or server tags there yet)
 let cache = blank();
 const pending = new Map();          // messages you've sent that the server hasn't confirmed yet (kept through reloads)
@@ -27,7 +27,7 @@ const listeners = new Set(), messageListeners = new Set(), callListeners = new S
 function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
-    emoji: [], stickers: [], blocks: [], admin: false, reacts: {} };
+    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [] };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -88,6 +88,32 @@ const chanName = (name, kind) => (kind === 'voice' ? String(name).trim().replace
 const placeKind = (id) => (cache.dmIndex.some((d) => d.id === id) ? 'dm' : 'channel');
 const serverOfChannel = (id) => (cache.channels.find((c) => c.id === id) || {}).server || null;
 const roleIn = (sv, uid) => (cache.members.find((m) => m.server_id === sv && m.user_id === uid) || {}).role || null;
+// what someone may do in a category or channel: the database's rules (perm_for and chan_perm in setup.sql), worked out
+// here too, so the app only offers what will work. Owners and admins may do anything; members see, post, attach, react
+// and join voice unless the category says otherwise (@everyone, then their roles, denies before allows, then them by name)
+export const PERMS = ['view', 'manage_channels', 'manage_perms', 'invite', 'send', 'attach', 'react', 'mention_everyone', 'manage_messages', 'connect'];
+const BASE_PERMS = new Set(['view', 'send', 'attach', 'react', 'connect']);
+function permFor(uid, catId, perm) {
+  const cat = cache.categories.find((c) => c.id === catId); if (!cat || !uid) return false;
+  const r = roleIn(cat.server, uid); if (!r) return false;
+  if (r === 'owner' || r === 'admin') return true;
+  const rows = cache.perms.filter((x) => x.category_id === catId), has = (row, k) => !!row && (row[k] || []).includes(perm);
+  let ok = BASE_PERMS.has(perm);
+  const every = rows.find((x) => x.target === 'everyone');
+  if (has(every, 'deny')) ok = false; if (has(every, 'allow')) ok = true;
+  const mine = new Set(cache.memberRoles.filter((x) => x.server_id === cat.server && x.user_id === uid).map((x) => 'role:' + x.role_id));
+  const roleRows = rows.filter((x) => mine.has(x.target));
+  if (roleRows.some((x) => has(x, 'deny'))) ok = false; if (roleRows.some((x) => has(x, 'allow'))) ok = true;
+  const them = rows.find((x) => x.target === 'member:' + uid);
+  if (has(them, 'deny')) ok = false; if (has(them, 'allow')) ok = true;
+  return ok;
+}
+function chanPerm(uid, chId, perm) {
+  const c = cache.channels.find((x) => x.id === chId); if (!c || !uid) return false;
+  if (!c.category) { const r = roleIn(c.server, uid); return r === 'owner' || r === 'admin' || (!!r && BASE_PERMS.has(perm)); }
+  if (perm !== 'view' && !permFor(uid, c.category, 'view')) return false;
+  return permFor(uid, c.category, perm);
+}
 // a server's emoji and stickers: their pictures are in the public "expressions" bucket, so they're plain links
 const expressionUrl = (path) => (path && sb ? sb.storage.from('expressions').getPublicUrl(path).data.publicUrl : '');
 const toEmoji = (r) => ({ id: r.id, server: r.server_id, name: r.name, animated: !!r.animated, path: r.path, url: expressionUrl(r.path), by: r.created_by });
@@ -106,12 +132,13 @@ async function loadAll() {
   state.loading = true; state.error = ''; emit();
   try {
     const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
-    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin] = await Promise.all([
+    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms] = await Promise.all([
       profilesQ(q),
       sb.from('profiles').select('*').eq('id', myId()).then(must),
       q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles'),
       soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null),
-      soft(q('server_emoji'), []), soft(q('server_stickers'), []), soft(q('blocks'), []), soft(sb.rpc('is_app_admin').then(must), false)]);
+      soft(q('server_emoji'), []), soft(q('server_stickers'), []), soft(q('blocks'), []), soft(sb.rpc('is_app_admin').then(must), false),
+      soft(q('category_perms'), [])]);
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
     cache.me = mine[0] || null;
     if (cache.me) cache.profiles[cache.me.id] = cache.me;
@@ -127,7 +154,7 @@ async function loadAll() {
     cache.dmMembers = dmMembers;
     cache.friendRows = friends;
     cache.reads = Object.fromEntries(reads.map((r) => [r.place, r]));
-    cache.emoji = emoji; cache.stickers = stickers; cache.blocks = blocks; cache.admin = admin === true;
+    cache.emoji = emoji; cache.stickers = stickers; cache.blocks = blocks; cache.admin = admin === true; cache.perms = perms;
     if (unread) cache.unread = Object.fromEntries(unread.map((u) => [u.place, { unread: u.unread, mentions: u.mentions, last: u.last_at ? Date.parse(u.last_at) : 0 }]));
     // (the first time on this version: what's already there counts as read, rather than every old message at once)
     if (unread && !reads.length && unread.some((u) => u.unread)) await soft(markAllRead(unread.map((u) => u.place)), null);
@@ -213,7 +240,7 @@ function watchMessages() {
 function pings(row, place) {
   const me = myId(), text = row.text || '';
   if (mentionIds(text).includes(String(me).toLowerCase())) return true;
-  if (mentionsEveryone(text) && ['owner', 'admin'].includes(roleIn(serverOfChannel(place), row.author))) return true;
+  if (mentionsEveryone(text) && chanPerm(row.author, place, 'mention_everyone')) return true;
   if (row.reply_to) { const to = (cache.msgs[place] || []).find((m) => m.id === row.reply_to); if (to && to.author === me) return true; }
   return false;
 }
@@ -274,6 +301,10 @@ function watchStructure() {
   structure3 = sb.channel('fluentdat-structure-3');
   for (const table of ['server_emoji', 'server_stickers']) structure3.on('postgres_changes', { event: '*', schema: 'public', table }, again);
   structure3.subscribe();
+  // a category's permissions (their own channel too)
+  structure4 = sb.channel('fluentdat-structure-4');
+  structure4.on('postgres_changes', { event: '*', schema: 'public', table: 'category_perms' }, again);
+  structure4.subscribe();
 }
 // signed in: load everything, keep it live, and notice if the session ends (signed out in another tab, or it ran out)
 async function start() {
@@ -468,8 +499,8 @@ export const SupabaseStore = {
     return found && found[0] ? { ...toUser(found[0]), id: found[0].id } : null;
   },
   async signOut() {
-    for (const ch of [feed, extras, structure, structure2, structure3, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
-    feed = extras = structure = structure2 = structure3 = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
+    for (const ch of [feed, extras, structure, structure2, structure3, structure4, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
+    feed = extras = structure = structure2 = structure3 = structure4 = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
     if (sb) await sb.auth.signOut({ scope: 'local' });   // (just this browser — your phone stays signed in)
     session = null; cache = blank(); active = null; pending.clear(); emit();
   },
@@ -517,15 +548,49 @@ export const SupabaseStore = {
     const c = SupabaseStore.channel(id); if (c) Object.assign(c, patch); emit();
     const row = {}; if ('name' in patch) row.name = patch.name; if ('kind' in patch) row.kind = patch.kind; if ('category' in patch) row.category_id = patch.category || null;
     if ('topic' in patch) row.topic = String(patch.topic || '').slice(0, 1024);
-    push(sb.from('channels').update(row).eq('id', id).select('id').then(took('Only this server’s admins can change channels.')), loadAll);
+    push(sb.from('channels').update(row).eq('id', id).select('id').then(took('You don’t have permission to change this channel.')), loadAll);
   },
   updateCategory(id, patch) {
-    const c = cache.categories.find((x) => x.id === id); if (c) Object.assign(c, patch); emit();
-    push(sb.from('categories').update({ name: patch.name }).eq('id', id).select('id').then(took('Only this server’s admins can change categories.')), loadAll);
+    const c = cache.categories.find((x) => x.id === id); if (c) Object.assign(c, patch);
+    if ('position' in patch) cache.categories.sort(byPos);
+    emit();
+    const row = {}; if ('name' in patch) row.name = String(patch.name).trim().slice(0, 60); if ('position' in patch) row.position = patch.position;
+    push(sb.from('categories').update(row).eq('id', id).select('id').then(took('You don’t have permission to change this category.')), loadAll);
+  },
+  // categories in a new order (Move to…): each one's place in the list
+  moveCategories(sv, ids) {
+    ids.forEach((id, i) => { const c = cache.categories.find((x) => x.id === id); if (c) c.position = i; });
+    cache.categories.sort(byPos); emit();
+    push(Promise.all(ids.map((id, i) => sb.from('categories').update({ position: i }).eq('id', id).select('id').then(took('Only this server’s admins can move categories.')))), loadAll);
+  },
+  // ---- a category's permissions: may you (or someone) do this here? id: a channel or a category ----
+  can(id, perm, user = myId()) {
+    if (cache.channels.some((c) => c.id === id)) return chanPerm(user, id, perm);
+    if (cache.categories.some((c) => c.id === id)) return permFor(user, id, perm);
+    return placeKind(id) === 'dm';                      // (a DM or group is yours to use; a channel you can't see isn't)
+  },
+  // …anywhere in the server (making invites, say, which a category can allow)
+  canAnywhere(sv, perm) { return SupabaseStore.canManage(sv) || cache.categories.some((c) => c.server === sv && permFor(myId(), c.id, perm)); },
+  categoryPerms: (id) => cache.perms.filter((x) => x.category_id === id).map((x) => ({ target: x.target, allow: [...(x.allow || [])], deny: [...(x.deny || [])] })),
+  async setCategoryPerm(id, target, allow, deny) {
+    const cat = cache.categories.find((c) => c.id === id); if (!cat) return;
+    deny = [...new Set(deny)]; allow = [...new Set(allow)].filter((k) => !deny.includes(k));
+    const row = { category_id: id, server_id: cat.server, target, allow, deny };
+    const i = cache.perms.findIndex((x) => x.category_id === id && x.target === target), before = i >= 0 ? cache.perms[i] : null;
+    if (i >= 0) cache.perms[i] = row; else cache.perms.push(row);
+    emit();
+    try { must(await sb.from('category_perms').upsert(row)); }
+    catch (e) { cache.perms = cache.perms.filter((x) => !(x.category_id === id && x.target === target)); if (before) cache.perms.push(before); emit(); throw e; }
+  },
+  async removeCategoryPerm(id, target) {
+    const before = cache.perms.find((x) => x.category_id === id && x.target === target);
+    cache.perms = cache.perms.filter((x) => x !== before); emit();
+    try { took('You can only remove what you may do yourself.')(await sb.from('category_perms').delete().eq('category_id', id).eq('target', target).select('target')); }
+    catch (e) { if (before) cache.perms.push(before); emit(); throw e; }
   },
   removeChannel(id) {
     cache.channels = cache.channels.filter((c) => c.id !== id); emit();
-    push(sb.from('channels').delete().eq('id', id).select('id').then(took('Only this server’s admins can delete channels.')), loadAll);
+    push(sb.from('channels').delete().eq('id', id).select('id').then(took('You don’t have permission to delete this channel.')), loadAll);
   },
   removeCategory(id) {
     cache.categories = cache.categories.filter((c) => c.id !== id); cache.channels = cache.channels.filter((c) => c.category !== id); emit();

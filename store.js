@@ -73,6 +73,12 @@ export const LocalStore = {
   updateServer(id, patch) { const d = load(), s = d.servers.find((x) => x.id === id); if (s) Object.assign(s, patch); save(); emit(); },
   updateChannel(id, patch) { const d = load(), c = d.channels.find((x) => x.id === id); if (c) Object.assign(c, patch); save(); emit(); },
   updateCategory(id, patch) { const d = load(), c = d.categories.find((x) => x.id === id); if (c) Object.assign(c, patch); save(); emit(); },
+  // categories in a new order (Move to…)
+  moveCategories(sv, ids) {
+    const d = load(), mine = ids.map((id) => d.categories.find((c) => c.id === id && c.server === sv)).filter(Boolean);
+    d.categories = [...d.categories.filter((c) => c.server !== sv), ...mine, ...d.categories.filter((c) => c.server === sv && !mine.includes(c))];
+    save(); emit();
+  },
   removeCategory(id) { const d = load(); d.categories = d.categories.filter((c) => c.id !== id); for (const c of d.channels.filter((x) => x.category === id)) delete d.messages[c.id]; d.channels = d.channels.filter((c) => c.category !== id); save(); emit(); },
   removeServer(id) {
     const d = load();

@@ -263,13 +263,23 @@ function goToMessage(t) {
 }
 
 // ---------- unread, pings and muting ----------
-// how much a place may tell you: its own setting, else its server's, else everything ('all', 'mentions' or 'none')
+// how much a place may tell you: its own setting, else its category's, else its server's, else everything ('all',
+// 'mentions' or 'none')
+const catOf = (place) => (Store.channel ? (Store.channel(place) || {}).category : null) || null;
 function levelFor(place, sv) {
-  const a = Store.placeSettings(place).notify; if (a && a !== 'default') return a;
-  const b = sv ? Store.placeSettings(sv).notify : 'default';
-  return b && b !== 'default' ? b : 'all';
+  for (const p of [place, catOf(place), sv]) { const v = p ? Store.placeSettings(p).notify : 'default'; if (v && v !== 'default') return v; }
+  return 'all';
 }
-const mutedHere = (place, sv) => Store.placeSettings(place).muted || (!!sv && Store.placeSettings(sv).muted);
+const mutedHere = (place, sv) => Store.placeSettings(place).muted || (!!catOf(place) && Store.placeSettings(catOf(place)).muted) || (!!sv && Store.placeSettings(sv).muted);
+// a server where you hide muted channels (right-click the channel list)
+const HIDE_MUTED = 'fluentdat.hideMuted';
+const hideMuted = new Set((() => { try { const v = JSON.parse(localStorage.getItem(HIDE_MUTED)); return Array.isArray(v) ? v : []; } catch { return []; } })());
+function toggleHideMuted(sv) {
+  if (hideMuted.has(sv)) hideMuted.delete(sv); else hideMuted.add(sv);
+  try { localStorage.setItem(HIDE_MUTED, JSON.stringify([...hideMuted])); } catch {}
+}
+// what you may do in a channel (a category's permissions; always yes outside servers and signed out)
+const mayIn = (perm, place = view === 'server' ? channelId : null) => !place || view !== 'server' || Store.can(place, perm);
 function serverUnread(sv) {
   let unread = 0, mentions = 0;
   if (Store.kind !== 'supabase') return { unread, mentions };
@@ -414,18 +424,31 @@ function serverTip(s) {
 
 // ---------- the sidebar ----------
 let unfolding = null;             // (a category just opened: its channels unfold)
+let sideSwap = -1e9;              // (when you last switched servers: the header, then the channels, come in one after another)
+const SIDE_SWAP_MS = 760;
+// a row coming in after a switch, in its turn (one drawn again partway through carries on from where it was)
+function swapIn(node, i) {
+  const t = performance.now() - sideSwap;
+  if (!node || t > SIDE_SWAP_MS) return node;
+  node.classList.add('swap-in'); node.style.animationDelay = Math.round(Math.min(i, 16) * 24 - t) + 'ms';
+  return node;
+}
 function renderSide() {
   const head = $('#side-head'), body = $('#side-body');
-  head.onclick = null; head.className = 'side-head'; head.style.removeProperty('--banner');
   const side = head.parentElement, wasServer = side.dataset.server;
   side.dataset.server = view === 'server' ? serverId || '' : '';
+  const switched = side.dataset.server !== wasServer && wasServer !== undefined;
+  if (switched) { sideSwap = performance.now(); head.classList.remove('swap-in'); void head.offsetWidth; }      // (its animation starts over)
+  const swapping = performance.now() - sideSwap < SIDE_SWAP_MS;
+  head.onclick = null; head.className = 'side-head' + (swapping ? ' swap-in' : ''); head.style.removeProperty('--banner');
+  body.oncontextmenu = null;
   if (side.dataset.server !== wasServer) side.classList.remove('banner-tucked');
   side.classList.remove('banner-over');
   if (view === 'home') return dmSide(head, body);
   if (view === 'discover') {
     head.replaceChildren('Discover');
-    body.replaceChildren(...DISCOVER_CATS.map(([id, label, ic]) => el('button', { className: 'nav-btn' + (discoverCat === id ? ' on' : ''),
-      onclick: () => { discoverCat = id; renderSide(); renderContent(); $('#app').classList.remove('show-side'); } }, icon(ic), label)));
+    body.replaceChildren(...DISCOVER_CATS.map(([id, label, ic], i) => swapIn(el('button', { className: 'nav-btn' + (discoverCat === id ? ' on' : ''),
+      onclick: () => { discoverCat = id; renderSide(); renderContent(); $('#app').classList.remove('show-side'); } }, icon(ic), label), i)));
     return;
   }
   if (!serverId || !Store.server(serverId)) {
@@ -435,34 +458,41 @@ function renderSide() {
     return;
   }
   const server = Store.server(serverId), can = Store.canManage(serverId), live = Store.kind === 'supabase';
+  const canChans = (catId) => can || (!!catId && Store.can(catId, 'manage_channels'));
   const bg = prefs.serverBanner !== 'off' && paint(server.banner);
-  head.className = 'side-head btn-like' + (bg ? ' has-banner' : '');
+  head.className = 'side-head btn-like' + (bg ? ' has-banner' : '') + (swapping ? ' swap-in' : '');
   if (bg) head.style.setProperty('--banner', bg);
   // (the banner's bottom fades into the channels, which come up over it a little, when the header sits right above them)
   const order = validOrder(prefs.sideOrder, ['head', 'body', 'panel']);
   head.parentElement.classList.toggle('banner-over', !!bg && prefs.sideHead !== 'off' && order.indexOf('body') === order.indexOf('head') + 1);
-  const inviting = live ? can : true;                     // (signed out, Invite explains how it works)
+  const inviting = live ? Store.canAnywhere(serverId, 'invite') : true;      // (signed out, Invite explains how it works)
   const row = el('div', { className: 'sh-row' }, el('span', { className: 'sh-name' }, server.name), ...ordered('header').map((id) =>
     id === 'invite' ? (shown('invite') && inviting ? el('button', { className: 'sh-btn', title: 'Invite People', onclick: (e) => { e.stopPropagation(); inviteFriends(serverId); } }, icon('personAdd', 18)) : null)
       : shown('serverMenu') ? el('span', { className: 'drop' }, icon('chevD', 18)) : null));
   head.replaceChildren(row);
   head.onclick = () => serverMenu(row);
   body.replaceChildren();
+  body.oncontextmenu = (e) => { if (e.target.closest('.chan, .cat, .vmem')) return; e.preventDefault(); sideCtx(e.clientX, e.clientY); };
   const cats = Store.categories(serverId), chans = Store.channels(serverId);
   const groups = cats.length ? cats : [{ id: null, name: 'Channels' }];
+  const hiding = live && hideMuted.has(serverId);
+  let k = 0;
   for (const cat of groups) {
     const mine = chans.filter((c) => (cat.id ? c.category === cat.id : true));
     const isCollapsed = collapsed.has(cat.id);
-    body.append(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) { collapsed.delete(cat.id); unfolding = cat.id; } else collapsed.add(cat.id); renderSide(); unfolding = null; },
+    body.append(swapIn(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) { collapsed.delete(cat.id); unfolding = cat.id; } else collapsed.add(cat.id); renderSide(); unfolding = null; },
       oncontextmenu: (e) => { e.preventDefault(); categoryCtx(cat, e.clientX, e.clientY); } },
       el('span', { className: 'caret' }, icon('chevD')), el('span', { className: 'nm' }, cat.name),
-      can && shown('newChannel') ? el('span', { className: 'add', title: 'Create Channel', onclick: (e) => { e.stopPropagation(); newChannelFlow(cat.id); } }, icon('plus')) : null));
-    // (a collapsed category still shows the channel you're in, and ones with something new, as on Discord)
+      canChans(cat.id) && shown('newChannel') ? el('span', { className: 'add', title: 'Create Channel', onclick: (e) => { e.stopPropagation(); newChannelFlow(cat.id); } }, icon('plus')) : null), k++));
+    // (a collapsed category still shows the channel you're in, and ones with something new, as on Discord; hiding
+    // muted channels keeps the one you're in and ones that ping you)
     for (const c of mine) {
       const u = Store.unread(c.id), muted = mutedHere(c.id, serverId), isOn = c.id === channelId && view === 'server';
       const fresh = u.unread > 0 && !muted && !isOn, ping = !isOn && u.mentions > 0 && levelFor(c.id, serverId) !== 'none';
       const voiceHere = c.kind === 'voice' ? Store.voice(serverId)[c.id] || [] : [];
       if (isCollapsed && !isOn && !fresh && !ping && !voiceHere.length) continue;
+      if (hiding && muted && !isOn && !ping) continue;
+      const editable = canChans(c.category);
       const rowc = el('button', { className: 'chan' + (isOn ? ' on' : '') + (fresh || ping ? ' unread' : '') + (muted ? ' muted' : '') + (call && call.place === c.id ? ' joined' : ''),
         onclick: () => openChannel(c),
         oncontextmenu: (e) => { e.preventDefault(); channelCtx(c, e.clientX, e.clientY); } },
@@ -471,13 +501,25 @@ function renderSide() {
       if (ping) rowc.append(el('span', { className: 'mbadge' }, u.mentions > 99 ? '99+' : String(u.mentions)));
       for (const id of ordered('channels')) {
         if (id === 'chanInvite' && shown(id) && inviting) rowc.append(el('span', { className: 'x ci', title: 'Create Invite', onclick: (e) => { e.stopPropagation(); inviteFriends(serverId); } }, icon('personAdd')));
-        if (id === 'chanSettings' && shown(id) && can) rowc.append(el('span', { className: 'x cs', title: 'Edit Channel', onclick: (e) => { e.stopPropagation(); editChannel(c); } }, icon('gear')));
-        if (id === 'delChannel' && shown(id) && can && chans.length > 1) rowc.append(el('span', { className: 'x', title: 'Delete Channel', onclick: (e) => { e.stopPropagation(); deleteChannel(c); } }, icon('x')));
+        if (id === 'chanSettings' && shown(id) && editable) rowc.append(el('span', { className: 'x cs', title: 'Edit Channel', onclick: (e) => { e.stopPropagation(); editChannel(c); } }, icon('gear')));
+        if (id === 'delChannel' && shown(id) && editable && chans.length > 1) rowc.append(el('span', { className: 'x', title: 'Delete Channel', onclick: (e) => { e.stopPropagation(); deleteChannel(c); } }, icon('x')));
       }
-      body.append(rowc);
-      for (const v of voiceHere) body.append(voiceMember(v, c));
+      body.append(swapIn(rowc, k++));
+      for (const v of voiceHere) body.append(swapIn(voiceMember(v, c), k++));
     }
   }
+}
+// right-clicking the channel list's empty space (Discord's): hide muted channels, make a channel or a category, invite
+function sideCtx(x, y) {
+  const sv = serverId, can = Store.canManage(sv), live = Store.kind === 'supabase';
+  const cats = Store.categories(sv).filter((c) => can || Store.can(c.id, 'manage_channels'));
+  menu([
+    live && { label: 'Hide Muted Channels', check: hideMuted.has(sv), action: () => { toggleHideMuted(sv); renderSide(); } },
+    live && '-',
+    (can || cats.length) && { label: 'Create Channel', action: () => newChannelFlow((cats[0] || {}).id) },
+    can && { label: 'Create Category', action: () => newCategory(sv) },
+    (live ? Store.canAnywhere(sv, 'invite') : true) && { label: 'Invite to Server', action: () => inviteFriends(sv) },
+  ], x, y);
 }
 // someone in a voice channel, under it in the list: who, and whether they're muted, deafened, on camera or streaming
 function voiceMember(v, c) {
@@ -524,7 +566,7 @@ function dmSide(head, body) {
       el('span', { className: 'close', title: 'Close DM', onclick: (e) => { e.stopPropagation(); closedDMs.add(d.id); saveClosed(); if (dmId === d.id) dmId = null; renderAll(); } }, icon('x', 16)));
     parts.push(group ? row : plateOn(row, d.user.plate));
   }
-  body.replaceChildren(...parts);
+  body.replaceChildren(...parts.map((n, i) => swapIn(n, i)));
 }
 
 // ---------- Voice Connected (above your user panel while you're in a call) ----------
@@ -667,12 +709,12 @@ function when(ts, full) {
 }
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const lasted = (ms) => (ms < 60000 ? 'a few seconds' : ms < 120000 ? 'a minute' : ms < 3600000 ? `${Math.round(ms / 60000)} minutes` : ms < 7200000 ? 'an hour' : `${Math.round(ms / 3600000)} hours`);
-// does this message ping you? your @name, @everyone/@here from an admin (in a server), or a reply to you
+// does this message ping you? your @name, @everyone/@here from someone who may (in a server), or a reply to you
 function pingsMe(m, all) {
   if (Store.kind !== 'supabase' || m.mine) return false;
   const text = m.text || '', mine = Store.myId();
   if (mine && text.includes(`<@${mine}>`)) return true;
-  if (view === 'server' && /(^|[^\w@])@(everyone|here)(?![\w])/.test(text)) { const r = ((Store.members(serverId) || []).find((x) => x.id === m.user.id) || {}).role; if (r === 'owner' || r === 'admin') return true; }
+  if (view === 'server' && /(^|[^\w@])@(everyone|here)(?![\w])/.test(text) && m.user.id && Store.can(channelId, 'mention_everyone', m.user.id)) return true;
   if (m.reply) { const to = all.find((x) => x.id === m.reply); if (to && to.mine) return true; }
   return false;
 }
@@ -689,6 +731,7 @@ function emojiFace(emoji, cls) {
 const emojiLabel = (emoji) => { const c = String(emoji).match(CUSTOM_RE); return c ? ':' + c[2] + ':' : emoji; };
 async function toggleReact(m, emoji, on) {
   const place = placeNow(); if (!place || !emoji || m.sending) return;
+  if (on && !mayIn('react') && !(Store.reactions(place).get(m.id) || []).some((r) => r.emoji === emoji && r.count > (r.me ? 1 : 0))) return toast('You don’t have permission to add new reactions here.');
   if (on) { const c = String(emoji).match(CUSTOM_RE); noteUse(c ? 'c:' + c[3] : emoji); }
   await attempt(() => Store.react(place, m.id, emoji, on));
 }
@@ -741,7 +784,7 @@ function syncReacts(node, m, list, animate) {
     }
     out.push(b);
   }
-  out.push(row.querySelector(':scope > .react-add') || el('button', { className: 'react-add', title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)));
+  if (mayIn('react')) out.push(row.querySelector(':scope > .react-add') || el('button', { className: 'react-add', title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)));
   let i = 0;
   for (const n of out) { if (row.children[i] !== n) row.insertBefore(n, row.children[i] || null); i++; }
   while (row.children.length > out.length) row.lastElementChild.remove();
@@ -799,7 +842,7 @@ function fillMessages(wrap, msgs, place, start) {
   const put = (key, make) => { let n = keep.get(key), made = false; if (!n) { n = make(); made = true; } next.set(key, n); order.push(n); return [n, made]; };
   const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars].join();
   const first = !wrap._seen; if (first) wrap._seen = new Set();
-  const reacts = Store.reactions ? Store.reactions(place) : new Map();
+  const reacts = Store.reactions ? Store.reactions(place) : new Map(), reactable = mayIn('react');
   if (start) put('start:' + start.key, start.make);
   if (!Store.loaded(place) && !msgs.length) put('loading', skeleton);
   if (searchQ) {
@@ -830,7 +873,7 @@ function fillMessages(wrap, msgs, place, start) {
     const to = m.reply ? all.find((x) => x.id === m.reply) : null;
     const key = 'm:' + m.id + ':' + JSON.stringify([m.text, m.sticker && String(m.sticker.data || m.sticker.path || m.sticker).length, (m.files || []).map((f) => f.path || f.name), !!m.sending, cont, style,
       m.user.name, m.user.color, String(m.user.avatar || '').length, nameColor(m.user), to ? [to.user.name, to.text, !!to.files] : m.reply, m.forwarded, emojiIndex.size, bookmarked(m.id),
-      m.user.style, m.user.tag]);
+      m.user.style, m.user.tag, reactable]);
     const [node, made] = put(key, () => messageNode(m, cont, to, all, ctx));
     if (made && !first && !wrap._seen.has(m.id)) node.classList.add('arrive');
     wrap._seen.add(m.id);
@@ -880,10 +923,11 @@ function messageNode(m, cont, to, all, ctx) {
       el('div', { className: 'fwd-foot' }, [String(f.from || '').slice(0, 100), at ? when(at, true) : ''].filter(Boolean).join(' · '))));
   }
   const av = avatarEl(m.user); av.onclick = (e) => showProfile(m.user, e.currentTarget);
+  const reacting = !m.sending && mayIn('react');
   const tools = el('div', { className: 'msg-tools' },
-    ...(!m.sending ? quickReacts(3).map((q) => el('button', { className: 'qr', title: 'React with ' + emojiLabel(q), onclick: (e) => { e.stopPropagation(); toggleReact(m, q, true); } }, emojiFace(q, 'qre'))) : []),
-    !m.sending ? el('button', { title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)) : null,
-    !m.sending ? el('button', { title: 'Reply', onclick: (e) => { e.stopPropagation(); startReply(m); } }, icon('reply', 18)) : null,
+    ...(reacting ? quickReacts(3).map((q) => el('button', { className: 'qr', title: 'React with ' + emojiLabel(q), onclick: (e) => { e.stopPropagation(); toggleReact(m, q, true); } }, emojiFace(q, 'qre'))) : []),
+    reacting ? el('button', { title: 'Add Reaction', onclick: (e) => { e.stopPropagation(); reactPicker(m, e.currentTarget); } }, icon('smilePlus', 18)) : null,
+    !m.sending && mayIn('send') ? el('button', { title: 'Reply', onclick: (e) => { e.stopPropagation(); startReply(m); } }, icon('reply', 18)) : null,
     !m.sending && Store.kind === 'supabase' ? el('button', { title: 'Forward', onclick: (e) => { e.stopPropagation(); forwardFlow(m); } }, icon('forward', 18)) : null,
     el('button', { title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); messageCtx(m, r.left - 200, r.bottom + 4); } }, icon('more', 18)));
   const node = el('div', { className: 'msg' + (cont ? ' cont' : '') + (pingsMe(m, all) ? ' pinged' : '') + (m.sending ? ' sending' : '') + (bookmarked(m.id) ? ' saved' : ''),
@@ -1073,9 +1117,19 @@ function composerBtn(id) {
   CB[id].dataset.btn = id;
   return CB[id];
 }
+let heldText = '';                // (what you'd typed, kept aside while you're in a channel where you may not send)
 function renderComposer() {
-  const box = $('#composer .box'), parts = [];
-  for (const id of ordered('composer')) { if (id === 'input') parts.push($('#input')); else if (shown(id)) parts.push(composerBtn(id)); }
+  const box = $('#composer .box'), parts = [], locked = !mayIn('send'), files = mayIn('attach');
+  $('#composer').classList.toggle('locked', locked);
+  const inp = $('#input');
+  if (locked && !inp.disabled) { heldText = inp.value; inp.value = ''; }
+  if (!locked && inp.disabled) { inp.value = heldText; heldText = ''; }
+  inp.disabled = locked;
+  if (locked) inp.placeholder = 'You do not have permission to send messages in this channel.';
+  for (const id of ordered('composer')) {
+    if (id === 'input') parts.push(inp);
+    else if (shown(id) && !locked && (files || (id !== 'upload' && id !== 'voice'))) parts.push(composerBtn(id));
+  }
   const same = parts.length === box.children.length && parts.every((p, i) => box.children[i] === p);
   if (!same) box.replaceChildren(...parts);
   renderComposerExtras();
@@ -1106,7 +1160,8 @@ function pendingCard(f) {
 function removeFile(f) { const d = draft(placeNow()); d.files = d.files.filter((x) => x !== f); if (f.url) URL.revokeObjectURL(f.url); renderComposerExtras(); }
 // files dropped, pasted or picked: they wait in the message box until you send (nothing goes by itself)
 function addFiles(list) {
-  const place = placeNow(); if (!place || $('#composer').hidden) return;
+  const place = placeNow(); if (!place || $('#composer').hidden || $('#composer').classList.contains('locked')) return;
+  if (!mayIn('attach')) return toast('You don’t have permission to attach files in this channel.');
   const d = draft(place), live = Store.kind === 'supabase';
   for (const file of list) {
     if (d.files.length >= 10) { toast('You can attach up to 10 files at a time.'); break; }
@@ -1638,7 +1693,7 @@ function updateMentions() {
   const pop = $('#mention-pop'), mq = Store.kind === 'supabase' ? mentionQuery() : null;
   if (!mq) return updateEmojiHits();
   hitKind = 'people'; emojiAsk++;
-  const can = view === 'server' && Store.canManage(serverId);
+  const can = view === 'server' && Store.can(channelId, 'mention_everyone');
   const people = mentionPeople().filter((p) => !mq.q || String(p.name || '').toLowerCase().includes(mq.q) || String(p.login || '').toLowerCase().startsWith(mq.q)).slice(0, 8);
   const specials = can ? [['everyone', 'Notify everyone who can see this channel.'], ['here', 'Notify everyone online who can see this channel.']].filter(([n]) => n.startsWith(mq.q)).map(([n, sub]) => ({ special: n, name: n, sub })) : [];
   mentionHits = [...people, ...specials];
@@ -1803,6 +1858,7 @@ async function joinDMCall(c) {
 }
 async function joinVoice(c) {
   if (Store.kind !== 'supabase') return toast('Voice channels need you signed in (Discord, GitHub or email), so others can hear you.');
+  if (!Store.can(c.id, 'connect')) return toast('You don’t have permission to join this voice channel.');
   if (call && call.place === c.id) return;
   if (call) leaveCall();
   await enterCall({ kind: 'vc', place: c.id, server: c.server, video: false });
@@ -2067,7 +2123,7 @@ function newChannelFlow(categoryId, sv = serverId, after) {
     return b;
   };
   const kinds = el('div', { className: 'kinds' }, opt('text', 'hash', 'Text', 'Send messages, pictures, stickers and opinions'), opt('voice', 'volume', 'Voice', 'Hang out together with voice and video'));
-  const cats = Store.categories(sv);
+  const cats = Store.categories(sv).filter((c) => Store.canManage(sv) || Store.can(c.id, 'manage_channels'));
   const catSel = cats.length > 1 ? sel(categoryId || cats[0].id, cats.map((c) => [c.id, c.name]), () => {}) : null;
   const create = el('button', { className: 'btn primary', textContent: 'Create Channel' });
   create.onclick = async () => {
@@ -2277,7 +2333,7 @@ async function leaveServer(id) {
 async function inviteFriends(sv) {
   const server = Store.server(sv); if (!server) return;
   if (Store.kind !== 'supabase') return openServerSettings(sv, 'invite');
-  if (!Store.canManage(sv)) return toast('Only this server’s admins can invite people.');
+  if (!Store.canAnywhere(sv, 'invite')) return toast('You don’t have permission to invite people to this server.');
   const code = await attempt(() => Store.createInvite(sv)); if (!code) return;
   const link = location.origin + location.pathname + '#invite=' + code;
   const inside = new Set((Store.members(sv) || []).map((p) => p.id));
@@ -2315,25 +2371,44 @@ function muteItem(place, what) {
   return { label: `Mute ${what}`, sub: () => [['For 15 Minutes', 15], ['For 1 Hour', 60], ['For 3 Hours', 180], ['For 8 Hours', 480], ['For 24 Hours', 1440], ['Until I turn it back on', Infinity]]
     .map(([label, min]) => ({ label, action: () => { Store.setPlaceSettings(place, { mutedUntil: min === Infinity ? Infinity : Date.now() + min * 60000 }); renderAll(); } })) };
 }
-function notifyItem(place, server) {
+// above: what a channel or category follows by default ('Server', or 'Category' for a channel in one)
+function notifyItem(place, server, above = 'Server') {
   if (Store.kind !== 'supabase') return null;
   const cur = Store.placeSettings(place).notify;
-  const opts = server ? [['all', 'All Messages'], ['mentions', 'Only @mentions'], ['none', 'Nothing']] : [['default', 'Use Server Default'], ['all', 'All Messages'], ['mentions', 'Only @mentions'], ['none', 'Nothing']];
+  const opts = server ? [['all', 'All Messages'], ['mentions', 'Only @mentions'], ['none', 'Nothing']] : [['default', `Use ${above} Default`], ['all', 'All Messages'], ['mentions', 'Only @mentions'], ['none', 'Nothing']];
   const on = (v) => cur === v || (server && cur === 'default' && v === 'all');
   return { label: 'Notification Settings', hint: (opts.find(([v]) => on(v)) || opts[0])[1], sub: () => opts.map(([v, l]) => ({ label: l, check: on(v), action: () => { Store.setPlaceSettings(place, { notify: v }); renderAll(); } })) };
 }
 const markReadItem = (places) => Store.kind === 'supabase' && places.some((p) => Store.unread(p).unread) && { label: 'Mark As Read', icon: 'check', action: () => { for (const p of places) Store.markRead(p); renderAll(); } };
+// a category's menu (Discord's): read, fold, mute, notifications, move, edit, delete
 function categoryCtx(cat, x, y) {
-  const can = Store.canManage(serverId), chans = Store.channels(serverId).filter((c) => c.category === cat.id);
+  const can = Store.canManage(serverId), live = Store.kind === 'supabase', chans = Store.channels(serverId).filter((c) => c.category === cat.id);
+  const cats = Store.categories(serverId), i = cats.findIndex((c) => c.id === cat.id);
+  const editable = !!cat.id && (can || (live && (Store.can(cat.id, 'manage_channels') || Store.can(cat.id, 'manage_perms'))));
+  const moveTo = (j) => { const ids = cats.map((c) => c.id); ids.splice(i, 1); ids.splice(j, 0, cat.id); Store.moveCategories(serverId, ids); renderSide(); };
   menu([
     markReadItem(chans.map((c) => c.id)),
-    { label: collapsed.has(cat.id) ? 'Expand Category' : 'Collapse Category', check: collapsed.has(cat.id), action: () => { if (collapsed.has(cat.id)) collapsed.delete(cat.id); else collapsed.add(cat.id); renderSide(); } },
-    { label: 'Collapse All Categories', action: () => { for (const c of Store.categories(serverId)) collapsed.add(c.id); renderSide(); } },
-    can && cat.id && '-', can && cat.id && { label: 'Create Channel', icon: 'plusCircle', action: () => newChannelFlow(cat.id) },
-    can && cat.id && { label: 'Edit Category', icon: 'edit', action: async () => { const n = await ask({ title: 'Edit Category', label: 'Category name', value: cat.name, ok: 'Save', max: 60 }); if (n) { Store.updateCategory(cat.id, { name: n }); renderAll(); } } },
-    can && cat.id && { label: 'Delete Category', icon: 'trash', danger: true, action: async () => { if (await confirmBox({ title: 'Delete Category', text: `Are you sure you want to delete ${cat.name}? Its channels and their messages go with it.`, ok: 'Delete Category', danger: true })) { Store.removeCategory(cat.id); renderAll(); } } },
+    { label: 'Collapse Category', check: collapsed.has(cat.id), action: () => { if (collapsed.has(cat.id)) { collapsed.delete(cat.id); unfolding = cat.id; } else collapsed.add(cat.id); renderSide(); unfolding = null; } },
+    { label: 'Collapse All Categories', action: () => { for (const c of cats) collapsed.add(c.id); renderSide(); } },
+    live && cat.id && '-',
+    cat.id && muteItem(cat.id, 'Category'), cat.id && notifyItem(cat.id, false),
+    (editable || (can && cats.length > 1)) && '-',
+    can && cat.id && cats.length > 1 && { label: 'Move to…', sub: () => [
+      { label: 'Top', disabled: i <= 0, action: () => moveTo(0) },
+      { label: 'Up', disabled: i <= 0, action: () => moveTo(i - 1) },
+      { label: 'Down', disabled: i >= cats.length - 1, action: () => moveTo(i + 1) },
+      { label: 'Bottom', disabled: i >= cats.length - 1, action: () => moveTo(cats.length - 1) }] },
+    editable && { label: 'Edit Category', action: () => openCategorySettings(cat.id) },
+    can && cat.id && { label: 'Delete Category', danger: true, action: () => deleteCategory(cat) },
     '-', cat.id && { label: 'Copy Category ID', icon: 'id', action: () => copyText(cat.id, 'Category ID copied.') },
   ], x, y);
+}
+async function deleteCategory(cat) {
+  const n = Store.channels(serverId).filter((c) => c.category === cat.id).length;
+  if (!(await confirmBox({ title: 'Delete Category', text: `Are you sure you want to delete ${cat.name}? ${n ? `Its ${n} channel${n === 1 ? '' : 's'} and their messages go with it. ` : ''}This can’t be undone.`, ok: 'Delete Category', danger: true }))) return false;
+  const inIt = (Store.channel(channelId) || {}).category === cat.id;
+  Store.removeCategory(cat.id); if (inIt) channelId = firstChannel(serverId); renderAll();
+  return true;
 }
 // a channel's settings (admins): its name and topic
 function editChannel(c) {
@@ -2347,7 +2422,7 @@ function editChannel(c) {
   };
   const m = modal({ title: 'Edit Channel', sub: (c.kind === 'voice' ? '' : '#') + c.name,
     body: [el('div', { className: 'field' }, el('label', {}, 'Channel name'), name), c.kind === 'voice' ? null : el('div', { className: 'field' }, el('label', {}, 'Channel topic'), topic)],
-    actions: [Store.channels(serverId).length > 1 ? el('button', { className: 'btn ghost danger', onclick: () => { m.close(); deleteChannel(c); } }, 'Delete Channel') : null, el('span', { style: 'flex:1' }),
+    actions: [Store.channels(serverId).length > 1 && (Store.canManage(serverId) || Store.can(c.id, 'manage_channels')) ? el('button', { className: 'btn ghost danger', onclick: () => { m.close(); deleteChannel(c); } }, 'Delete Channel') : null, el('span', { style: 'flex:1' }),
       el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close() }), save] });
   setTimeout(() => name.focus(), 0);
 }
@@ -2364,14 +2439,15 @@ function serverMenu(anchor) {
 function serverItems(s, x, y) {
   if (!s) return;
   const can = Store.canManage(s.id), live = Store.kind === 'supabase', owner = Store.role(s.id) === 'owner';
+  const chanCats = Store.categories(s.id).filter((c) => can || Store.can(c.id, 'manage_channels'));
   menu([
     markReadItem(Store.channels(s.id).map((c) => c.id)),
-    (live ? can : true) && { label: 'Invite People', icon: 'personAdd', action: () => inviteFriends(s.id) },
+    (live ? Store.canAnywhere(s.id, 'invite') : true) && { label: 'Invite People', icon: 'personAdd', action: () => inviteFriends(s.id) },
     '-',
     muteItem(s.id, 'Server'), notifyItem(s.id, true),
     live && '-',
     { label: 'Server Settings', icon: 'gear', action: () => openServerSettings(s.id) },
-    can && { label: 'Create Channel', icon: 'plusCircle', action: () => { if (serverId !== s.id) go(s.id); newChannelFlow(Store.categories(s.id)[0]?.id); } },
+    (can || chanCats.length) && { label: 'Create Channel', icon: 'plusCircle', action: () => { if (serverId !== s.id) go(s.id); newChannelFlow(chanCats[0]?.id); } },
     can && { label: 'Create Category', icon: 'plus', action: () => newCategory(s.id) },
     '-',
     { label: 'Copy Server ID', icon: 'id', action: () => copyText(s.id, 'Server ID copied.') },
@@ -2380,13 +2456,13 @@ function serverItems(s, x, y) {
 }
 const serverCtx = (s, x, y) => serverItems(s, x, y);
 function channelCtx(c, x, y) {
-  const can = Store.canManage(serverId), live = Store.kind === 'supabase';
+  const can = Store.canManage(serverId) || Store.can(c.id, 'manage_channels'), live = Store.kind === 'supabase';
   menu([
     markReadItem([c.id]),
-    (live ? can : true) && { label: 'Invite to Channel', icon: 'personAdd', action: () => inviteFriends(serverId) },
+    (live ? Store.canAnywhere(serverId, 'invite') : true) && { label: 'Invite to Channel', icon: 'personAdd', action: () => inviteFriends(serverId) },
     { label: 'Copy Link', icon: 'link', action: () => copyText(`${location.origin}${location.pathname}#channel=${c.id}`, 'Link copied.') },
-    c.kind === 'voice' && live && (call && call.place === c.id ? { label: 'Disconnect', icon: 'hangup', danger: true, action: () => leaveCall() } : { label: 'Join Voice', icon: 'volume', action: () => joinVoice(c) }),
-    live && '-', muteItem(c.id, 'Channel'), notifyItem(c.id, false),
+    c.kind === 'voice' && live && (call && call.place === c.id ? { label: 'Disconnect', icon: 'hangup', danger: true, action: () => leaveCall() } : Store.can(c.id, 'connect') && { label: 'Join Voice', icon: 'volume', action: () => joinVoice(c) }),
+    live && '-', muteItem(c.id, 'Channel'), notifyItem(c.id, false, c.category ? 'Category' : 'Server'),
     can && '-', can && { label: 'Edit Channel', icon: 'gear', action: () => editChannel(c) },
     can && Store.channels(serverId).length > 1 && { label: 'Delete Channel', icon: 'trash', danger: true, action: () => deleteChannel(c) },
     '-', { label: 'Copy Channel ID', icon: 'id', action: () => copyText(c.id, 'Channel ID copied.') },
@@ -2433,14 +2509,14 @@ function dmCtx(d, x, y) {
 function messageCtx(m, x, y) {
   const where = view === 'home' ? { dm: true, id: dmId } : { dm: false, id: channelId }, live = Store.kind === 'supabase';
   const mine = isMe(m.user) || (m.user.bot && m.user.via && m.user.via === (Store.account() || {}).login) || (Store.kind === 'local');
-  const canDel = typeof Store.deleteMessage === 'function' && (mine || (!where.dm && Store.canManage(serverId)));
+  const canDel = typeof Store.deleteMessage === 'function' && (mine || (!where.dm && (Store.canManage(serverId) || Store.can(channelId, 'manage_messages'))));
   const link = `${location.origin}${location.pathname}#msg=${where.dm ? 'd' : 'c'}:${where.id}:${m.id}`;
   const saved = bookmarked(m.id), speakable = typeof speechSynthesis !== 'undefined' && !!(m.text || '').trim();
   if (m.call) return menu([{ label: 'Copy Message ID', icon: 'id', action: () => copyText(String(m.call.id), 'Copied.') }], x, y);
   menu([
-    !m.sending && { label: 'Add Reaction', sub: () => [...quickReacts(8).map((q) => ({ label: emojiLabel(q), hint: null, action: () => toggleReact(m, q, true) })), '-',
+    !m.sending && mayIn('react') && { label: 'Add Reaction', sub: () => [...quickReacts(8).map((q) => ({ label: emojiLabel(q), hint: null, action: () => toggleReact(m, q, true) })), '-',
       { label: 'View More', icon: 'smilePlus', action: () => { const anchor = document.querySelector(`.msg[data-id="${CSS.escape(m.id)}"] .msg-tools`) || $('#composer'); reactPicker(m, anchor); } }] },
-    !m.sending && { label: 'Reply', icon: 'reply', action: () => startReply(m) },
+    !m.sending && mayIn('send') && { label: 'Reply', icon: 'reply', action: () => startReply(m) },
     live && !m.sending && { label: 'Forward', icon: 'forward', action: () => forwardFlow(m) },
     m.text && { label: 'Copy Text', icon: 'copy', action: () => copyText(plainText(m.text, fmtCtx()), 'Copied.') },
     '-',
@@ -2473,7 +2549,7 @@ function forwardFlow(m) {
   const from = placeLabel(whereNow());
   const dests = [
     ...Store.dmList().map((d) => ({ dm: true, id: d.id, name: dmName(d), sub: d.kind === 'group' ? `${d.people.length} Members` : 'Direct Message', face: () => dmAvatar(d, 30) })),
-    ...Store.servers().flatMap((sv) => Store.channels(sv.id).filter((c) => c.kind !== 'voice').map((c) => ({ dm: false, id: c.id, name: '#' + c.name, sub: sv.name, face: () => serverFace(sv, 30) }))),
+    ...Store.servers().flatMap((sv) => Store.channels(sv.id).filter((c) => c.kind !== 'voice' && Store.can(c.id, 'send')).map((c) => ({ dm: false, id: c.id, name: '#' + c.name, sub: sv.name, face: () => serverFace(sv, 30) }))),
   ];
   const picked = new Set();
   const q = el('input', { type: 'search', placeholder: 'Search', autocomplete: 'off' });
@@ -2864,7 +2940,8 @@ function row2(title, desc, control) { return el('div', { className: 'row2' }, el
 function sel(value, options, onchange) { const s = el('select'); for (const [v, label] of options) s.append(el('option', { value: v, textContent: label, selected: v === String(value) })); s.onchange = () => onchange(s.value); return s; }
 function iconBtn(name, title, onclick, cls) { const b = el('button', { title, className: cls || '', onclick }); b.append(icon(name, 17)); return b; }
 
-function overlay(navItems, firstSection, render) {
+// guard: () => true when there are unsaved changes (then closing or switching pages doesn't happen; the page says so)
+function overlay(navItems, firstSection, render, { guard } = {}) {
   let section = firstSection, navQuery = '';
   const nav = el('div', { className: 'sx-nav' }), body = el('div', { className: 'sx-body' });
   const panel = el('div', { className: 'sx', role: 'dialog' }, nav, body);
@@ -2876,8 +2953,9 @@ function overlay(navItems, firstSection, render) {
   box.addEventListener('mousedown', (e) => { downOutside = e.target === box; });
   box.addEventListener('click', (e) => { if (downOutside && e.target === box) shut(); });
   let gone = false;
-  function shut() {
-    if (gone) return; gone = true;
+  function shut(force) {
+    if (gone || (force !== true && guard && guard())) return;
+    gone = true;
     document.removeEventListener('keydown', esc); closeColor();
     if (animOn('settings')) { box.classList.add('closing'); setTimeout(() => box.remove(), 180); } else box.remove();
     renderAll();
@@ -2897,14 +2975,14 @@ function overlay(navItems, firstSection, render) {
       q.oninput = () => { navQuery = q.value.toLowerCase(); for (const b of nav.querySelectorAll('button')) b.hidden = !!navQuery && !b.textContent.toLowerCase().includes(navQuery); };
       nav.append(q); continue;
     }
-    const b = el('button', { className: item.cls || '', onclick: () => { if (item.action) return item.action(shut); if (section === item.id) return; section = item.id; draw(); } });
+    const b = el('button', { className: item.cls || '', onclick: () => { if (item.action) return item.action(shut); if (section === item.id || (guard && guard())) return; section = item.id; draw(); } });
     if (item.icon) b.append(icon(item.icon, 17));
     b.append(el('span', {}, item.label));
     navBtns.set(item.id, b); nav.append(b);
   }
   function draw() {
     for (const [id, b] of navBtns) b.classList.toggle('on', id === section);
-    for (const [h, f] of heads) h.textContent = f();
+    for (const [h, f] of heads) h.replaceChildren(f());
     if (meBox) {
       const edit = el('span', { className: 'sx-edit', onclick: () => { shut(); openProfileEditor(); } }, 'Edit Profile', icon('edit', 13));
       meBox.replaceChildren(avatarEl(asMember(), { size: 42 }), el('div', { className: 'who' }, styledName(el('b', {}, me.name), asMember()), edit));
@@ -3688,6 +3766,177 @@ function openServerSettings(svId, section = 'profile') {
     if (sec === 'danger') return svDanger(cur, shut);
     return svOverview(cur, redraw, can);
   });
+}
+
+// ===================== a category's settings (Discord's): its name, and who may see and do what in its channels =====================
+// (for admins, and whoever the category lets manage its channels or its permissions)
+const CAT_PERMS = [
+  ['General Category Permissions', [
+    ['view', 'View Channels', 'Allows members to see this category’s channels. Taking it away from @everyone makes the category private.'],
+    ['manage_channels', 'Manage Channels', 'Allows members to make, edit and delete this category’s channels, and to rename the category.'],
+    ['manage_perms', 'Manage Permissions', 'Allows members to change this category’s permissions (only the ones they have themselves).']]],
+  ['Membership Permissions', [
+    ['invite', 'Create Invite', 'Allows members to invite new people to this server.']]],
+  ['Text Channel Permissions', [
+    ['send', 'Send Messages', 'Allows members to send messages in this category’s text channels.'],
+    ['attach', 'Attach Files', 'Allows members to upload files and pictures.'],
+    ['react', 'Add Reactions', 'Allows members to add new emoji reactions to messages. Without it, they can still join in with reactions already there.'],
+    ['mention_everyone', 'Mention @everyone and @here', 'Allows members to notify everyone who can see the channel.'],
+    ['manage_messages', 'Manage Messages', 'Allows members to delete other people’s messages.']]],
+  ['Voice Channel Permissions', [
+    ['connect', 'Connect', 'Allows members to join this category’s voice channels.']]],
+];
+// a category's permissions as they're saved: target → { allow, deny } (sets), and a way to tell two apart
+const storedPerms = (catId) => new Map(Store.categoryPerms(catId).map((r) => [r.target, { allow: new Set(r.allow), deny: new Set(r.deny) }]));
+const permsKey = (P) => JSON.stringify([...P].filter(([t, v]) => t !== 'everyone' || v.allow.size || v.deny.size).sort(([a], [b]) => (a < b ? -1 : 1))
+  .map(([t, v]) => [t, [...v.allow].sort(), [...v.deny].sort()]));
+function openCategorySettings(catId, section) {
+  const sv = serverId, cat0 = Store.categories(sv).find((c) => c.id === catId); if (!cat0) return;
+  const admin = Store.canManage(sv), live = Store.kind === 'supabase';
+  const mayEdit = admin || Store.can(catId, 'manage_channels'), mayPerms = live && (admin || Store.can(catId, 'manage_perms'));
+  if (!mayEdit && !mayPerms) return toast('You don’t have permission to change this category.');
+  const cur = () => Store.categories(sv).find((c) => c.id === catId) || cat0;
+  // (what you're changing, until you save: the name, the permissions, and which role or member is open)
+  const st = { name: null, perms: null, target: 'everyone', advanced: true, bar: null };
+  st.unsaved = () => (st.name != null && st.name.trim() !== cur().name) || (!!st.perms && permsKey(st.perms) !== permsKey(storedPerms(catId)));
+  const nav = [
+    { head: () => el('span', { className: 'cs-head' }, icon('folder', 14), el('span', {}, cur().name)) },
+    mayEdit && { id: 'overview', label: 'Overview' },
+    mayPerms && { id: 'perms', label: 'Permissions' },
+    admin && { hr: true },
+    admin && { id: 'delete', label: 'Delete Category', cls: 'danger trail', icon: 'trash', action: async (shut) => { if (await deleteCategory(cur())) shut(true); } },
+  ].filter(Boolean);
+  const first = nav.some((n) => n.id === section) ? section : mayEdit ? 'overview' : 'perms';
+  overlay(nav, first, (sec, redraw) => (sec === 'perms' ? catPerms(catId, st, redraw) : catOverview(catId, st, redraw)), {
+    guard: () => { if (!st.unsaved()) return false; if (st.bar) { st.bar.classList.remove('shake'); void st.bar.offsetWidth; st.bar.classList.add('shake'); } return true; },
+  });
+}
+// "Careful — you have unsaved changes!", at the bottom of the page while there are some
+function catBar(st, onReset, onSave) {
+  const save = el('button', { className: 'btn green' }, 'Save Changes');
+  save.onclick = async () => { save.disabled = true; try { await onSave(); } finally { save.disabled = false; } };
+  const bar = el('div', { className: 'pe-bar cs-bar' }, el('span', {}, 'Careful — you have unsaved changes!'), el('button', { className: 'btn ghost', onclick: onReset }, 'Reset'), save);
+  st.bar = bar; requestAnimationFrame(() => catBarNow(st));
+  return bar;
+}
+const catBarNow = (st) => { if (st.bar) st.bar.classList.toggle('on', st.unsaved()); };
+// Overview: the category's name (an emoji in it too, if you like)
+function catOverview(catId, st, redraw) {
+  const c = Store.categories(serverId).find((x) => x.id === catId) || { name: '' };
+  const name = el('input', { type: 'text', value: st.name != null ? st.name : c.name, maxLength: 60, className: 'wide-in', placeholder: 'New Category' });
+  name.oninput = () => { st.name = name.value; catBarNow(st); };
+  const put = (t) => {
+    const a = name.selectionStart != null ? name.selectionStart : name.value.length, b = name.selectionEnd != null ? name.selectionEnd : a;
+    name.value = (name.value.slice(0, a) + t + name.value.slice(b)).slice(0, 60); name.focus(); name.setSelectionRange(a + t.length, a + t.length); name.oninput();
+  };
+  const pick = el('button', { className: 'cs-emoji', type: 'button', title: 'Add an emoji', onclick: (e) => { e.stopPropagation(); openPicker({ tab: 'emoji', emojiOnly: true, anchor: pick, still: motionOff(),
+    servers: [], emojiOf: () => [], stickersOf: () => [], own: [], builtin: [], safeImg, canManage: () => false, manage: () => {}, onEmoji: (t, keep, custom) => { if (!custom) put(t); }, onSticker: () => {} }); } }, icon('smile', 20));
+  const bar = catBar(st, () => { st.name = null; redraw(); }, () => {
+    const v = name.value.trim(); if (!v) { name.focus(); return toast('Give the category a name.'); }
+    Store.updateCategory(catId, { name: v }); st.name = null; renderAll(); redraw(); toast('Category saved.');
+  });
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') bar.lastElementChild.click(); });
+  const art = el('div', { className: 'cs-art' }); art.innerHTML = CATEGORY_ART;
+  setTimeout(() => name.focus(), 0);
+  return [el('h2', {}, 'Overview'),
+    el('div', { className: 'cs-over' }, el('div', { className: 'cs-form' }, el('h3', {}, 'Category Name'), el('div', { className: 'cs-name' }, name, pick)), art), bar];
+}
+// a folder full of channels, in the theme's colours (the picture beside a category's name)
+const CATEGORY_ART = `<svg viewBox="0 0 220 170" aria-hidden="true">
+  <path class="cf-back" d="M22 42a12 12 0 0 1 12-12h42l12 12h98a12 12 0 0 1 12 12v84a12 12 0 0 1-12 12H34a12 12 0 0 1-12-12z"/>
+  <rect class="cf-page" x="42" y="40" width="136" height="64" rx="8" transform="rotate(-5 110 72)"/>
+  <rect class="cf-page2" x="50" y="46" width="126" height="58" rx="8" transform="rotate(4 113 75)"/>
+  <path class="cf-front" d="M16 70a12 12 0 0 1 12-12h164a12 12 0 0 1 12 12l-7 70a12 12 0 0 1-12 11H35a12 12 0 0 1-12-11z"/>
+  <g class="cf-rows"><path d="M44 86h9M43 92h9M47 82l-2 14M51 82l-2 14M44 108h9M43 114h9M47 104l-2 14M51 104l-2 14M44 130h9M43 136h9M47 126l-2 14M51 126l-2 14"/></g>
+  <rect class="cf-bar" x="60" y="84" width="92" height="9" rx="4.5"/><rect class="cf-bar" x="60" y="106" width="70" height="9" rx="4.5"/><rect class="cf-bar" x="60" y="128" width="104" height="9" rx="4.5"/>
+  <path class="cf-spark" d="M190 14l3.2 7.8 7.8 3.2-7.8 3.2-3.2 7.8-3.2-7.8-7.8-3.2 7.8-3.2z"/><path class="cf-spark small" d="M24 140l2 4.8 4.8 2-4.8 2-2 4.8-2-4.8-4.8-2 4.8-2z"/>
+</svg>`;
+// Permissions: private or not, then each role's and member's say (allow ✓, deny ✕ or leave it to the usual rule /)
+function catPerms(catId, st, redraw) {
+  const sv = serverId, admin = Store.canManage(sv), mine = (k) => admin || Store.can(catId, k);
+  if (!st.perms) st.perms = storedPerms(catId);
+  const P = st.perms;
+  if (!P.has('everyone')) P.set('everyone', { allow: new Set(), deny: new Set() });
+  if (!P.has(st.target)) st.target = 'everyone';
+  const bar = catBar(st, () => { st.perms = null; redraw(); }, async () => {
+    const before = storedPerms(catId);
+    try {
+      for (const [t, v] of P) {
+        const o = before.get(t), empty = !v.allow.size && !v.deny.size;
+        if (t === 'everyone' && empty) { if (o) await Store.removeCategoryPerm(catId, t); continue; }
+        if (!o || permsKey(new Map([[t, o]])) !== permsKey(new Map([[t, v]]))) await Store.setCategoryPerm(catId, t, [...v.allow], [...v.deny]);
+      }
+      for (const t of before.keys()) if (!P.has(t)) await Store.removeCategoryPerm(catId, t);
+      toast('Permissions saved.');
+    } catch (e) { toast(String((e && e.message) || e)); }
+    st.perms = null; redraw(); renderAll();
+  });
+  const priv = () => P.get('everyone').deny.has('view');
+  const privSw = sw(priv(), (on) => { const e = P.get('everyone'); e.allow.delete('view'); if (on) e.deny.add('view'); else e.deny.delete('view'); drawRight(); catBarNow(st); });
+  privSw.disabled = !mine('view');
+  const card = el('div', { className: 'pm-private' }, el('span', { className: 'pm-lock' }, icon('lock', 20)),
+    el('div', { className: 'lbl' }, el('b', {}, 'Private Category'),
+      el('p', {}, 'By making a category private, only the members and roles you choose below will be able to view it. Its channels follow this setting.')), privSw);
+  const roleOf = (id) => Store.roles(sv).find((r) => r.id === id);
+  const who = (id) => (Store.members(sv) || []).find((m) => m.id === id) || person(id);
+  const faceOf = (t) => {
+    if (t === 'everyone') return [el('span', { className: 'pm-at' }, icon('users', 12)), el('span', { className: 'nm3' }, '@everyone')];
+    const [kind, id] = t.split(':');
+    if (kind === 'role') { const r = roleOf(id); return [el('i', { className: 'dotc', style: `background:${safeColor(r && r.color, '#99aab5')}` }), el('span', { className: 'nm3' }, r ? r.name : 'Deleted Role')]; }
+    const m = who(id); return [avatarEl(face(m), { size: 20 }), el('span', { className: 'nm3' }, m.name)];
+  };
+  const left = el('div', { className: 'pm-targets' }), right = el('div', { className: 'pm-perms' });
+  const open = (t) => { st.target = t; drawLeft(); drawRight(); };
+  function addMenu(e) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const roles = Store.roles(sv).filter((x) => !P.has('role:' + x.id));
+    const people = (Store.members(sv) || []).filter((m) => !P.has('member:' + m.id) && !m.bot && m.role !== 'owner' && m.role !== 'admin');
+    const add = (t) => { P.set(t, { allow: new Set(), deny: new Set() }); open(t); catBarNow(st); };
+    const items = [...roles.map((x) => ({ label: x.name, color: safeColor(x.color, '#99aab5'), hint: 'Role', action: () => add('role:' + x.id) })),
+      roles.length && people.length && '-',
+      ...people.slice(0, 60).map((m) => ({ label: m.name, hint: m.login ? '@' + m.login : 'Member', action: () => add('member:' + m.id) }))].filter(Boolean);
+    menu(items.length ? items : [{ label: 'No more roles or members to add', disabled: true }], r.left, r.bottom + 4);
+  }
+  function drawLeft() {
+    const keys = [...P.keys()], roleIds = Store.roles(sv).map((r) => 'role:' + r.id);
+    const list = ['everyone', ...roleIds.filter((t) => P.has(t)), ...keys.filter((t) => t.startsWith('role:') && !roleIds.includes(t)), ...keys.filter((t) => t.startsWith('member:'))];
+    left.replaceChildren(el('div', { className: 'pm-thead' }, el('span', {}, 'Roles/Members'), el('button', { className: 'pm-add', title: 'Add a role or member', onclick: addMenu }, icon('plusCircle', 18))),
+      ...list.map((t) => {
+        const b = el('button', { className: 'pm-tgt' + (t === st.target ? ' on' : ''), onclick: () => open(t) }, ...faceOf(t)), v = P.get(t);
+        // (someone who isn't an admin can only take away a row holding what they may do themselves)
+        if (t !== 'everyone' && [...v.allow, ...v.deny].every(mine)) b.append(el('span', { className: 'rm', title: 'Remove', role: 'button', onclick: (e) => {
+          e.stopPropagation(); P.delete(t); if (st.target === t) st.target = 'everyone'; drawLeft(); drawRight(); catBarNow(st);
+        } }, icon('x', 14)));
+        return b;
+      }));
+  }
+  function drawRight() {
+    const t = st.target, v = P.get(t);
+    const tri = (k) => {
+      const box = el('div', { className: 'tri', role: 'radiogroup', ariaLabel: k }), ok = mine(k);
+      const now = v.deny.has(k) ? 'deny' : v.allow.has(k) ? 'allow' : 'mid';
+      for (const [s, ic, title] of [['deny', 'x', 'Deny'], ['mid', 'slash', 'Default (the server’s usual rule)'], ['allow', 'check', 'Allow']]) {
+        const b = el('button', { className: s + (now === s ? ' on' : ''), title: ok ? title : 'You can only change permissions you have yourself.', disabled: !ok, role: 'radio' }, icon(ic, 15));
+        b.onclick = () => {
+          v.allow.delete(k); v.deny.delete(k); if (s === 'allow') v.allow.add(k); if (s === 'deny') v.deny.add(k);
+          for (const x of box.children) x.classList.toggle('on', x === b);
+          if (t === 'everyone' && k === 'view') privSw.classList.toggle('on', priv());
+          catBarNow(st);
+        };
+        box.append(b);
+      }
+      return box;
+    };
+    right.replaceChildren(el('div', { className: 'pm-for' }, 'Permissions for ', el('b', {}, ...faceOf(t).slice(-1))),
+      ...CAT_PERMS.flatMap(([group, rows]) => [el('h4', { className: 'pm-group' }, group),
+        ...rows.map(([k, label, desc]) => el('div', { className: 'pm-row' }, el('div', { className: 'lbl' }, el('b', {}, label), el('span', {}, desc)), tri(k)))]));
+  }
+  const adv = el('div', { className: 'pm-adv' }, left, right); adv.hidden = !st.advanced;
+  const advH = el('button', { className: 'pm-advh' + (st.advanced ? ' open' : ''), onclick: () => { st.advanced = !st.advanced; advH.classList.toggle('open', st.advanced); adv.hidden = !st.advanced; } },
+    el('span', {}, 'Advanced permissions'), icon('chevD', 16));
+  drawLeft(); drawRight();
+  return [el('h2', {}, 'Permissions'), el('p', { className: 'sub' }, 'Choose who can see this category’s channels and what they can do there. The owner and admins can always do everything.'),
+    card, advH, adv, bar];
 }
 
 function svOverview(sv, redraw, can) {
