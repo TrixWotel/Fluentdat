@@ -79,6 +79,7 @@ const fallback = {
   linkAccount: async () => { throw new Error(SIGN_IN + 'link your accounts.'); },
   canDecorate: () => true,
   canFrame: () => true,
+  canWikiGames: () => true,
   // (badges here are worked out by the app from what's in this browser)
   badgeStats: async () => null, badgeStatsNow: () => null,
   // a server's events: these come with signing in

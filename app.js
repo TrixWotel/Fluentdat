@@ -16,7 +16,7 @@ import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily,
 import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
 import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, FRAMES, decoEl, effectEl, frameEl, decoInfo, effectInfo, frameInfo, questInfo, questProgress } from './shop.js';
 import { BADGES as PROFILE_BADGES, BADGE as PROFILE_BADGE, RARITY, badgesOf, badgeIcon, toNext, tierAt, fmt as fmtN } from './badges.js';
-import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
+import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, gamesByLetter, LETTERS, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (the test page hands in pretend cameras and microphones, and keeps everything quiet)
 const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
 
@@ -27,7 +27,7 @@ const DEFAULT_PREFS = {
   rail: 'on', iconShape: 'squircle', chanIcons: 'on', cats: 'on', sideHead: 'on', userPanel: 'on',
   topbar: 'on', banner: 'on',
   avatars: 'on', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
-  membersDefault: true, memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
+  membersDefault: true, membersStyle: 'card', memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
   railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 136, statusH: 30,
   avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20,
@@ -2436,7 +2436,7 @@ function extrasBits(x, sec, onBoard) {
 function connectionRow(c) {
   const href = connectionLink(c), s = SERVICE[c.s] || { name: '' };
   const kids = [brandIcon(c.s, 22, { tile: true }), el('span', { className: 'fp-conn-n' }, connectionLabel(c)),
-    c.v ? el('span', { className: 'cx-v', title: `Verified: they sign in with this ${s.name} account` }, icon('check', 11)) : null, href ? icon('external', 15) : null];
+    c.v ? el('span', { className: 'cx-v', title: `Verified: they sign in with this ${s.name} account` }, icon('verified', 16)) : null, href ? icon('external', 14) : null];
   return href ? el('a', { className: 'fp-conn', href, target: '_blank', rel: 'noopener noreferrer', title: `${s.name}: ${connectionLabel(c)}` }, ...kids)
     : el('div', { className: 'fp-conn', title: s.name }, ...kids);
 }
@@ -2523,35 +2523,44 @@ function pickGames({ title = 'Add Games', max = 20, have = [] } = {}) {
     const q = el('input', { type: 'search', className: 'gp-q', placeholder: 'Search for a game', autocomplete: 'off', spellcheck: false });
     const say = el('div', { className: 'gp-say' }), grid = el('div', { className: 'gp-grid' });
     const count = el('span', { className: 'gp-count' }), add = el('button', { className: 'btn primary', disabled: true }, 'Add');
+    // (or browse Wikipedia's lists of PC games, a letter at a time)
+    const letters = el('div', { className: 'gp-letters', title: 'Wikipedia’s lists of PC games' }, el('span', {}, 'Browse'), ...LETTERS.map((L) => el('button', { className: 'gp-letter', onclick: () => browse(L) }, L)));
     let shown = [], seq = 0, timer = 0;
-    const paint = () => {
-      grid.replaceChildren(...shown.map((g) => {
-        const on = chosen.some((h) => sameGame(h, g)), was = had(g);
-        const b = el('button', { className: 'gp-cell' + (on ? ' on' : ''), disabled: was, title: was ? 'Already there' : g.d ? `${g.n} — ${g.d}` : g.n },
-          gameTile(g), el('span', { className: 'gp-n' }, g.n), el('span', { className: 'gp-tick' }, icon('check', 14)));
-        b.onclick = () => {
-          const i = chosen.findIndex((h) => sameGame(h, g));
-          if (i >= 0) chosen.splice(i, 1);
-          else if (max === 1) chosen.splice(0, chosen.length, g);
-          else if (chosen.length >= max) return toast(`You can add ${max} more.`);
-          else chosen.push(g);
-          paint();
-        };
-        return b;
-      }));
-      count.textContent = chosen.length ? `${chosen.length} picked` : max === 1 ? 'Pick one' : `Up to ${max}`;
-      add.disabled = !chosen.length;
+    const tally = () => { count.textContent = chosen.length ? `${chosen.length} picked` : max === 1 ? 'Pick one' : `Up to ${max}`; add.disabled = !chosen.length; };
+    // (a game's cell: picking it changes just that cell, so the pictures don't load again)
+    const cell = (g) => {
+      const was = had(g);
+      const b = el('button', { className: 'gp-cell' + (chosen.some((h) => sameGame(h, g)) ? ' on' : ''), disabled: was, title: was ? 'Already there' : g.d ? `${g.n} — ${g.d}` : g.n },
+        gameTile(g), el('span', { className: 'gp-n' }, g.n), el('span', { className: 'gp-tick' }, icon('check', 14)));
+      b.onclick = () => {
+        const i = chosen.findIndex((h) => sameGame(h, g));
+        if (i >= 0) chosen.splice(i, 1);
+        else if (max === 1) { chosen.splice(0, chosen.length, g); for (const o of grid.querySelectorAll('.gp-cell.on')) o.classList.remove('on'); }
+        else if (chosen.length >= max) return toast(`You can add ${max} more.`);
+        else chosen.push(g);
+        b.classList.toggle('on', chosen.some((h) => sameGame(h, g))); tally();
+      };
+      return b;
     };
+    const paint = () => { grid.replaceChildren(...shown.map(cell)); grid.scrollTop = 0; tally(); };
+    const lit = (L) => { for (const b of letters.querySelectorAll('.gp-letter')) b.classList.toggle('on', b.textContent === L); };
+    function browse(L) {
+      q.value = ''; lit(L); const mine = ++seq;
+      shown = []; say.textContent = `Loading Wikipedia’s list of PC games (${L})…`; paint();
+      gamesByLetter(L).then((list) => { if (mine !== seq) return; shown = list; say.textContent = `${list.length} games from Wikipedia’s “List of PC games (${L})”`; paint(); },
+        () => { if (mine === seq) say.textContent = 'Couldn’t load that list just now. Try again in a moment.'; });
+    }
     const run = () => {
       const text = q.value.trim(), mine = ++seq, local = text ? localGames(text) : POPULAR.slice(0, 36);
-      shown = local; say.textContent = !text ? 'Popular games' : text.length < 2 ? '' : 'Searching every game…'; paint();
+      lit('');
+      shown = local; say.textContent = !text ? 'Popular games' : text.length < 2 ? '' : 'Searching every game on Wikipedia…'; paint();
       clearTimeout(timer);
       if (text.length < 2) return;
       timer = setTimeout(() => searchGames(text).then((found) => {
         if (mine !== seq) return;
         shown = [...local, ...found.filter((g) => !local.some((h) => sameGame(h, g)))];
-        say.textContent = shown.length ? '' : 'No game by that name. Add it yourself below.'; paint();
-      }, () => { if (mine === seq) say.textContent = 'Couldn’t search every game just now. The popular ones still work, or add it yourself below.'; }), 320);
+        say.textContent = shown.length ? '' : 'No game by that name on Wikipedia. Add it yourself below.'; paint();
+      }, () => { if (mine === seq) say.textContent = 'Couldn’t search Wikipedia just now. The popular ones still work, or add it yourself below.'; }), 320);
     };
     q.oninput = run;
     let pic = '';
@@ -2568,7 +2577,7 @@ function pickGames({ title = 'Add Games', max = 20, have = [] } = {}) {
     };
     ownName.addEventListener('keydown', (e) => { if (e.key === 'Enter') ownAdd.click(); });
     const own = el('details', { className: 'gp-own' }, el('summary', {}, 'Can’t find it? Add it yourself'), el('div', { className: 'gp-own-row' }, ownName, picBtn, ownAdd));
-    const m = modal({ title, cls: 'gp-dlg', body: [q, say, grid, own], actions: [count, el('span', { style: 'flex:1' }), el('button', { className: 'btn', onclick: () => m.close(null) }, 'Cancel'), add],
+    const m = modal({ title, cls: 'gp-dlg', body: [q, letters, say, grid, own], actions: [count, el('span', { style: 'flex:1' }), el('button', { className: 'btn', onclick: () => m.close(null) }, 'Cancel'), add],
       onClose: (v) => done(Array.isArray(v) ? v : []) });
     add.onclick = () => m.close(chosen.map(cleanGame).filter(Boolean));
     run(); setTimeout(() => q.focus(), 0);
@@ -4025,8 +4034,17 @@ function applyLayout() {
   const membersOn = app.classList.contains('show-members') && innerWidth > 820;
   const width = { rail: prefs.rail === 'off' ? 0 : prefs.railW, side: prefs.sideW, members: membersOn ? (app.classList.contains('finding') ? Math.max(prefs.membersW, innerWidth >= 1300 ? 440 : 340)
     : app.classList.contains('dm-mode') ? Math.max(prefs.membersW, innerWidth >= 1200 ? 340 : 280) : prefs.membersW) : 0 };
-  app.style.setProperty('--cols', cols.map((c) => (c === 'main' ? 'minmax(0, 1fr)' : width[c] + 'px')).join(' '));
+  // (the member list beside the chat is a card in it, under the top bar, like Discord's: when it's next to the chat and the
+  // top bar is on top; otherwise it's a column of its own)
+  const mi = cols.indexOf('main'), ci = cols.indexOf('members');
+  const joined = prefs.membersStyle !== 'column' && Math.abs(mi - ci) === 1 && validOrder(prefs.mainOrder, ['top', 'content', 'composer'])[0] === 'top' && innerWidth > 820;
+  app.classList.toggle('joined', joined); app.classList.toggle('mem-left', joined && ci < mi);
+  app.style.setProperty('--mem-w', width.members + 'px');
+  app.style.setProperty('--cols', cols.map((c) => (c === 'main' ? 'minmax(0, 1fr)' : c === 'members' && joined ? '0px' : width[c] + 'px')).join(' '));
   const node = { rail: $('#rail'), side: $('.side'), main: $('.main'), members: $('#members') };
+  const col = $('#main-col');
+  if (joined) { if (ci > mi ? node.members.previousElementSibling !== col : node.members.nextElementSibling !== col) (ci > mi ? col.after(node.members) : col.before(node.members)); }
+  else if (node.members.parentNode !== app) app.append(node.members);
   cols.forEach((c, i) => { node[c].style.gridColumn = String(i + 1); node[c].style.gridRow = '1'; });
   node.members.classList.toggle('collapsed', !membersOn);
   validOrder(prefs.sideOrder, ['head', 'body', 'panel']).forEach((p, i) => { ({ head: $('#side-head'), body: $('#side-body'), panel: $('#me-panel') })[p].style.order = i; });
@@ -4765,7 +4783,7 @@ function connectionsPane(redraw) {
   if (list.length) out.push(el('h3', {}, 'Your Connections'), el('div', { className: 'cx-list' }, ...list.map((c) => {
     const href = connectionLink(c), s = SERVICE[c.s] || { name: c.s };
     return el('div', { className: 'cx-row' }, brandIcon(c.s, 24, { tile: true }),
-      el('div', { className: 'cx-who' }, el('b', {}, connectionLabel(c), c.v ? el('span', { className: 'cx-v', title: 'Verified: you sign in with this account' }, icon('check', 11)) : null), el('small', {}, s.name)),
+      el('div', { className: 'cx-who' }, el('b', {}, connectionLabel(c), c.v ? el('span', { className: 'cx-v', title: 'Verified: you sign in with this account' }, icon('verified', 16)) : null), el('small', {}, s.name)),
       href ? el('a', { className: 'cx-btn', href, target: '_blank', rel: 'noopener noreferrer', title: 'Open' }, icon('external', 16)) : null,
       el('button', { className: 'cx-btn del', title: 'Remove', onclick: async () => { if ((await attempt(() => Store.setProfileExtras({ connections: list.filter((y) => y !== c) }))) !== null) redraw(); } }, icon('x', 16)));
   })));
@@ -6060,7 +6078,8 @@ function layoutStudio(redraw) {
     if (id === 'composer') out.push(size('composerH'), size('icComposer'), updown('mainOrder', MAIN_PARTS), ...buttonRows('composer'));
     if (id === 'members') out.push(flag('membersDefault', 'Open by default', 'You can always open it from the top bar.', (on) => { showMembers = on; }), size('membersW', 'The DM profile panel uses it too.'),
       sideways('cols', COLS), size('memberAv'), flag('memberOffline', 'Include offline', ''), flag('memberStatusText', 'Second line', 'Each person’s about text.'),
-      pickRow('memberGroups', 'Group by role', onoff), flag('plates', 'Nameplates', ''), flag('dmPanel', 'Profile beside DMs', 'Shown in this column in DMs.'));
+      pickRow('memberGroups', 'Group by role', onoff), flag('plates', 'Nameplates', ''), flag('dmPanel', 'Profile beside DMs', 'Shown in this column in DMs.'),
+      pickRow('membersStyle', 'Look', [['card', 'A card in the chat (Discord’s)'], ['column', 'A column of its own']], 'As a card, the top bar and its search run across it. (Only beside the chat.)'));
     insp.replaceChildren(el('div', { className: 'insp-head' }, el('h3', {}, PARTS[id] || 'Layout'), el('span', { className: 'muted' }, 'Selected')), ...out);
   }
   function buttonRows(group) {

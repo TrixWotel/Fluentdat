@@ -1113,15 +1113,17 @@ end $$;
 drop trigger if exists guard_profile_tag on public.profiles;
 create trigger guard_profile_tag before update on public.profiles for each row execute function public.guard_profile_tag();
 
--- a game on a profile: its name, and maybe its Steam number (for its cover from Steam), the name of its logo on Wikimedia
--- Commons, or a small picture of its own; never a web address, so nobody can see who looks at a profile
+-- a game on a profile: its name, and maybe the name of its picture on Wikipedia (its cover), its Steam number (for its cover
+-- from Steam), the name of its logo on Wikimedia Commons, or a small picture of its own; never a web address, so nobody can
+-- see who looks at a profile
 create or replace function public.game_ok(g jsonb, p_pictures boolean default true) returns boolean
 language sql immutable set search_path = public as $$
   select coalesce(jsonb_typeof(g) = 'object'
-    and not exists (select 1 from jsonb_object_keys(g) k where k not in ('n', 's', 'l', 'i', 'at'))
+    and not exists (select 1 from jsonb_object_keys(g) k where k not in ('n', 'w', 's', 'l', 'i', 'at'))
     and jsonb_typeof(g->'n') = 'string' and length(g->>'n') between 1 and 80 and (g->>'n') !~ '[[:cntrl:]]'
     and (g->'s' is null or (jsonb_typeof(g->'s') = 'string' and (g->>'s') ~ '^[0-9]{1,10}$'))
     and (g->'l' is null or (jsonb_typeof(g->'l') = 'string' and (g->>'l') ~ '^[^/\\?#<>|"{}[:cntrl:]]{1,180}\.(svg|png|jpe?g|gif|webp)$'))
+    and (g->'w' is null or (jsonb_typeof(g->'w') = 'string' and (g->>'w') ~ '^[^/\\?#<>|"{}[:cntrl:]]{1,180}\.(svg|png|jpe?g|gif|webp)$'))
     and (g->'i' is null or (p_pictures and jsonb_typeof(g->'i') = 'string' and length(g->>'i') <= 40000
       and (g->>'i') ~ '^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$'))
     and (g->'at' is null or (jsonb_typeof(g->'at') = 'string' and (g->>'at') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T')), false);
@@ -1425,6 +1427,8 @@ begin
   update server_members set allow_dms = coalesce(p_allow_dms, true) where server_id = p_server and user_id = auth.uid();
   if not found then raise exception 'You aren''t in that server.'; end if;
 end $$;
+-- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 8 $$;
 -- what someone's badges are made of (earned by doing things, as on Discord), for whoever may see their profile: the
 -- messages they wrote, reactions, threads, friends, the biggest server they run, since when they boost, their events,
 -- Quests, connections, games on their Board, Game Time, and whether they help run Fluentdat
@@ -1838,6 +1842,7 @@ grant execute on function public.is_member(uuid), public.is_admin(uuid), public.
   public.can_make_events(uuid), public.pin_ok(uuid, uuid), public.boost_level(uuid), public.create_thread(uuid, uuid, text), public.edit_thread(uuid, text, boolean),
   public.threads_info(uuid), public.search_messages(uuid, text, uuid, text, uuid, timestamptz, int), public.search_dm(uuid, text, uuid, text, timestamptz, int),
   public.set_nick(uuid, uuid, text), public.set_server_privacy(uuid, boolean), public.badge_stats(uuid) to authenticated;
+grant execute on function public.setup_version() to anon, authenticated;
 revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text), public.verify_connection(uuid, jsonb) from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================

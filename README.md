@@ -8,7 +8,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 
 * Servers with categories, text channels and voice channels, invites, Discover for public servers, roles, bans and banners
 * Category settings and permissions like Discord's: private categories, and what @everyone, each role and each member may do there
-* Profile connections (GitHub, Steam, TikTok, YouTube, Twitch, Spotify, X and more; the accounts you sign in with show as verified), a Board of game widgets with real covers, a Wishlist, and "Playing …" under your name
+* Profile connections (GitHub, Steam, TikTok, YouTube, Twitch, Spotify, X and more; the accounts you sign in with show as verified), a Board of game widgets, a Wishlist, and "Playing …" under your name; any game on Wikipedia, with its cover, by search or from Wikipedia's lists of PC games A–Z
 * A Shop (free avatar decorations, profile effects and nameplates) and Quests that unlock some of them
 * Server extras like Discord's: Browse Channels, Game Servers (Minecraft ones say whether they're up), a Server Guide and Events, each switched on by the server's admins
 * Threads, pinned messages, and search for a whole server or DM (words, from:, in:, has: links, files, pictures or videos)
@@ -20,7 +20,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Voice messages, pictures and files (dragged in, pasted or picked, sent when you press Enter)
 * Replies, @mentions, Discord's formatting (bold, italics, spoilers, code, quotes, headings, lists) and link previews for invites, GitHub and YouTube
 * Unread counts, pings, muting and notification settings for every server, channel and DM, and desktop notifications
-* A layout you can rearrange, themes you can edit, stickers you make, and profiles with banners and nameplates
+* A layout you can rearrange (the member list and DM profile sit as a card in the chat, under the top bar and its search, or as a column of their own), themes you can edit, stickers you make, and profiles with banners and nameplates
 * An emoji and sticker picker, and servers' own emoji and stickers (GIFs too), with :name: suggestions as you type
 * Full profiles with mutual friends and servers, notes, blocking, ignoring and reports
 * Discord's message menu: forward, bookmark, reminders, mark unread, message links and speak message

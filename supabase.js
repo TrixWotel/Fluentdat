@@ -150,6 +150,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
+const SETUP_VERSION = 8;                // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -163,14 +164,17 @@ async function loadOnce() {
   state.loading = true; state.error = ''; emit();
   try {
     const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
-    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms, events, interest, boosts] = await Promise.all([
+    const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms, events, interest, boosts, version] = await Promise.all([
       profilesQ(q),
       sb.from('profiles').select('*').eq('id', myId()).then(must),
       q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles'),
       soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null),
       soft(q('server_emoji'), []), soft(q('server_stickers'), []), soft(q('blocks'), []), soft(sb.rpc('is_app_admin').then(must), false),
-      soft(q('category_perms'), []), soft(q('server_events'), []), soft(q('event_interest'), []), soft(q('server_boosts'), [])]);
+      soft(q('category_perms'), []), soft(q('server_events'), []), soft(q('event_interest'), []), soft(q('server_boosts'), []),
+      soft(sb.rpc('setup_version').then(must), 0)]);
     if (seq !== loadSeq) return newestLoad;
+    cache.version = Number(version) || 0;
+    if (cache.version < SETUP_VERSION) state.needsSetup = true;
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
     cache.me = mine[0] || null;
     if (cache.me) {
@@ -1035,6 +1039,8 @@ export const SupabaseStore = {
   async setProfileExtras(patch) {
     const id = myId(), was = cache.extras[id], row = { id };
     for (const k of ['connections', 'widgets', 'activity', 'quests', ...(profileSet === 0 ? ['badges'] : [])]) if (k in patch) row[k] = patch[k];
+    // (an older database doesn't know games' pictures from Wikipedia yet: they're found again by name meanwhile)
+    if (row.widgets && !SupabaseStore.canWikiGames()) row.widgets = row.widgets.map((w) => (w && Array.isArray(w.g) ? { ...w, g: w.g.map(({ w: _, ...g }) => g) } : w));
     cache.extras[id] = { ...toExtras(was), ...patch }; emit();
     try { const r = must(await sb.from('profile_extras').upsert(row).select('*')); cache.extras[id] = toExtras(r[0]); emit(); return cache.extras[id]; }
     catch (e) { cache.extras[id] = was; emit(); throw e; }
@@ -1042,13 +1048,14 @@ export const SupabaseStore = {
   // the game you say you're playing ({ n, s, l }), or null; the database times it and adds it to your recent activity
   setPlaying(game) {
     if (!cache.me || profileSet > 2) return;
-    const g = game ? Object.fromEntries(['n', 's', 'l'].filter((k) => game[k]).map((k) => [k, game[k]])) : null;
+    const g = game ? Object.fromEntries(['n', ...(SupabaseStore.canWikiGames() ? ['w'] : []), 's', 'l'].filter((k) => game[k]).map((k) => [k, game[k]])) : null;
     cache.me.playing = g ? { ...g, at: new Date().toISOString() } : null; emit();
     push(sb.from('profiles').update({ playing: g }).eq('id', myId()).then(must), loadAll);
   },
   canPlay: () => profileSet <= 2,
   canDecorate: () => profileSet <= 1,
   canFrame: () => profileSet === 0,             // (frames, status bubbles and badges: the newest setup.sql)
+  canWikiGames: () => (cache.version || 0) >= 8,   // (games' pictures from Wikipedia)
   // what someone's badges are made of: the database counts (for people you know), kept for a minute
   async badgeStats(uid) {
     const id = uid || myId(), had = statsKept.get(id);

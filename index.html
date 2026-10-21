@@ -92,6 +92,14 @@
 
     /* main */
     .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--main); }
+    /* (the member list as a card in the chat, Discord's way: the top bar runs across both; otherwise these two boxes don't count) */
+    .main-body, .main-col { display: contents; }
+    .app.joined .main-body { display: flex; flex: 1; min-height: 0; order: 1; }
+    .app.joined .main-col { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+    .app.joined #members { flex: none; width: var(--mem-w, 240px); margin: 8px 8px 8px 0; border-radius: 12px; background: var(--side); box-shadow: inset 0 0 0 1px var(--edge-soft);
+      transition: width .15s ease, margin .15s ease; }
+    .app.joined.mem-left #members { margin: 8px 0 8px 8px; }
+    .app.joined #members.collapsed { width: 0; margin-left: 0; margin-right: 0; box-shadow: none; }
     .top { height: var(--top-h, 51px); flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--bright); }
     .top .hash { color: var(--muted); display: grid; place-items: center; }
     .top .spacer { flex: 1; }
@@ -1554,8 +1562,9 @@
     .fp-conn-n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .fp-conn > svg.ic { color: var(--muted); }
     .fp-addconn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); padding: 6px 0 2px; font-weight: 600; } .fp-addconn:hover { color: var(--text); }
-    .cx-v { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #23a55a; color: #fff; flex: none; }
-    .cx-v svg.ic { stroke-width: 3; }
+    .cx-v { display: inline-grid; place-items: center; width: 16px; height: 16px; color: #5865f2; flex: none; margin-left: -4px; }     /* (Discord's small verified seal) */
+    .cx-v svg.ic { width: 16px; height: 16px; } .themed .cx-v { color: #fff; } .themed .cx-v svg.ic path:last-child { stroke: #5865f2; }
+    .fp-conn > svg.ic:last-child { width: 14px; height: 14px; margin-left: -4px; }
     .cx-suggest, .cx-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--side); box-shadow: inset 0 0 0 1px var(--edge-soft); margin-bottom: 8px; }
     .cx-suggest { box-shadow: inset 0 0 0 1px color-mix(in srgb, #23a55a 55%, transparent); }
     .cx-who { flex: 1; min-width: 0; } .cx-who b { color: var(--bright); display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow-wrap: anywhere; }
@@ -2037,6 +2046,11 @@
     .shp-skel i { display: block; height: 8px; margin: 0 12px 8px; border-radius: 4px; background: #34363c; } .shp-skel i.l1 { margin-top: 32px; width: 55%; } .shp-skel i.l2 { width: 75%; } .shp-skel i.l3 { width: 40%; }
     .shp-fr-meta { display: grid; } .shp-fr-meta b { color: var(--bright); } .shp-fr-meta small { color: var(--muted); }
     .shp-fr .btn { align-self: flex-start; }
+    /* ===== the game picker: Wikipedia's lists of PC games, a letter at a time ===== */
+    .gp-letters { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 10px 0 2px; }
+    .gp-letters > span { margin-right: 4px; color: var(--muted); font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+    .gp-letter { min-width: 26px; height: 26px; padding: 0 6px; border-radius: 7px; background: var(--input); color: var(--text); font-size: .8rem; font-weight: 700; transition: background .12s; }
+    .gp-letter:hover { background: var(--hover); } .gp-letter.on { background: var(--accent); color: #fff; }
   </style>
 </head>
 <body>
@@ -2052,18 +2066,22 @@
     <section class="main">
       <header class="top" id="top"></header>
       <div class="dropzone" id="drop" hidden></div>
-      <div class="call" id="call"></div>
-      <div class="content" id="content"></div>
-      <div class="composer" id="composer">
-        <div class="mention-pop" id="mention-pop" hidden></div>
-        <div class="format-bar" id="format-bar" hidden></div>
-        <div class="reply-bar" id="reply-bar" hidden></div>
-        <div class="attach-tray" id="attach-tray" hidden></div>
-        <div class="rec-bar" id="rec-bar" hidden></div>
-        <div class="box">
-          <textarea id="input" rows="1" placeholder="Message"></textarea>
-          <button class="tool" id="sticker-btn" title="Stickers &amp; emoji"></button>
-          <button class="tool send" id="send-btn" title="Send"></button>
+      <div class="main-body" id="main-body">
+        <div class="main-col" id="main-col">
+          <div class="call" id="call"></div>
+          <div class="content" id="content"></div>
+          <div class="composer" id="composer">
+            <div class="mention-pop" id="mention-pop" hidden></div>
+            <div class="format-bar" id="format-bar" hidden></div>
+            <div class="reply-bar" id="reply-bar" hidden></div>
+            <div class="attach-tray" id="attach-tray" hidden></div>
+            <div class="rec-bar" id="rec-bar" hidden></div>
+            <div class="box">
+              <textarea id="input" rows="1" placeholder="Message"></textarea>
+              <button class="tool" id="sticker-btn" title="Stickers &amp; emoji"></button>
+              <button class="tool send" id="send-btn" title="Send"></button>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -2071,28 +2089,28 @@
   </div>
   <div id="ring" hidden></div>
   <script type="importmap">{ "imports": {
-    "./anim.js": "./anim.js?v=9f46dafa",
-    "./app.js": "./app.js?v=9f46dafa",
-    "./backend.js": "./backend.js?v=9f46dafa",
-    "./badges.js": "./badges.js?v=9f46dafa",
-    "./calls.js": "./calls.js?v=9f46dafa",
-    "./color.js": "./color.js?v=9f46dafa",
-    "./config.js": "./config.js?v=9f46dafa",
-    "./embeds.js": "./embeds.js?v=9f46dafa",
-    "./emoji-data.js": "./emoji-data.js?v=9f46dafa",
-    "./format.js": "./format.js?v=9f46dafa",
-    "./github.js": "./github.js?v=9f46dafa",
-    "./logo.js": "./logo.js?v=9f46dafa",
-    "./media.js": "./media.js?v=9f46dafa",
-    "./namestyle.js": "./namestyle.js?v=9f46dafa",
-    "./picker.js": "./picker.js?v=9f46dafa",
-    "./profilekit.js": "./profilekit.js?v=9f46dafa",
-    "./shop.js": "./shop.js?v=9f46dafa",
-    "./store.js": "./store.js?v=9f46dafa",
-    "./supabase.js": "./supabase.js?v=9f46dafa",
-    "./tags.js": "./tags.js?v=9f46dafa",
-    "./ui.js": "./ui.js?v=9f46dafa"
+    "./anim.js": "./anim.js?v=4f6b9a9f",
+    "./app.js": "./app.js?v=4f6b9a9f",
+    "./backend.js": "./backend.js?v=4f6b9a9f",
+    "./badges.js": "./badges.js?v=4f6b9a9f",
+    "./calls.js": "./calls.js?v=4f6b9a9f",
+    "./color.js": "./color.js?v=4f6b9a9f",
+    "./config.js": "./config.js?v=4f6b9a9f",
+    "./embeds.js": "./embeds.js?v=4f6b9a9f",
+    "./emoji-data.js": "./emoji-data.js?v=4f6b9a9f",
+    "./format.js": "./format.js?v=4f6b9a9f",
+    "./github.js": "./github.js?v=4f6b9a9f",
+    "./logo.js": "./logo.js?v=4f6b9a9f",
+    "./media.js": "./media.js?v=4f6b9a9f",
+    "./namestyle.js": "./namestyle.js?v=4f6b9a9f",
+    "./picker.js": "./picker.js?v=4f6b9a9f",
+    "./profilekit.js": "./profilekit.js?v=4f6b9a9f",
+    "./shop.js": "./shop.js?v=4f6b9a9f",
+    "./store.js": "./store.js?v=4f6b9a9f",
+    "./supabase.js": "./supabase.js?v=4f6b9a9f",
+    "./tags.js": "./tags.js?v=4f6b9a9f",
+    "./ui.js": "./ui.js?v=4f6b9a9f"
   } }</script>
-  <script type="module" src="app.js?v=9f46dafa"></script>
+  <script type="module" src="app.js?v=4f6b9a9f"></script>
 </body>
 </html>

@@ -63,180 +63,280 @@ export const connectionLabel = (c) => (c.s === 'website' ? String(c.n).replace(/
 const STEAM_ID = /^\d{1,10}$/, LOGO = /^[^/\\?#<>|"{}\u0000-\u001f]{1,180}\.(svg|png|jpe?g|gif|webp)$/i, PIC = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
 export const steamCover = (id, file = 'library_600x900.jpg') => `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/${file}`;
 export const commonsFile = (name, w = 320) => `https://commons.wikimedia.org/wiki/Special:FilePath/${enc(name)}?width=${w}`;
-// a game as a profile keeps it: { n: name, s: Steam number, l: logo on Commons, i: a picture of its own } (only what's sound)
+// a picture on English Wikipedia (its cover, usually), by the file's name: Wikipedia sends it from its own servers
+export const wikiFile = (name, w = 320) => `https://en.wikipedia.org/wiki/Special:FilePath/${enc(name)}?width=${w}`;
+const fileName = (v) => String(v || '').replace(/^(File|Image):/i, '').trim().replace(/ /g, '_');
+// a game as a profile keeps it: { n: name, w: its picture on Wikipedia, s: Steam number, l: logo on Commons, i: a picture
+// of its own } (only what's sound; never a web address)
 export function cleanGame(g) {
   if (!g) return null;
   const n = String(g.n || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80); if (!n) return null;
-  const out = { n };
-  if (STEAM_ID.test(g.s || '')) out.s = g.s; else if (LOGO.test(g.l || '')) out.l = g.l;
-  if (!out.s && !out.l && PIC.test(g.i || '') && g.i.length <= 40000) out.i = g.i;
+  const out = { n }, w = fileName(g.w);
+  if (LOGO.test(w)) out.w = w;
+  if (STEAM_ID.test(g.s || '')) out.s = g.s; else if (LOGO.test(g.l || '') && !out.w) out.l = g.l;
+  if (!out.w && !out.s && !out.l && PIC.test(g.i || '') && g.i.length <= 40000) out.i = g.i;
   return out;
 }
 const hue = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.codePointAt(0)) % 360, 17);
 const letters = (s) => String(s).replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
-// a game's tile: its cover, else its logo, else one made from its name
+const isLogo = (f) => /\.svg$/i.test(f) || /logo|wordmark/i.test(f);
+// a game's tile: its picture from Wikipedia, else its Steam cover (or the wide one), else its logo, else its own picture;
+// with none of those (or none that loads, as when a browser or a network blocks Steam), Wikipedia is asked for one by
+// the game's name; and failing all that, a tile made from its name
 export function gameTile(g, { big = false } = {}) {
   const t = el('div', { className: 'gt' + (big ? ' big' : ''), title: g.n });
   const made = () => { t.className = 'gt gen' + (big ? ' big' : ''); t.style.setProperty('--gh', hue(g.n)); t.replaceChildren(el('b', {}, letters(g.n)), el('span', {}, g.n)); };
   const pic = (src) => { const im = el('img', { src, alt: g.n, loading: 'lazy', draggable: false }); im.referrerPolicy = 'no-referrer'; return im; };
-  if (STEAM_ID.test(g.s || '')) {
-    const im = pic(steamCover(g.s));
-    im.onerror = () => { im.onerror = made; t.classList.add('wide'); im.src = steamCover(g.s, 'header.jpg'); };      // (no tall cover: the wide one)
-    t.append(im);
-  } else if (LOGO.test(g.l || '')) { const im = pic(commonsFile(g.l)); im.onerror = made; t.classList.add('logo'); t.append(im, el('span', {}, g.n)); }
-  else if (PIC.test(g.i || '')) { const im = pic(g.i); im.onerror = made; t.append(im); }
-  else made();
+  const tries = [];
+  if (LOGO.test(g.w || '')) tries.push([wikiFile(g.w), isLogo(g.w) ? 'logo' : '']);
+  if (STEAM_ID.test(g.s || '')) tries.push([steamCover(g.s), ''], [steamCover(g.s, 'header.jpg'), 'wide']);
+  if (LOGO.test(g.l || '')) tries.push([commonsFile(g.l), 'logo']);
+  if (PIC.test(g.i || '')) tries.push([g.i, '']);
+  let k = 0, looked = !!g.w || PIC.test(g.i || '');
+  const show = (src, kind) => {
+    t.className = 'gt' + (big ? ' big' : '') + (kind ? ' ' + kind : ''); t.style.removeProperty('--gh');
+    const im = pic(src); im.onerror = next;
+    t.replaceChildren(im, ...(kind === 'logo' ? [el('span', {}, g.n)] : []));
+  };
+  function next() {
+    if (k < tries.length) { const [src, kind] = tries[k++]; return show(src, kind); }
+    made();
+    if (looked) return;
+    looked = true;
+    wikiImage(g.n, g.t || '').then((w) => { if (!w) return; tries.push([wikiFile(w), isLogo(w) ? 'logo' : '']); try { if (!g.w) g.w = w; } catch {} next(); }, () => {});
+  }
+  next();
   return t;
 }
+
+// ---------- Wikipedia: games' pictures, searching every game, and the lists of PC games by letter ----------
+const WIKI = 'https://en.wikipedia.org/w/api.php', PICS = 'fluentdat.gamePics';
+async function wiki(params) {
+  const r = await fetch(WIKI + '?' + new URLSearchParams({ ...params, format: 'json', formatversion: '2', origin: '*' }),
+    { headers: { 'Api-User-Agent': 'Fluentdat (https://trixwotel.github.io/Fluentdat/)' }, referrerPolicy: 'no-referrer', credentials: 'omit' });
+  if (!r.ok) throw new Error('Wikipedia didn’t answer (' + r.status + ').');
+  return r.json();
+}
+// (the pictures found, kept in this browser: a game's name or article → its picture's file, '' when it has none)
+let pics = null;
+const picsKept = () => { if (!pics) { try { pics = JSON.parse(localStorage.getItem(PICS)) || {}; } catch { pics = {}; } } return pics; };
+function keepPic(key, w) {
+  const c = picsKept(); c[key] = w;
+  try { const keys = Object.keys(c); if (keys.length > 4000) for (const x of keys.slice(0, 800)) delete c[x]; localStorage.setItem(PICS, JSON.stringify(c)); } catch {}
+}
+// (articles asked about together, 50 at a time)
+const waiting = new Map();
+let flushing = null;
+const ask = (title) => new Promise((res) => { const l = waiting.get(title) || []; l.push(res); waiting.set(title, l); if (!flushing) flushing = setTimeout(flush, 60); });
+async function flush() {
+  flushing = null;
+  const batch = [...waiting.entries()].slice(0, 50);
+  for (const [t] of batch) waiting.delete(t);
+  if (waiting.size) flushing = setTimeout(flush, 60);
+  let got = null;
+  try {
+    const d = await wiki({ action: 'query', titles: batch.map(([t]) => t).join('|'), prop: 'pageimages|description', piprop: 'name', pilicense: 'any', redirects: '1' });
+    const q = d.query || {}, map = (a) => Object.fromEntries((a || []).map((x) => [x.from, x.to]));
+    const norm = map(q.normalized), red = map(q.redirects), pages = Object.fromEntries((q.pages || []).map((p) => [p.title, p]));
+    got = (t) => { let k = norm[t] || t; k = red[k] || k; const p = pages[k] || {}; return { w: p.pageimage || '', d: p.description || '', missing: !!p.missing || !pages[k] }; };
+  } catch { got = () => null; }
+  for (const [t, list] of batch) { const r = got(t); for (const res of list) res(r); }
+}
+// a game's picture from Wikipedia: from its article when that's known, else by its name (its "(video game)" article first)
+export async function wikiImage(name, title = '') {
+  const key = String(title || name).toLowerCase(), kept = picsKept();
+  if (key in kept) return kept[key];
+  let w = '', failed = false;
+  if (title) { const r = await ask(title); failed = !r; w = (r && r.w) || ''; }
+  else {
+    const [a, b] = await Promise.all([ask(name + ' (video game)'), ask(name)]);
+    failed = !a && !b;
+    if (a && !a.missing && a.w) w = a.w;
+    else if (b && !b.missing && b.w && isGameDesc(b.d)) w = b.w;
+  }
+  if (!failed) keepPic(key, w);
+  return w;
+}
+// (is it a game? Wikipedia's short description says: "2018 video game", "Video game series", "2022 digital card game" are;
+// "British video game company", "Class of video game", "Video game distribution platform", "Collectible card game" aren't)
+const NOT_A_GAME = /\b(company|corporation|developer|publisher|studio|distribution|platform|service|engine|console|genre|class|type of|broadcasting|livestreaming|streaming|magazine|website|award|tournament|championship|league|team|person|actor|designer|composer|journalist|film|novel|album|song|television|anime|manga|comic|character|board game|tabletop|disambiguation|topics referred)\b/i;
+export const isGameDesc = (d) => {
+  d = String(d || '').trim();
+  if (!d || NOT_A_GAME.test(d)) return false;
+  if (/\b(card|role-playing|dice|party|word) game\b/i.test(d) && !/\b(video|digital|online|computer|mobile)\b/i.test(d)) return false;
+  return /\bgames?\b|\bmmo/i.test(d);
+};
+// (an article's name without "(video game)": "Rust (video game)" → "Rust")
+const gameName = (title) => String(title).replace(/\s*\([^()]*\bgame\)$/i, '');
 // is this "playing" still going? (Fluentdat can't see games end, so after 12 hours it stops showing)
 export const playingNow = (p) => !!(p && p.n && (!p.at || Date.now() - Date.parse(p.at) < 12 * 3600e3));
 // the Board's widgets: [kind, title, how many games]
 export const WIDGETS = [['likes', 'Games I Like', 20], ['want', 'Want to Play', 20], ['fav', 'Favorite Game', 1]];
 
-// games to pick from straight away (Steam's numbers checked against Steam; logos for big games that aren't on Steam)
+// games to pick from straight away: [name, Steam number, logo on Commons, picture on Wikipedia] (each checked against them)
 export const POPULAR = [
-  ["Counter-Strike 2", '730'],
-  ["Minecraft", '', "Minecraft Logo-en.svg"],
-  ["Fortnite", '', "FortniteLogo.svg"],
-  ["Valorant", '', "Valorant logo.svg"],
-  ["Roblox", '', "Roblox Logo 2022.svg"],
-  ["League of Legends", '', "League of Legends 2019 vector.svg"],
-  ["Call of Duty", '1938090'],
-  ["Apex Legends", '1172470'],
-  ["Rust", '252490'],
-  ["Grand Theft Auto V", '271590'],
-  ["Rocket League", '252950'],
-  ["Dota 2", '570'],
-  ["PUBG: BATTLEGROUNDS", '578080'],
-  ["Marvel Rivals", '2767030'],
-  ["Tom Clancy's Rainbow Six Siege", '359550'],
-  ["Arma Reforger", '1874880'],
-  ["Bodycam", '2406770'],
-  ["Arma 3", '107410'],
-  ["Ready or Not", '1144200'],
-  ["Squad", '393380'],
-  ["Hell Let Loose", '686810'],
-  ["Terraria", '105600'],
-  ["Stardew Valley", '413150'],
-  ["ELDEN RING", '1245620'],
-  ["Baldur's Gate 3", '1086940'],
-  ["HELLDIVERS 2", '553850'],
-  ["Lethal Company", '1966720'],
-  ["R.E.P.O.", '3241660'],
-  ["Among Us", '945360'],
-  ["Phasmophobia", '739630'],
-  ["Garry's Mod", '4000'],
-  ["Team Fortress 2", '440'],
-  ["Overwatch", '2357570'],
-  ["Destiny 2", '1085660'],
-  ["Warframe", '230410'],
-  ["THE FINALS", '2073850'],
-  ["Deadlock", '1422450'],
-  ["Battlefield 6", '2807960'],
-  ["Battlefield 2042", '1517290'],
-  ["War Thunder", '236390'],
-  ["Satisfactory", '526870'],
-  ["Factorio", '427520'],
-  ["Kerbal Space Program", '220200'],
-  ["Besiege", '346010'],
-  ["Portal 2", '620'],
-  ["Hollow Knight", '367520'],
-  ["Celeste", '504230'],
-  ["Hades", '1145360'],
-  ["Hades II", '1145350'],
-  ["Subnautica", '264710'],
-  ["Valheim", '892970'],
-  ["RimWorld", '294100'],
-  ["Red Dead Redemption 2", '1174180'],
-  ["Cyberpunk 2077", '1091500'],
-  ["Palworld", '1623730'],
-  ["Sea of Thieves", '1172620'],
-  ["Forza Horizon 5", '1551360'],
-  ["Euro Truck Simulator 2", '227300'],
-  ["Fall Guys", '1097150'],
-  ["Dead by Daylight", '381210'],
-  ["Halo Infinite", '1240440'],
-  ["Sons Of The Forest", '1326470'],
-  ["Monster Hunter Wilds", '2246340'],
-  ["Path of Exile 2", '2694490'],
-  ["ARC Raiders", '1808500'],
-  ["Clair Obscur: Expedition 33", '1903340'],
-  ["Age of Empires II: Definitive Edition", '813780'],
-  ["Age of Empires IV", '1466860'],
-  ["ARK: Survival Ascended", '2399830'],
-  ["ARK: Survival Evolved", '346110'],
-  ["Content Warning", '2881650'],
-  ["Crusader Kings III", '1158310'],
-  ["DAVE THE DIVER", '1868140'],
-  ["Diablo IV", '2344520'],
-  ["EA SPORTS FC 24", '2195250'],
-  ["EA SPORTS FC 26", '3405690'],
-  ["Far Cry 6", '2369390'],
-  ["FINAL FANTASY XIV Online", '39210'],
-  ["Football Manager 2024", '2252570'],
-  ["God of War", '1593500'],
-  ["Hogwarts Legacy", '990080'],
-  ["Horizon Forbidden West", '2420110'],
-  ["Hunt: Showdown 1896", '594650'],
-  ["Left 4 Dead 2", '550'],
-  ["Lost Ark", '1599340'],
-  ["Mafia: Definitive Edition", '1030840'],
-  ["Marvel’s Spider-Man Remastered", '1817070'],
-  ["Mortal Kombat 1", '1971870'],
-  ["NARAKA: BLADEPOINT", '1203220'],
-  ["New World: Aeternum", '1063730'],
-  ["Once Human", '2139460'],
-  ["Resident Evil 4", '2050650'],
-  ["Risk of Rain 2", '632360'],
-  ["Sid Meier's Civilization VII", '1295660'],
-  ["Sid Meier’s Civilization VI", '289070'],
-  ["Starfield", '1716740'],
-  ["Stellaris", '281990'],
-  ["Street Fighter 6", '1364780'],
-  ["The Last of Us Part I", '1888930'],
-  ["The Sims 4", '1222670'],
-  ["VRChat", '438100'],
-  ["Yu-Gi-Oh! Master Duel", '1449850'],
-].map(([n, s, l]) => (s ? { n, s } : { n, l }));
+  ["Counter-Strike 2", '730', '', "CS2_Cover_Art.jpg"],
+  ["Minecraft", '', 'Minecraft Logo-en.svg', "Minecraft_game_logo_2023.png"],
+  ["Fortnite", '', 'FortniteLogo.svg', "FortniteLogo.svg"],
+  ["Valorant", '', 'Valorant logo.svg', "Valorant_logo_-_pink_color_version.svg"],
+  ["Roblox", '', 'Roblox Logo 2022.svg', "Roblox_Logo_2022.svg"],
+  ["League of Legends", '', 'League of Legends 2019 vector.svg', "League_of_Legends_2019_vector.svg"],
+  ["Call of Duty", '1938090', '', "Call_of_Duty_logo_2023.svg"],
+  ["Apex Legends", '1172470', '', "Apex_legends_cover.jpg"],
+  ["Rust", '252490', '', "Rust_vector_logo.svg"],
+  ["Grand Theft Auto V", '271590', '', "Grand_Theft_Auto_V.png"],
+  ["Rocket League", '252950', '', "Rocket_League_coverart.jpg"],
+  ["Dota 2", '570', '', "Dota_2_Steam_artwork.jpg"],
+  ["PUBG: BATTLEGROUNDS", '578080', '', "Pubgbattlegrounds.png"],
+  ["Marvel Rivals", '2767030', '', "Logo_Marvel_Rivals.svg"],
+  ["Tom Clancy's Rainbow Six Siege", '359550', '', "Tom_Clancy's_Rainbow_Six_Siege_cover_art.jpg"],
+  ["Arma Reforger", '1874880', '', "Arma_Reforger_Logo_(Black_Transparent).svg"],
+  ["Bodycam", '2406770', '', "«Bodycam»_game_cover..jpg"],
+  ["Arma 3", '107410', '', "ArmA_3_Logo_(Black).png"],
+  ["Ready or Not", '1144200', '', "Ready_or_Not_Console_Release.jpg"],
+  ["Squad", '393380', '', "Squad_(videogame)_2016_frontcover.png"],
+  ["Hell Let Loose", '686810', '', "Hell_Let_Loose_cover_art.jpg"],
+  ["Terraria", '105600', '', "Terraria_Steam_artwork.jpg"],
+  ["Stardew Valley", '413150', '', "Logo_of_Stardew_Valley.png"],
+  ["ELDEN RING", '1245620', '', "Elden_Ring_Box_art.jpg"],
+  ["Baldur's Gate 3", '1086940', '', "Baldur's_Gate_3_cover_art.jpg"],
+  ["HELLDIVERS 2", '553850', '', "Helldivers_2_cover_art.jpg"],
+  ["Lethal Company", '1966720', '', "Lethal_Company_Steam_cover.jpg"],
+  ["R.E.P.O.", '3241660', '', "R.E.P.O._cover.jpg"],
+  ["Among Us", '945360', '', "Among_Us_cover_art.jpg"],
+  ["Phasmophobia", '739630', '', "Phasmophobia_VG.jpg"],
+  ["Garry's Mod", '4000', '', "Garry's_Mod_logo.svg"],
+  ["Team Fortress 2", '440', '', "Tf2_standalonebox.jpg"],
+  ["Overwatch", '2357570', '', "Overwatch_2_Steam_artwork.jpg"],
+  ["Destiny 2", '1085660', '', "Destiny_2_(artwork).jpg"],
+  ["Warframe", '230410', '', "Warframe_Cover_Art.png"],
+  ["THE FINALS", '2073850', '', "The_Finals_logo_stacked.svg"],
+  ["Deadlock", '1422450', '', "Deadlock_box_art_cover,_'Old_Gods,_New_Blood'_update.jpg"],
+  ["Battlefield 6", '2807960', '', "Battlefield_6_cover_art.jpg"],
+  ["Battlefield 2042", '1517290', '', "Battlefield_2042_cover_art.jpg"],
+  ["War Thunder", '236390', '', "War_Thunder_PSN_Cover_Art_2015_Playstation_4.png"],
+  ["Satisfactory", '526870', '', "Satifactory_video_game_cover_art.jpg"],
+  ["Factorio", '427520', '', "Factorio_cover.png"],
+  ["Kerbal Space Program", '220200', '', "Kerbal_Space_Program_High_Res_Logo.png"],
+  ["Besiege", '346010', '', "Besiege_Steam_store_art.jpg"],
+  ["Portal 2", '620', '', "Portal2cover.jpg"],
+  ["Hollow Knight", '367520', '', "Hollow_Knight_2026_cover_art.jpg"],
+  ["Celeste", '504230', '', "Celeste_box_art_full.png"],
+  ["Hades", '1145360', '', "Hades_cover_art.jpg"],
+  ["Hades II", '1145350', '', "Hades_2_cover_art.jpeg"],
+  ["Subnautica", '264710', '', "Subnautica_cover_art.png"],
+  ["Valheim", '892970', '', "Valheim_2021_logo.jpg"],
+  ["RimWorld", '294100', '', "Rimworld_logo.png"],
+  ["Red Dead Redemption 2", '1174180', '', "Red_Dead_Redemption_II.jpg"],
+  ["Cyberpunk 2077", '1091500', '', "Cyberpunk_2077_box_art.jpg"],
+  ["Palworld", '1623730', '', "Palworld_Steam_artwork.jpg"],
+  ["Sea of Thieves", '1172620', '', "Sea_of_thieves_cover_art.jpg"],
+  ["Forza Horizon 5", '1551360', '', "Forza_Horizon_5_cover_art.jpg"],
+  ["Euro Truck Simulator 2", '227300', '', "Euro_Truck_Simulator_2_cover.jpg"],
+  ["Fall Guys", '1097150', '', "Fall_Guys_Logo_Wordmark.svg"],
+  ["Dead by Daylight", '381210', '', "Dead_by_Daylight_Steam_header.jpg"],
+  ["Halo Infinite", '1240440', '', "Halo_Infinite.png"],
+  ["Sons Of The Forest", '1326470', '', "Sons_of_the_Forest.jpg"],
+  ["Monster Hunter Wilds", '2246340', '', "Monster_Hunter_Wilds_cover.png"],
+  ["Path of Exile 2", '2694490', '', "Path_of_Exile_2_cover_art.jpg"],
+  ["ARC Raiders", '1808500', '', "Arc_Raiders_cover_art.jpg"],
+  ["Clair Obscur: Expedition 33", '1903340', '', "Clair_Obscur,_Expedition_33_Cover_1.webp"],
+  ["Age of Empires II: Definitive Edition", '813780', '', "Age_of_Empires_II_Definitive_Edition_cover_art.jpeg"],
+  ["Age of Empires IV", '1466860', '', "Age_of_Empires_IV_Cover_Art.png"],
+  ["ARK: Survival Ascended", '2399830', '', "Ark_Survival_Ascended.jpg"],
+  ["ARK: Survival Evolved", '346110', '', "ArkSurvivalEvolved.png"],
+  ["Content Warning", '2881650', '', "Content_Warning_cover.jpg"],
+  ["Crusader Kings III", '1158310', '', "Crusader_Kings_III.jpg"],
+  ["DAVE THE DIVER", '1868140', '', "Dave_the_Diver_cover.jpg"],
+  ["Diablo IV", '2344520', '', "Diablo_IV_cover_art.png"],
+  ["EA SPORTS FC 24", '2195250', '', "EA_FC24_Cover.jpg"],
+  ["EA SPORTS FC 26", '3405690', '', "FC_26_Cover.png"],
+  ["Far Cry 6", '2369390', '', "Far_cry_6_cover.jpg"],
+  ["FINAL FANTASY XIV Online", '39210', '', "Final_Fantasy_XIV,_A_Realm_Reborn_box_cover.jpg"],
+  ["Football Manager 2024", '2252570', '', "Football_Manager_2024.jpg"],
+  ["God of War", '1593500', '', "God_of_War_4_cover.jpg"],
+  ["Hogwarts Legacy", '990080', '', "Hogwarts_legacyboxart.png"],
+  ["Horizon Forbidden West", '2420110', '', "Horizon_Forbidden_West_cover_art.jpg"],
+  ["Hunt: Showdown 1896", '594650', '', "Hunt_Showdown_cover_art.png"],
+  ["Left 4 Dead 2", '550', '', "Left4Dead2.jpg"],
+  ["Lost Ark", '1599340', '', "Lost_Ark_cover.jpg"],
+  ["Mafia: Definitive Edition", '1030840', '', "Mafia_Definitive_Edition.jpg"],
+  ["Marvel’s Spider-Man Remastered", '1817070', '', "Spider-Man_PS4_cover.jpg"],
+  ["Mortal Kombat 1", '1971870', '', "Mortal_Kombat_1_key_art.jpeg"],
+  ["NARAKA: BLADEPOINT", '1203220', '', "Naraka_Bladepoint_cover_art_full.jpg"],
+  ["New World: Aeternum", '1063730', '', "New_World_Cover_art.jpg"],
+  ["Once Human", '2139460', '', "Once_Human_(video_game).jpg"],
+  ["Resident Evil 4", '2050650', '', "Resident_Evil_4_remake_cover_art.jpg"],
+  ["Risk of Rain 2", '632360', '', "Risk_of_Rain_2.jpg"],
+  ["Sid Meier's Civilization VII", '1295660', '', "Civilization_VII_cover.png"],
+  ["Sid Meier’s Civilization VI", '289070', '', "Civilization_VI_cover_art.jpg"],
+  ["Starfield", '1716740', '', "Starfield_-_game_cover.png"],
+  ["Stellaris", '281990', '', "Stellaris_cover.png"],
+  ["Street Fighter 6", '1364780', '', "Street_Fighter_6_box_art.jpg"],
+  ["The Last of Us Part I", '1888930', '', "The_Last_of_Us_Part_I_cover.jpg"],
+  ["The Sims 4", '1222670', '', "Sims4_Rebrand.png"],
+  ["VRChat", '438100', '', "VRChat_Logo.svg"],
+  ["Yu-Gi-Oh! Master Duel", '1449850', '', "Yu_Gi_Oh_Master_Duel_cover_art_full.jpg"],
+].map(([n, s, l, w]) => cleanGame({ n, s, l, w }));
 const plainName = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
 export const sameGame = (a, b) => (a.s && b.s ? a.s === b.s : plainName(a.n) === plainName(b.n));
 export function localGames(q) {
   const k = plainName(q); if (!k) return POPULAR.slice();
   return POPULAR.filter((g) => plainName(g.n).includes(k));
 }
-// any game, from Wikidata: things it calls a video game (or that have a Steam number), with their Steam number and logo
-const WD = 'https://www.wikidata.org/w/api.php', asked = new Map();
-async function wd(params) {
-  const r = await fetch(WD + '?' + new URLSearchParams({ ...params, format: 'json', origin: '*' }),
-    { headers: { 'Api-User-Agent': 'Fluentdat (https://trixwotel.github.io/Fluentdat/)' }, referrerPolicy: 'no-referrer', credentials: 'omit' });
-  if (!r.ok) throw new Error('Wikidata didn’t answer (' + r.status + ').');
-  return r.json();
-}
-const NOT_GAMES = /\b(film|movie|series|franchise|soundtrack|album|song|character|company|developer|publisher|tournament|championship|league season|esports|person|family name|given name|novel|book|comic|anime|manga|board game|card game)\b/i;
+// any game on Wikipedia: articles whose names start with what you typed, and ones found by searching, that Wikipedia
+// calls a game (with each one's picture)
+const asked = new Map();
 export function searchGames(q) {
   const key = plainName(q);
   if (key.length < 2) return Promise.resolve([]);
   if (!asked.has(key)) {
     const run = (async () => {
-      const s = await wd({ action: 'wbsearchentities', search: q.trim(), language: 'en', uselang: 'en', type: 'item', limit: 15 });
-      const hits = (s.search || []).filter((x) => !NOT_GAMES.test(x.description || ''));
-      if (!hits.length) return [];
-      const e = await wd({ action: 'wbgetentities', ids: hits.map((x) => x.id).join('|'), props: 'claims|labels', languages: 'en' });
-      const out = [];
-      for (const h of hits) {
-        const it = (e.entities || {})[h.id]; if (!it) continue;
-        const claims = it.claims || {}, val = (p) => (claims[p] || []).map((c) => c.mainsnak && c.mainsnak.datavalue && c.mainsnak.datavalue.value).filter((v) => v != null);
-        const steam = val('P1733').find((v) => STEAM_ID.test(String(v)));
-        const game = steam || val('P31').some((v) => v && v.id === 'Q7889') || /\bgame\b/i.test(h.description || '');
-        const n = ((it.labels || {}).en || {}).value || h.label;
-        if (!game || !n) continue;
-        const logo = val('P154').find((v) => LOGO.test(String(v)));
-        out.push({ ...cleanGame({ n, s: steam ? String(steam) : '', l: logo || '' }), d: String(h.description || '').slice(0, 80) });
+      const common = { prop: 'pageimages|description', piprop: 'name', pilicense: 'any', redirects: '1' };
+      const [a, b] = await Promise.all([
+        wiki({ action: 'query', generator: 'prefixsearch', gpssearch: q.trim(), gpslimit: '20', gpsnamespace: '0', ...common }).catch(() => null),
+        wiki({ action: 'query', generator: 'search', gsrsearch: q.trim() + ' video game', gsrlimit: '20', gsrnamespace: '0', ...common }).catch(() => null)]);
+      if (!a && !b) throw new Error('Wikipedia didn’t answer.');
+      const pages = (r) => ((r && r.query && r.query.pages) || []).slice().sort((x, y) => (x.index || 0) - (y.index || 0));
+      const seen = new Set(), out = [];
+      for (const p of [...pages(a), ...pages(b)]) {
+        if (seen.has(p.title)) continue;
+        seen.add(p.title);
+        const d = p.description || '';
+        if (!isGameDesc(d)) continue;
+        const g = cleanGame({ n: gameName(p.title), w: p.pageimage || '' });
+        if (!g) continue;
+        keepPic(p.title.toLowerCase(), g.w || '');
+        out.push({ ...g, t: p.title, d: d.slice(0, 80) });
       }
-      return out;
+      return out.slice(0, 30);
     })();
     asked.set(key, run);
     run.catch(() => asked.delete(key));
   }
   return asked.get(key);
+}
+// Wikipedia's lists of PC games, a letter at a time (as on "List of PC games (A)"): every game's name, and its article
+export const LETTERS = ['0–9', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+const lists = new Map();
+export function gamesByLetter(letter) {
+  if (!lists.has(letter)) {
+    const page = letter === '0–9' ? 'List of PC games (numerical)' : `List of PC games (${letter})`;
+    const run = wiki({ action: 'parse', page, prop: 'text', redirects: '1' }).then((d) => {
+      const doc = new DOMParser().parseFromString((d.parse && d.parse.text) || '', 'text/html'), out = [], seen = new Set();
+      for (const row of doc.querySelectorAll('table.wikitable tr')) {
+        if (!row.querySelector('td')) continue;              // (a heading row)
+        const cell = row.querySelector('th, td');
+        const n = cell.textContent.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+        if (!n || n.length > 80 || seen.has(n)) continue;
+        seen.add(n);
+        const a = cell.querySelector('a[href^="/wiki/"]:not(.new)'), t = a ? decodeURIComponent(a.getAttribute('href').slice(6).split('#')[0]).replace(/_/g, ' ') : '';
+        out.push(t ? { n, t } : { n });
+      }
+      return out;
+    });
+    lists.set(letter, run);
+    run.catch(() => lists.delete(letter));
+  }
+  return lists.get(letter);
 }
