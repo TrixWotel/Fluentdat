@@ -2,7 +2,7 @@
 # code>", so a browser never mixes a new app.js with an old cached backend.js (GitHub Pages caches each file for 10 minutes).
 import hashlib, pathlib, re, sys
 root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parent.parent)
-mods = ['app.js', 'ui.js', 'backend.js', 'store.js', 'github.js', 'supabase.js', 'config.js']
+mods = sorted(p.name for p in root.glob('*.js'))           # (every module the page loads, whatever gets added)
 v = hashlib.sha1(b''.join((root / m).read_bytes() for m in mods)).hexdigest()[:8]
 page = (root / 'index.html').read_text()
 block = ('<script type="importmap">{ "imports": {\n'

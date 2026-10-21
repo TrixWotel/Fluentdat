@@ -12,6 +12,10 @@ let resuming = SupabaseStore.pending();      // picking up a Supabase sign-in: s
 let resumeError = '';
 const listeners = new Set();
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
+// new messages and calls (Supabase only): the app listens here from the start, before any sign-in is picked up
+const messageListeners = new Set(), callListeners = new Set();
+SupabaseStore.onMessage((e) => { if (impl === SupabaseStore) for (const cb of messageListeners) try { cb(e); } catch {} });
+SupabaseStore.onCall((e) => { if (impl === SupabaseStore) for (const cb of callListeners) try { cb(e); } catch {} });
 for (const s of [LocalStore, GitHubStore, SupabaseStore]) s.onChange(() => {
   // signed out somewhere else (another tab), or the session ran out: back to this browser's own data
   if (s === SupabaseStore && impl === SupabaseStore && !SupabaseStore.account()) { impl = LocalStore; emit(); return; }
@@ -51,6 +55,29 @@ const fallback = {
   unban: async () => {},
   profileFull: async () => null,
   mutualServers: () => 0,
+  person: () => null,
+  myId: () => null,
+  needsSetup: () => false,
+  loaded: () => true,
+  readAt: () => 0,
+  // friend requests, unread counts, muting, groups, calls, files: these come with signing in
+  friendRequests: () => ({ incoming: [], outgoing: [] }),
+  friendState: (id) => (Store.friends().some((f) => f.id === id) ? 'friend' : 'none'),
+  acceptFriend: async () => {}, ignoreFriend: async () => {}, cancelFriend: async () => {}, refreshFriends: () => {},
+  unread: () => ({ unread: 0, mentions: 0, last: 0 }),
+  markRead: () => {}, markServerRead: async () => {},
+  placeSettings: () => ({ muted: false, mutedUntil: 0, notify: 'default' }),
+  setPlaceSettings: () => {},
+  dmInfo(id) { const u = Store.dmUser(id); return u ? { id, kind: 'dm', user: u, people: [u] } : null; },
+  createGroup: async () => { throw new Error(SIGN_IN + 'make group DMs.'); },
+  addToGroup: async () => { throw new Error(SIGN_IN + 'make group DMs.'); },
+  leaveGroup: async () => {}, removeFromGroup: async () => {}, updateGroup: () => {},
+  startCall: async () => { throw new Error(SIGN_IN + 'call people.'); },
+  endCall: () => {}, calls: () => [], call: () => null,
+  voice: () => ({}), voiceAll: () => ({}), setVoice: () => {},
+  inviteInfo: async () => null,
+  uploadFile: async () => { throw new Error(SIGN_IN + 'send files.'); },
+  fileUrl: async (p) => p, downloadUrl: async (p) => p,
   // a template's categories and channels, one at a time (stores that can, do it in one go)
   applyTemplate: async (sv, tpl) => {
     for (const c of tpl) {
@@ -64,6 +91,7 @@ const SIGN_IN = 'Sign in with Discord, GitHub or email to ';
 // while a sign-in is being picked up
 const waiting = {
   servers: () => [], server: () => null, dmList: () => [], friends: () => [], stickers: () => [], account: () => null,
+  friendRequests: () => ({ incoming: [], outgoing: [] }), unread: () => ({ unread: 0, mentions: 0, last: 0 }), voice: () => ({}), dmInfo: () => null,
   syncState: () => ({ loading: true, error: '', lastSync: 0, repo: '' }),
 };
 
@@ -71,6 +99,8 @@ export const Store = new Proxy({}, {
   get(_t, prop) {
     switch (prop) {
       case 'onChange': return (cb) => { listeners.add(cb); return () => listeners.delete(cb); };
+      case 'onMessage': return (cb) => { messageListeners.add(cb); return () => messageListeners.delete(cb); };
+      case 'onCall': return (cb) => { callListeners.add(cb); return () => callListeners.delete(cb); };
       case 'kind': return impl === SupabaseStore ? 'supabase' : impl === GitHubStore ? 'github' : 'local';
       case 'signedIn': return impl !== LocalStore;
       case 'configured': return SupabaseStore.configured();

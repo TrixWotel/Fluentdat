@@ -10,6 +10,9 @@
 --   * Nobody can post as somebody else, and only a server's admins can change its channels.
 --   * A server can be made public (by its owner) so anyone signed in can find it in Discover and join.
 --     Its admins can ban people, and a banned person can't come back by invite or from Discover.
+--   * Friend requests: the person you ask sees your request (and can accept or ignore it); nobody else does.
+--   * Group DMs hold up to 10 people, started and grown by people who are friends with whoever they add.
+--   * Calls, voice messages and attachments only reach the people in that DM, group or server.
 
 -- ===================== tables =====================
 create table if not exists public.profiles (
@@ -143,6 +146,42 @@ create table if not exists public.bans (
   primary key (server_id, user_id)
 );
 
+-- a group DM's people (a two-person DM keeps them in dms.user_a and dms.user_b)
+create table if not exists public.dm_members (
+  dm_id uuid not null references public.dms (id) on delete cascade,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  added_by uuid references public.profiles (id) on delete set null,
+  joined_at timestamptz not null default now(),
+  primary key (dm_id, user_id)
+);
+
+-- a call in a DM or group DM: who started it, and when it ended (the call itself goes straight between browsers)
+create table if not exists public.calls (
+  id uuid primary key default gen_random_uuid(),
+  dm_id uuid not null references public.dms (id) on delete cascade,
+  started_by uuid not null references public.profiles (id) on delete cascade,
+  video boolean not null default false,
+  created_at timestamptz not null default now(),
+  ended_at timestamptz
+);
+create index if not exists calls_by_dm on public.calls (dm_id, created_at);
+
+-- what you've read, and how each place may tell you about new messages (a channel, a DM, or a whole server)
+create table if not exists public.reads (
+  user_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  place uuid not null,
+  read_at timestamptz not null default now(),
+  muted_until timestamptz,                     -- muted until then ('infinity': until you turn it back on)
+  notify text not null default 'default' check (notify in ('default', 'all', 'mentions', 'none')),
+  primary key (user_id, place)
+);
+
+-- when someone last had Fluentdat open (for "N Online" on invite cards; only the heartbeat() action writes it)
+create table if not exists public.seen (
+  user_id uuid primary key references public.profiles (id) on delete cascade,
+  at timestamptz not null default now()
+);
+
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
 alter table public.profiles add column if not exists plate text not null default '';
@@ -151,6 +190,19 @@ alter table public.servers add column if not exists banner text not null default
 alter table public.servers add column if not exists description text not null default '';
 alter table public.servers add column if not exists category text not null default '';
 alter table public.servers add column if not exists public boolean not null default false;
+alter table public.channels add column if not exists topic text not null default '';
+alter table public.messages add column if not exists reply_to uuid;
+alter table public.messages add column if not exists files jsonb;           -- attachments: pictures, files, voice messages
+alter table public.dm_messages add column if not exists reply_to uuid;
+alter table public.dm_messages add column if not exists files jsonb;
+-- group DMs: a name, a picture and an owner, and no user_a/user_b (their people are in dm_members)
+alter table public.dms add column if not exists kind text not null default 'dm';
+alter table public.dms add column if not exists name text not null default '';
+alter table public.dms add column if not exists icon text not null default '';
+alter table public.dms add column if not exists owner uuid references public.profiles (id) on delete set null;
+alter table public.dms alter column user_a drop not null;
+alter table public.dms alter column user_b drop not null;
+alter table public.dms drop constraint if exists dms_check;
 
 -- pictures are kept small (the app shrinks them before saving), and these limits stop anyone filling the database
 do $$ begin
@@ -171,6 +223,28 @@ exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.servers add constraint servers_shapes check ((img = '' or img ~ '^data:image/(png|jpeg|webp|gif);base64,')
     and (banner = '' or banner ~ '^g:[0-9]$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,'));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.dms add constraint dms_shape check ((kind = 'dm' and user_a is not null and user_b is not null and user_a < user_b)
+    or (kind = 'group' and user_a is null and user_b is null and char_length(name) <= 100
+        and (icon = '' or icon ~ '^data:image/(png|jpeg|webp|gif);base64,') and char_length(icon) <= 200000));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.channels add constraint channels_topic_size check (char_length(topic) <= 1024);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.messages add constraint messages_files_shape check (files is null or (jsonb_typeof(files) = 'array'
+    and jsonb_array_length(files) between 1 and 10 and octet_length(files::text) <= 20000));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.dm_messages add constraint dm_messages_files_shape check (files is null or (jsonb_typeof(files) = 'array'
+    and jsonb_array_length(files) between 1 and 10 and octet_length(files::text) <= 20000));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.messages add constraint messages_reply_fk foreign key (reply_to) references public.messages (id) on delete set null;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.dm_messages add constraint dm_messages_reply_fk foreign key (reply_to) references public.dm_messages (id) on delete set null;
 exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.messages add constraint messages_sticker_shape check (sticker is null or coalesce(sticker ->> 'kind', '') <> 'img' or (sticker ->> 'data') ~ '^data:image/(png|jpeg|webp|gif);base64,');
@@ -209,7 +283,15 @@ $$;
 
 create or replace function public.in_dm(p_dm uuid) returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from dms where id = p_dm and auth.uid() in (user_a, user_b));
+  select exists (select 1 from dms where id = p_dm and auth.uid() in (user_a, user_b))
+      or exists (select 1 from dm_members where dm_id = p_dm and user_id = auth.uid());
+$$;
+
+-- a friend: you've both added each other (one of you asked, the other accepted)
+create or replace function public.is_friend(p_other uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from friends where owner = auth.uid() and friend = p_other)
+     and exists (select 1 from friends where owner = p_other and friend = auth.uid());
 $$;
 
 -- someone you share a server, a DM or a friendship (either way) with — or yourself
@@ -219,8 +301,36 @@ language sql stable security definer set search_path = public as $$
     or exists (select 1 from server_members a join server_members b on a.server_id = b.server_id
                where a.user_id = auth.uid() and b.user_id = p_other)
     or exists (select 1 from friends where (owner = auth.uid() and friend = p_other) or (owner = p_other and friend = auth.uid()))
-    or exists (select 1 from dms where (user_a = auth.uid() and user_b = p_other) or (user_a = p_other and user_b = auth.uid()));
+    or exists (select 1 from dms where (user_a = auth.uid() and user_b = p_other) or (user_a = p_other and user_b = auth.uid()))
+    or exists (select 1 from dm_members a join dm_members b on a.dm_id = b.dm_id where a.user_id = auth.uid() and b.user_id = p_other);
 $$;
+
+-- a call's live channel (Supabase Realtime, private): "call:<call id>" for the people in that DM, or
+-- "vc:<voice channel id>" for the members of that server
+create or replace function public.topic_ok(p_topic text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare t text := regexp_replace(coalesce(p_topic, ''), '^realtime:', ''); k text; v text;
+begin
+  k := split_part(t, ':', 1); v := split_part(t, ':', 2);
+  if v !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or split_part(t, ':', 3) <> '' then return false; end if;
+  if k = 'call' then return exists (select 1 from calls c where c.id = v::uuid and in_dm(c.dm_id)); end if;
+  if k = 'vc' then return exists (select 1 from channels c where c.id = v::uuid and c.kind = 'voice' and is_member(c.server_id)); end if;
+  return false;
+end $$;
+
+-- an attachment's place in storage: "dm/<dm id>/<uploader>/<file>" or "ch/<channel id>/<uploader>/<file>".
+-- You may read it if you're in that DM or server, and upload it only as yourself.
+create or replace function public.file_ok(p_name text, p_write boolean) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare k text := split_part(p_name, '/', 1); place text := split_part(p_name, '/', 2); who text := split_part(p_name, '/', 3);
+  re text := '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+begin
+  if place !~ re or who !~ re or split_part(p_name, '/', 4) !~ '^[0-9a-f-]{36}\.[a-z0-9]{1,8}$' or split_part(p_name, '/', 5) <> '' then return false; end if;
+  if p_write and who <> auth.uid()::text then return false; end if;
+  if k = 'dm' then return in_dm(place::uuid); end if;
+  if k = 'ch' then return is_member(channel_server(place::uuid)); end if;
+  return false;
+end $$;
 
 -- ===================== row level security =====================
 alter table public.profiles enable row level security;
@@ -236,6 +346,10 @@ alter table public.friends enable row level security;
 alter table public.roles enable row level security;
 alter table public.member_roles enable row level security;
 alter table public.bans enable row level security;
+alter table public.dm_members enable row level security;
+alter table public.calls enable row level security;
+alter table public.reads enable row level security;
+alter table public.seen enable row level security;
 
 drop policy if exists "see people you know" on public.profiles;
 create policy "see people you know" on public.profiles for select to authenticated using (knows(id));
@@ -282,7 +396,26 @@ drop policy if exists "admins delete invites" on public.invites;
 create policy "admins delete invites" on public.invites for delete to authenticated using (is_admin(server_id));
 
 drop policy if exists "the two people see the dm" on public.dms;
-create policy "the two people see the dm" on public.dms for select to authenticated using (auth.uid() in (user_a, user_b));
+drop policy if exists "the people in it see the dm" on public.dms;
+create policy "the people in it see the dm" on public.dms for select to authenticated using (in_dm(id));
+drop policy if exists "a group's people rename it" on public.dms;
+create policy "a group's people rename it" on public.dms for update to authenticated using (kind = 'group' and in_dm(id)) with check (kind = 'group' and in_dm(id));
+
+drop policy if exists "a group's people see each other" on public.dm_members;
+create policy "a group's people see each other" on public.dm_members for select to authenticated using (in_dm(dm_id));
+drop policy if exists "leave a group, or its owner removes you" on public.dm_members;
+create policy "leave a group, or its owner removes you" on public.dm_members for delete to authenticated
+  using (user_id = auth.uid() or exists (select 1 from dms d where d.id = dm_id and d.owner = auth.uid()));
+
+drop policy if exists "the people in a dm see its calls" on public.calls;
+create policy "the people in a dm see its calls" on public.calls for select to authenticated using (in_dm(dm_id));
+drop policy if exists "start a call as yourself" on public.calls;
+create policy "start a call as yourself" on public.calls for insert to authenticated with check (started_by = auth.uid() and in_dm(dm_id));
+drop policy if exists "the people in a dm end its calls" on public.calls;
+create policy "the people in a dm end its calls" on public.calls for update to authenticated using (in_dm(dm_id)) with check (in_dm(dm_id));
+
+drop policy if exists "your own reading and muting" on public.reads;
+create policy "your own reading and muting" on public.reads for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 drop policy if exists "the two people read it" on public.dm_messages;
 create policy "the two people read it" on public.dm_messages for select to authenticated using (in_dm(dm_id));
@@ -292,8 +425,14 @@ create policy "the two people write as themselves" on public.dm_messages for ins
 drop policy if exists "authors delete their dm messages" on public.dm_messages;
 create policy "authors delete their dm messages" on public.dm_messages for delete to authenticated using (author = auth.uid());
 
+-- a row "owner → friend" is a friend request until the other person adds one back; then you're friends
 drop policy if exists "your own friends list" on public.friends;
-create policy "your own friends list" on public.friends for all to authenticated using (owner = auth.uid()) with check (owner = auth.uid());
+drop policy if exists "see requests to and from you" on public.friends;
+create policy "see requests to and from you" on public.friends for select to authenticated using (owner = auth.uid() or friend = auth.uid());
+drop policy if exists "ask as yourself" on public.friends;
+create policy "ask as yourself" on public.friends for insert to authenticated with check (owner = auth.uid());
+drop policy if exists "cancel, ignore or unfriend" on public.friends;
+create policy "cancel, ignore or unfriend" on public.friends for delete to authenticated using (owner = auth.uid() or friend = auth.uid());
 
 drop policy if exists "members see roles" on public.roles;
 create policy "members see roles" on public.roles for select to authenticated using (is_member(server_id));
@@ -323,6 +462,67 @@ begin
 end $$;
 drop trigger if exists guard_server on public.servers;
 create trigger guard_server before update on public.servers for each row execute function public.guard_server();
+
+-- a group's people may rename it or change its picture; who's in it, and what kind of DM it is, never change this way.
+-- Its owner can hand it on to someone in it (and becomes nobody if their account goes).
+create or replace function public.guard_dm() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.kind is distinct from old.kind or new.user_a is distinct from old.user_a or new.user_b is distinct from old.user_b
+     or new.created_at is distinct from old.created_at then raise exception 'That can''t be changed.'; end if;
+  if new.owner is distinct from old.owner and new.owner is not null and coalesce(current_setting('fluentdat.handover', true), '') <> 'on'
+     and (old.owner is distinct from auth.uid() or not exists (select 1 from dm_members where dm_id = new.id and user_id = new.owner)) then
+    raise exception 'Only a group''s owner can hand it to someone else in it.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_dm on public.dms;
+create trigger guard_dm before update on public.dms for each row execute function public.guard_dm();
+
+-- someone left a group: if it was the owner, the longest-standing member takes over; an empty group goes away
+create or replace function public.after_leaving_group() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare next uuid;
+begin
+  if not exists (select 1 from dms where id = old.dm_id) then return null; end if;    -- (the group itself is going)
+  if not exists (select 1 from dm_members where dm_id = old.dm_id) then delete from dms where id = old.dm_id; return null; end if;
+  if exists (select 1 from dms where id = old.dm_id and owner = old.user_id) then
+    select user_id into next from dm_members where dm_id = old.dm_id order by joined_at, user_id limit 1;
+    perform set_config('fluentdat.handover', 'on', true);
+    update dms set owner = next where id = old.dm_id;
+    perform set_config('fluentdat.handover', 'off', true);
+  end if;
+  return null;
+end $$;
+drop trigger if exists after_leaving_group on public.dm_members;
+create trigger after_leaving_group after delete on public.dm_members for each row execute function public.after_leaving_group();
+
+-- a call only ever gets its end time (once)
+create or replace function public.guard_call() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.dm_id is distinct from old.dm_id or new.started_by is distinct from old.started_by or new.video is distinct from old.video
+     or new.created_at is distinct from old.created_at then raise exception 'Only a call''s end can change.'; end if;
+  if old.ended_at is not null then new.ended_at := old.ended_at; end if;
+  return new;
+end $$;
+drop trigger if exists guard_call on public.calls;
+create trigger guard_call before update on public.calls for each row execute function public.guard_call();
+
+-- a reply points at a message in the same conversation (or at nothing)
+create or replace function public.guard_reply() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.reply_to is null then return new; end if;
+  if TG_TABLE_NAME = 'messages' then
+    if not exists (select 1 from messages where id = new.reply_to and channel_id = new.channel_id) then new.reply_to := null; end if;
+  elsif not exists (select 1 from dm_messages where id = new.reply_to and dm_id = new.dm_id) then new.reply_to := null; end if;
+  return new;
+end $$;
+drop trigger if exists guard_reply on public.messages;
+create trigger guard_reply before insert on public.messages for each row execute function public.guard_reply();
+drop trigger if exists guard_reply on public.dm_messages;
+create trigger guard_reply before insert on public.dm_messages for each row execute function public.guard_reply();
 
 -- ===================== actions (the only ways to do these) =====================
 -- a new server: you own it, with a Text Channels category and #general
@@ -402,6 +602,86 @@ begin
   return d;
 end $$;
 
+-- a group DM with friends of yours (up to 10 people, you included), named or not
+create or replace function public.create_group(p_users uuid[], p_name text default '')
+returns uuid language plpgsql security definer set search_path = public as $$
+declare d uuid; u uuid; people uuid[];
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  people := array(select distinct x from unnest(coalesce(p_users, '{}')) x where x is not null and x <> auth.uid());
+  if cardinality(people) < 1 then raise exception 'Pick at least one friend.'; end if;
+  if cardinality(people) > 9 then raise exception 'A group DM holds up to 10 people.'; end if;
+  foreach u in array people loop
+    if not is_friend(u) then raise exception 'You can only add your friends to a group DM.'; end if;
+  end loop;
+  insert into dms (kind, name, owner) values ('group', left(trim(coalesce(p_name, '')), 100), auth.uid()) returning id into d;
+  insert into dm_members (dm_id, user_id, added_by) values (d, auth.uid(), auth.uid());
+  insert into dm_members (dm_id, user_id, added_by) select d, x, auth.uid() from unnest(people) x;
+  return d;
+end $$;
+
+-- add friends of yours to a group DM you're in
+create or replace function public.add_to_group(p_dm uuid, p_users uuid[])
+returns void language plpgsql security definer set search_path = public as $$
+declare u uuid; people uuid[];
+begin
+  if not exists (select 1 from dms where id = p_dm and kind = 'group') or not in_dm(p_dm) then raise exception 'You''re not in that group.'; end if;
+  people := array(select distinct x from unnest(coalesce(p_users, '{}')) x where x is not null
+                  and not exists (select 1 from dm_members m where m.dm_id = p_dm and m.user_id = x));
+  foreach u in array people loop
+    if not is_friend(u) then raise exception 'You can only add your friends to a group DM.'; end if;
+  end loop;
+  if (select count(*) from dm_members where dm_id = p_dm) + cardinality(people) > 10 then raise exception 'A group DM holds up to 10 people.'; end if;
+  insert into dm_members (dm_id, user_id, added_by) select p_dm, x, auth.uid() from unnest(people) x;
+end $$;
+
+-- what's new for you: each channel and DM's unread messages, how many of them ping you, and when it last spoke.
+-- (In a channel, a ping is your @name, @everyone or @here from an admin, or a reply to you. In a DM every message is one.)
+create or replace function public.unread()
+returns table (place uuid, unread int, mentions int, last_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select c.id,
+    (select count(*)::int from messages x where x.channel_id = c.id and x.author <> auth.uid() and x.created_at > coalesce(r.read_at, m.joined_at)),
+    (select count(*)::int from messages x where x.channel_id = c.id and x.author <> auth.uid() and x.created_at > coalesce(r.read_at, m.joined_at)
+       and (strpos(coalesce(x.text, ''), '<@' || auth.uid()::text || '>') > 0
+            or (coalesce(x.text, '') ~ '(^|[^[:alnum:]_])@(everyone|here)([^[:alnum:]_]|$)'
+                and exists (select 1 from server_members a where a.server_id = c.server_id and a.user_id = x.author and a.role in ('owner', 'admin')))
+            or exists (select 1 from messages y where y.id = x.reply_to and y.author = auth.uid()))),
+    (select max(x.created_at) from messages x where x.channel_id = c.id)
+  from channels c
+  join server_members m on m.server_id = c.server_id and m.user_id = auth.uid()
+  left join reads r on r.user_id = auth.uid() and r.place = c.id
+  union all
+  select d.id, n.k, n.k, (select max(x.created_at) from dm_messages x where x.dm_id = d.id)
+  from dms d
+  left join reads r on r.user_id = auth.uid() and r.place = d.id
+  cross join lateral (select count(*)::int as k from dm_messages x where x.dm_id = d.id and x.author <> auth.uid() and x.created_at > coalesce(r.read_at, d.created_at)) n
+  where in_dm(d.id);
+$$;
+
+-- an invite's server, for the card a link turns into (anyone signed in who has the code may look)
+create or replace function public.invite_info(p_code text)
+returns table (server_id uuid, name text, icon text, img text, banner text, description text, created_at timestamptz,
+               members int, online int, joined boolean, usable boolean)
+language sql stable security definer set search_path = public as $$
+  select s.id, s.name, s.icon, s.img, s.banner, s.description, s.created_at,
+    (select count(*)::int from server_members m where m.server_id = s.id),
+    (select count(*)::int from server_members m join seen w on w.user_id = m.user_id join profiles p on p.id = m.user_id
+       where m.server_id = s.id and w.at > now() - interval '5 minutes' and p.status <> 'invisible'),
+    is_member(s.id),
+    (i.expires_at is null or i.expires_at > now()) and (i.max_uses is null or i.uses < i.max_uses)
+      and not exists (select 1 from bans b where b.server_id = s.id and b.user_id = auth.uid())
+  from invites i join servers s on s.id = i.server_id
+  where i.code = lower(trim(coalesce(p_code, ''))) and auth.uid() is not null;
+$$;
+
+-- "I'm here": Fluentdat says this every few minutes while it's open
+create or replace function public.heartbeat()
+returns void language sql security definer set search_path = public as $$
+  insert into seen (user_id, at) select auth.uid(), now() where auth.uid() is not null
+    on conflict (user_id) do update set at = now();
+$$;
+
 -- Discover: public servers, biggest first (with how many people are in each), optionally searched or by category
 create or replace function public.discover(p_query text default '', p_category text default '')
 returns table (id uuid, name text, icon text, img text, banner text, description text, category text, members bigint, joined boolean, created_at timestamptz)
@@ -473,24 +753,26 @@ create trigger on_auth_user_created after insert on auth.users for each row exec
 -- only signed-in people may call the actions (the helpers only ever answer about the caller, so they're harmless)
 revoke all on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
-  public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid) from public, anon;
+  public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid), public.create_group(uuid[], text),
+  public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat() from public, anon;
 grant execute on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
-  public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid) to authenticated;
+  public.join_public(uuid), public.ban_member(uuid, uuid, text), public.server_bans(uuid), public.create_group(uuid[], text),
+  public.add_to_group(uuid, uuid[]), public.unread(), public.invite_info(text), public.heartbeat() to authenticated;
 -- the rules call these helpers, so signed-in people need to be able to run them (granted here rather than left to the
 -- project's defaults, so it works however the project was set up)
 grant execute on function public.is_member(uuid), public.is_admin(uuid), public.is_owner(uuid), public.channel_server(uuid),
-  public.in_dm(uuid), public.knows(uuid) to authenticated;
+  public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean) to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
-  public.roles, public.member_roles, public.bans to authenticated;
+  public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen to authenticated;
 revoke all on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
-  public.roles, public.member_roles, public.bans from anon;
+  public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen from anon;
 
 -- ===================== live updates =====================
 do $$ begin
@@ -505,5 +787,37 @@ do $$ begin
     begin alter publication supabase_realtime add table public.dms; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.roles; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.member_roles; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.friends; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.dm_members; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.calls; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.reads; exception when duplicate_object then null; end;
   end if;
+end $$;
+
+-- ===================== attachments and voice messages (Supabase Storage) =====================
+-- a private bucket: files are only ever fetched by signed-in people the rules above let in (10 MB each)
+do $$ begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit) values ('files', 'files', false, 10485760)
+      on conflict (id) do update set public = false, file_size_limit = 10485760;
+    execute 'drop policy if exists "fluentdat: read files where you are" on storage.objects';
+    execute 'create policy "fluentdat: read files where you are" on storage.objects for select to authenticated using (bucket_id = ''files'' and public.file_ok(name, false))';
+    execute 'drop policy if exists "fluentdat: upload files where you are" on storage.objects';
+    execute 'create policy "fluentdat: upload files where you are" on storage.objects for insert to authenticated with check (bucket_id = ''files'' and public.file_ok(name, true))';
+    execute 'drop policy if exists "fluentdat: delete your own files" on storage.objects';
+    execute 'create policy "fluentdat: delete your own files" on storage.objects for delete to authenticated using (bucket_id = ''files'' and split_part(name, ''/'', 3) = auth.uid()::text)';
+  end if;
+exception when insufficient_privilege then raise notice 'Fluentdat: couldn''t set up file storage (%)', sqlerrm;
+end $$;
+
+-- ===================== calls (Supabase Realtime, private channels) =====================
+-- browsers in a call find each other through a private channel only that DM's people (or that server's members) can join
+do $$ begin
+  if to_regclass('realtime.messages') is not null then
+    execute 'drop policy if exists "fluentdat: calls you are in (listen)" on realtime.messages';
+    execute 'create policy "fluentdat: calls you are in (listen)" on realtime.messages for select to authenticated using (public.topic_ok(realtime.topic()))';
+    execute 'drop policy if exists "fluentdat: calls you are in (talk)" on realtime.messages';
+    execute 'create policy "fluentdat: calls you are in (talk)" on realtime.messages for insert to authenticated with check (public.topic_ok(realtime.topic()))';
+  end if;
+exception when insufficient_privilege then raise notice 'Fluentdat: couldn''t set up call channels (%)', sqlerrm;
 end $$;

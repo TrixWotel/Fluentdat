@@ -2,6 +2,8 @@
 
 Fluentdat's **Continue with Discord**, **Continue with GitHub** and **email** sign-in run on a free Supabase project. You set it up once, in about 15 minutes. Until then the app works as before: everything stays in your browser, or you sign in with a GitHub token.
 
+> **Updating Fluentdat?** When a new version needs more from the database (like calls, voice messages, files, group DMs and friend requests did), the app shows a banner saying so. Run all of [`setup.sql`](setup.sql) again (step 2 below). It keeps everything that's already there.
+
 ## 1. Make the Supabase project
 
 1. Go to [supabase.com](https://supabase.com) and sign in (Continue with GitHub works).
@@ -13,7 +15,7 @@ Fluentdat's **Continue with Discord**, **Continue with GitHub** and **email** si
 1. In the project, open **SQL Editor** and click **New query**.
 2. Paste all of [`setup.sql`](setup.sql) and click **Run**. It should finish with “Success. No rows returned”.
 
-This makes the tables and the rules that decide who can read what. It's safe to run again after an update, because it replaces what it made before.
+This makes the tables and the rules that decide who can read what, the private **files** bucket for attachments and voice messages (Storage), and the rules for calls' private channels (Realtime). It's safe to run again after an update, because it replaces what it made before.
 
 ## 3. Tell Supabase where Fluentdat lives
 
@@ -68,6 +70,12 @@ export const SUPABASE = {
 
 Both are meant to be public, and anyone can see them in the page. The publishable key can only do what the rules in `setup.sql` allow. **Never** put the secret key (`sb_secret_...`), the old `service_role` key or the database password anywhere in Fluentdat.
 
+## 8. Calls (nothing to do, usually)
+
+Calls go straight between browsers, so Supabase only introduces them (through private Realtime channels that `setup.sql` sets up). Two public STUN servers help browsers find each other through home routers.
+
+Some networks, like many schools and offices, block direct connections. There a call needs a **TURN server** to pass it along. If calls connect for some people but not others, get one (Metered, Twilio and Cloudflare have free tiers) and add it to `ICE_SERVERS` in [`config.js`](../config.js). Its login is visible to anyone, so use one meant for that.
+
 ## What the rules allow
 
 The database checks these itself, so they hold even if someone changes the app:
@@ -81,6 +89,11 @@ The database checks these itself, so they hold even if someone changes the app:
 7. Only the owner can make a server public. Then anyone signed in can find it in Discover and join. Admins can ban people, and a banned person can't come back by invite or from Discover until the ban is lifted.
 8. Admins can make roles (a name and a colour) and hand them out. Roles change how names look and group the member list. What someone may do still comes from owner, admin or member.
 9. Profiles and servers only take real colours and pictures, never links to other websites, so nobody can track who looks at their profile.
+10. A friend request is seen by the person you sent it to (who can accept or ignore it) and nobody else. You're friends once both of you have added each other.
+11. Group DMs hold up to 10 people. You can only add your friends, the owner can remove people, and the last one out deletes the group.
+12. Attachments and voice messages (up to 10 MB each) can only be fetched by the people in that DM, group or server, and only uploaded by their sender.
+13. A call's private channel can only be joined by the people in that DM or group, or the members of that voice channel's server.
+14. What you've read and what you've muted is yours alone.
 
 ## If something goes wrong
 
@@ -88,3 +101,5 @@ The database checks these itself, so they hold even if someone changes the app:
 2. **You come back from Discord and Fluentdat says “Sign-in didn't finish”**: check the Site URL and Redirect URL in step 3.
 3. **The email never arrives**: see the limits in step 6.
 4. **Messages only show up after a reload**: in Supabase open **Realtime → Settings** and make sure **Allow public access** is on. Who can read what is still decided by the rules above.
+5. **A call says it couldn't join its private channel**, or **files say they need the newest setup.sql**: run `setup.sql` again (step 2).
+6. **Calls ring but never connect** for some people: their network needs a TURN server (step 8).

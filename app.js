@@ -3,7 +3,13 @@
 // customise, stickers you can make, and your own CSS themes you can edit. UI icons are inline SVG (not OS emoji).
 // Signed out it all stays in this browser; sign in (Discord, GitHub or email, via Supabase) and it's shared and live.
 import { Store, ready } from './backend.js';
-import { $, el, ICON, BRAND, brand, svgHTML, icon, readImage, scaled, pickFile, shrink, toast, attempt, copyText, modal, ask, confirmBox, menu, closeMenu, GRADS, paint } from './ui.js';
+import { $, el, ICON, BRAND, brand, svgHTML, icon, readImage, scaled, pickFile, pickFiles, shrink, toast, attempt, copyText, modal, ask, confirmBox, menu, closeMenu, GRADS, paint } from './ui.js';
+import { render as richText, links as linksIn, plain as plainText, jumbo } from './format.js';
+import { embed } from './embeds.js';
+import { joinCall, mediaTrouble } from './calls.js';
+import { record, voicePlayer, fileSize, isImage, isVideo, pictureSize, extFor, clock } from './media.js';
+// (the test page hands in pretend cameras and microphones, and keeps everything quiet)
+const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
 
 
 const DEFAULT_PREFS = {
@@ -24,6 +30,8 @@ const DEFAULT_PREFS = {
   // pictures and Discord-style extras
   serverBanner: 'on', plates: 'on', memberGroups: 'on', startHeaders: 'on', dmPanel: true,
   micMuted: false, deafened: false,
+  // calls, link previews and the formatting bar
+  sound: false, ring: true, embeds: 'on', formatBar: 'on',
 };
 const LAYOUT_PRESETS = {
   Default: {},
@@ -32,7 +40,7 @@ const LAYOUT_PRESETS = {
   Spacious: { density: 'cozy', fontSize: 16, avatarPx: 44, memberAv: 38, railW: 84, sideW: 300, membersW: 300, topH: 58, panelH: 62, chanH: 40,
     composerH: 56, icTop: 22, icComposer: 22, icPanel: 22, msgWidth: 'readable', radius: 'round' },
   Minimal: { rail: 'off', sideHead: 'off', userPanel: 'off', avatars: 'off', timestamps: 'off', dividers: 'off', banner: 'off', membersDefault: false, hover: 'off',
-    serverBanner: 'off', plates: 'off', startHeaders: 'off', dmPanel: false, hidden: { call: true, video: true, search: true, emoji: true, sticker: true, upload: true, mic: true, deafen: true, chanInvite: true, findDM: true } },
+    serverBanner: 'off', plates: 'off', startHeaders: 'off', dmPanel: false, hidden: { call: true, video: true, search: true, emoji: true, sticker: true, upload: true, mic: true, deafen: true, chanInvite: true, findDM: true, voice: true, chanSettings: true, addPeople: true } },
 };
 // every size you can set in Layout: [what it is, smallest, largest] in pixels
 const SIZES = {
@@ -90,10 +98,10 @@ const setBanner = (node, value, color) => { node.style.background = paint(value)
 const BUTTONS = {
   rail: ['Server rail', [['home', 'Direct Messages', 'logo'], ['servers', 'Your servers', 'bot', 1], ['add', 'Add a Server', 'plus'], ['discover', 'Discover', 'compass']]],
   header: ['Server header', [['invite', 'Invite People', 'personAdd'], ['serverMenu', 'Server menu arrow', 'chevD']]],
-  channels: ['Channel list', [['newChannel', 'New channel (+)', 'plus'], ['chanInvite', 'Invite, on hover', 'personAdd'], ['delChannel', 'Delete channel (×)', 'x']]],
+  channels: ['Channel list', [['newChannel', 'New channel (+)', 'plus'], ['chanInvite', 'Invite, on hover', 'personAdd'], ['chanSettings', 'Channel settings, on hover', 'gear'], ['delChannel', 'Delete channel (×)', 'x']]],
   dms: ['Direct messages', [['findDM', 'Find or start a conversation', 'search'], ['friendsNav', 'Friends', 'users'], ['newDM', 'New DM (+)', 'plus']]],
-  top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['search', 'Search', 'search'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users']]],
-  composer: ['Message box', [['upload', 'Send a picture', 'plusCircle'], ['input', 'The text box', 'edit', 1], ['emoji', 'Emoji', 'smile'], ['sticker', 'Stickers', 'sticker'], ['send', 'Send', 'send']]],
+  top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['search', 'Search', 'search'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users']]],
+  composer: ['Message box', [['upload', 'Attach files and pictures', 'plusCircle'], ['input', 'The text box', 'edit', 1], ['emoji', 'Emoji', 'smile'], ['sticker', 'Stickers', 'sticker'], ['voice', 'Voice message', 'mic'], ['send', 'Send', 'send']]],
   panel: ['User panel', [['me', 'You (avatar and name)', 'user', 1], ['mic', 'Mute', 'mic'], ['deafen', 'Deafen', 'headphones'], ['settings', 'User Settings', 'gear', 1]]],
 };
 const shown = (id) => !(prefs.hidden || {})[id];
@@ -152,30 +160,119 @@ function ensureSelection() {
 }
 const collapsed = new Set();
 function firstChannel(sv) { if (!sv) return null; const c = Store.channels(sv).find((x) => x.kind === 'text') || Store.channels(sv)[0]; return c ? c.id : null; }
+// the channel you last had open in each server (Discord takes you back there)
+const lastChan = (() => { try { return JSON.parse(localStorage.getItem('fluentdat.lastChannel')) || {}; } catch { return {}; } })();
+const lastChannel = (sv) => (lastChan[sv] && Store.channels(sv).some((c) => c.id === lastChan[sv] && c.kind !== 'voice') ? lastChan[sv] : firstChannel(sv));
+const rememberChannel = (sv, c) => { lastChan[sv] = c; try { localStorage.setItem('fluentdat.lastChannel', JSON.stringify(lastChan)); } catch {} };
+// what you're writing in each conversation: attachments waiting to go, and the message you're replying to
+const drafts = new Map();
+const draft = (place) => { if (!drafts.has(place)) drafts.set(place, { files: [], reply: null }); return drafts.get(place); };
+const placeNow = () => (view === 'home' ? dmId : view === 'server' ? channelId : null);
+let call = null, ringing = null, ringTimer = 0;   // the call you're in, and one ringing for you
+let newLine = { place: null, at: 0 };              // where the red NEW line goes in the conversation you just opened
+
+// ---------- unread, pings and muting ----------
+// how much a place may tell you: its own setting, else its server's, else everything ('all', 'mentions' or 'none')
+function levelFor(place, sv) {
+  const a = Store.placeSettings(place).notify; if (a && a !== 'default') return a;
+  const b = sv ? Store.placeSettings(sv).notify : 'default';
+  return b && b !== 'default' ? b : 'all';
+}
+const mutedHere = (place, sv) => Store.placeSettings(place).muted || (!!sv && Store.placeSettings(sv).muted);
+function serverUnread(sv) {
+  let unread = 0, mentions = 0;
+  if (Store.kind !== 'supabase') return { unread, mentions };
+  for (const c of Store.channels(sv)) {
+    const u = Store.unread(c.id);
+    if (levelFor(c.id, sv) !== 'none') mentions += u.mentions;
+    if (!mutedHere(c.id, sv)) unread += u.unread;
+  }
+  return { unread, mentions };
+}
+const dmUnread = (id) => (Store.placeSettings(id).muted ? 0 : Store.unread(id).unread);
+const person = (uid) => (Store.person && Store.person(uid)) || { id: uid, name: 'Someone', color: '#8a8f98' };
+const face = (u) => ({ id: u.id, name: u.name, color: u.color, avatar: u.avatar, bot: u.bot });       // (a picture without a status dot)
+const dmName = (d) => (!d ? '' : d.kind === 'group' ? d.name || d.people.filter((p) => !isMe(p)).map((p) => p.name).join(', ') || 'Empty Group' : (d.user || {}).name || '');
+function dmAvatar(d, size) {
+  if (d.kind !== 'group') return avatarEl(d.user, size ? { size } : {});
+  const a = el('div', { className: 'avatar group-av' }), fill = el('div', { className: 'fill' }), img = safeImg(d.icon);
+  if (size) a.style.width = a.style.height = size + 'px';
+  fill.style.background = safeColor(groupColor(d.id));
+  if (img) fill.append(el('img', { src: img, alt: '' })); else fill.append(icon('users', size ? Math.round(size * 0.5) : 18));
+  a.append(fill);
+  return a;
+}
+const groupColor = (id) => COLORS[[...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % COLORS.length];
+
+// ---------- the name tag beside the rail (and anything else that wants one) ----------
+const tipEl = el('div', { className: 'tip', hidden: true });
+document.body.append(tipEl);
+function tipOn(node, content) {
+  node.addEventListener('mouseenter', () => {
+    const c = content(); if (!c) return;
+    tipEl.replaceChildren(...[].concat(c)); tipEl.hidden = false;
+    const r = node.getBoundingClientRect();
+    tipEl.style.left = r.right + 8 + 'px';
+    tipEl.style.top = Math.max(8, Math.min(innerHeight - tipEl.offsetHeight - 8, r.top + r.height / 2 - tipEl.offsetHeight / 2)) + 'px';
+  });
+  node.addEventListener('mouseleave', () => { tipEl.hidden = true; });
+  node.addEventListener('mousedown', () => { tipEl.hidden = true; });
+}
 
 
 // ---------- the server rail ----------
+// Discord's: a pill on the left for where you are (a small one for unread), red counts for pings, a speaker when people
+// are in a voice channel, your unread DMs waiting under Home, and a name tag when you point at anything
 function renderRail() {
-  const parts = [], open = (fn) => () => { closeCall(); fn(); renderAll(); };
-  const railBtn = (ic, title, on, onclick, cls) => { const b = el('button', { className: 'srv ' + cls + (on ? ' on' : ''), title, onclick }); b.append(icon(ic, 24)); return b; };
+  tipEl.hidden = true;
+  const parts = [], open = (fn) => () => { fn(); renderAll(); };
+  const wrap = (btn, { on, unread, ping, voice, tip } = {}) => {
+    const w = el('div', { className: 'srv-wrap' + (on ? ' on' : '') + (unread ? ' unread' : '') }, el('span', { className: 'pill' }), btn);
+    if (ping) w.append(el('span', { className: 'badge' }, ping > 99 ? '99+' : String(ping)));
+    if (voice) w.append(el('span', { className: 'vbadge' }, icon('volume', 11)));
+    if (tip) tipOn(w, tip);
+    return w;
+  };
+  const railBtn = (ic, label, on, onclick, cls) => { const b = el('button', { className: 'srv ' + cls + (on ? ' on' : ''), onclick }); b.setAttribute('aria-label', label); b.append(icon(ic, 24)); return b; };
   for (const id of ordered('rail')) {
     if (!shown(id)) continue;
-    if (id === 'home') parts.push(railBtn('logo', 'Direct Messages', view === 'home', open(() => { view = 'home'; }), 'home'));
-    else if (id === 'add') parts.push(railBtn('plus', 'Add a Server', false, () => addServerFlow(), 'add'));
-    else if (id === 'discover') parts.push(railBtn('compass', 'Discover', view === 'discover', open(() => { view = 'discover'; }), 'add discover'));
+    if (id === 'home') {
+      parts.push(wrap(railBtn('logo', 'Direct Messages', view === 'home', open(() => { view = 'home'; }), 'home'), { on: view === 'home', ping: Store.friendRequests().incoming.length, tip: () => el('b', {}, 'Direct Messages') }));
+      // unread DMs wait under Home, as on Discord
+      for (const d of Store.dmList().filter((x) => dmUnread(x.id) && !(view === 'home' && dmId === x.id)).slice(0, 6)) {
+        const b = el('button', { className: 'srv dmu', onclick: open(() => { view = 'home'; dmId = d.id; }) }, dmAvatar(d));
+        b.setAttribute('aria-label', dmName(d));
+        parts.push(wrap(b, { unread: true, ping: dmUnread(d.id), tip: () => el('b', {}, dmName(d)) }));
+      }
+    }
+    else if (id === 'add') parts.push(wrap(railBtn('plus', 'Add a Server', false, () => addServerFlow(), 'add'), { tip: () => el('b', {}, 'Add a Server') }));
+    else if (id === 'discover') parts.push(wrap(railBtn('compass', 'Discover', view === 'discover', open(() => { view = 'discover'; }), 'add discover'), { on: view === 'discover', tip: () => el('b', {}, 'Discover') }));
     else if (id === 'servers') {
       if (parts.length) parts.push(el('hr'));
       for (const s of Store.servers()) {
-        const b = el('button', { className: 'srv' + (view === 'server' && s.id === serverId ? ' on' : ''), title: s.name,
-          onclick: open(() => { view = 'server'; serverId = s.id; channelId = firstChannel(s.id); }),
+        const on = view === 'server' && s.id === serverId, st = serverUnread(s.id);
+        const b = el('button', { className: 'srv' + (on ? ' on' : ''),
+          onclick: open(() => { view = 'server'; serverId = s.id; channelId = lastChannel(s.id); }),
           oncontextmenu: (e) => { e.preventDefault(); serverCtx(s, e.clientX, e.clientY); } });
+        b.setAttribute('aria-label', s.name);
         const img = safeImg(s.img);
         if (img) b.append(el('img', { src: img, alt: '' })); else if (ICON[s.icon]) b.append(icon(s.icon, 24)); else b.textContent = initials(s.name);
-        parts.push(b);
+        parts.push(wrap(b, { on, unread: !on && st.unread > 0 && !Store.placeSettings(s.id).muted, ping: st.mentions,
+          voice: Object.values(Store.voice(s.id)).some((l) => l.length), tip: () => serverTip(s) }));
       }
     }
   }
   $('#rail').replaceChildren(...parts);
+}
+// a server's name tag: its name, and who's in which voice channel
+function serverTip(s) {
+  const out = [el('b', {}, s.name)];
+  for (const [ch, ppl] of Object.entries(Store.voice(s.id))) {
+    const c = Store.channel(ch); if (!c || !ppl.length) continue;
+    out.push(el('div', { className: 'tip-voice' }, icon('volume', 14), el('span', {}, c.name)),
+      el('div', { className: 'tip-people' }, ...ppl.slice(0, 10).map((p) => avatarEl(face(person(p.uid)), { size: 22 }))));
+  }
+  return out;
 }
 
 // ---------- the sidebar ----------
@@ -201,7 +298,7 @@ function renderSide() {
   if (bg) head.style.setProperty('--banner', bg);
   const inviting = live ? can : true;                     // (signed out, Invite explains how it works)
   const row = el('div', { className: 'sh-row' }, el('span', { className: 'sh-name' }, server.name), ...ordered('header').map((id) =>
-    id === 'invite' ? (shown('invite') && inviting ? el('button', { className: 'sh-btn', title: 'Invite People', onclick: (e) => { e.stopPropagation(); openServerSettings(serverId, 'invite'); } }, icon('personAdd', 18)) : null)
+    id === 'invite' ? (shown('invite') && inviting ? el('button', { className: 'sh-btn', title: 'Invite People', onclick: (e) => { e.stopPropagation(); inviteFriends(serverId); } }, icon('personAdd', 18)) : null)
       : shown('serverMenu') ? el('span', { className: 'drop' }, icon('chevD', 18)) : null));
   head.replaceChildren(row);
   head.onclick = () => serverMenu(row);
@@ -211,38 +308,102 @@ function renderSide() {
   for (const cat of groups) {
     const mine = chans.filter((c) => (cat.id ? c.category === cat.id : true));
     const isCollapsed = collapsed.has(cat.id);
-    body.append(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) collapsed.delete(cat.id); else collapsed.add(cat.id); renderSide(); } },
+    body.append(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) collapsed.delete(cat.id); else collapsed.add(cat.id); renderSide(); },
+      oncontextmenu: (e) => { e.preventDefault(); categoryCtx(cat, e.clientX, e.clientY); } },
       el('span', { className: 'caret' }, icon('chevD')), el('span', { className: 'nm' }, cat.name),
       can && shown('newChannel') ? el('span', { className: 'add', title: 'Create Channel', onclick: (e) => { e.stopPropagation(); newChannelFlow(cat.id); } }, icon('plus')) : null));
-    if (isCollapsed) continue;
+    // (a collapsed category still shows the channel you're in, and ones with something new, as on Discord)
     for (const c of mine) {
-      const rowc = el('button', { className: 'chan' + (c.id === channelId && view === 'server' ? ' on' : ''),
-        onclick: () => { channelId = c.id; closeCall(); renderAll(); $('#app').classList.remove('show-side'); },
+      const u = Store.unread(c.id), muted = mutedHere(c.id, serverId), isOn = c.id === channelId && view === 'server';
+      const fresh = u.unread > 0 && !muted && !isOn, ping = !isOn && u.mentions > 0 && levelFor(c.id, serverId) !== 'none';
+      const voiceHere = c.kind === 'voice' ? Store.voice(serverId)[c.id] || [] : [];
+      if (isCollapsed && !isOn && !fresh && !ping && !voiceHere.length) continue;
+      const rowc = el('button', { className: 'chan' + (isOn ? ' on' : '') + (fresh || ping ? ' unread' : '') + (muted ? ' muted' : '') + (call && call.place === c.id ? ' joined' : ''),
+        onclick: () => openChannel(c),
         oncontextmenu: (e) => { e.preventDefault(); channelCtx(c, e.clientX, e.clientY); } },
         icon(c.kind === 'voice' ? 'volume' : 'hash', 18), el('span', { className: 'nm' }, c.name));
+      if (ping) rowc.append(el('span', { className: 'mbadge' }, u.mentions > 99 ? '99+' : String(u.mentions)));
       for (const id of ordered('channels')) {
-        if (id === 'chanInvite' && shown(id) && inviting) rowc.append(el('span', { className: 'x ci', title: 'Invite People', onclick: (e) => { e.stopPropagation(); openServerSettings(serverId, 'invite'); } }, icon('personAdd')));
+        if (id === 'chanInvite' && shown(id) && inviting) rowc.append(el('span', { className: 'x ci', title: 'Create Invite', onclick: (e) => { e.stopPropagation(); inviteFriends(serverId); } }, icon('personAdd')));
+        if (id === 'chanSettings' && shown(id) && can) rowc.append(el('span', { className: 'x cs', title: 'Edit Channel', onclick: (e) => { e.stopPropagation(); editChannel(c); } }, icon('gear')));
         if (id === 'delChannel' && shown(id) && can && chans.length > 1) rowc.append(el('span', { className: 'x', title: 'Delete Channel', onclick: (e) => { e.stopPropagation(); deleteChannel(c); } }, icon('x')));
       }
       body.append(rowc);
+      for (const v of voiceHere) body.append(voiceMember(v, c));
     }
   }
+}
+// someone in a voice channel, under it in the list: who, and whether they're muted, deafened, on camera or streaming
+function voiceMember(v, c) {
+  const p = person(v.uid), talking = speaking(v.uid, c.id);
+  const row = el('button', { className: 'vmem' + (talking ? ' speaking' : ''), onclick: (e) => showProfile(p, e.currentTarget),
+    oncontextmenu: (e) => { e.preventDefault(); memberCtx(p, e.clientX, e.clientY); } },
+    avatarEl(face(p), { size: 22 }), el('span', { className: 'nm' }, p.name),
+    v.screen ? el('span', { className: 'live' }, 'LIVE') : null, v.cam ? el('span', { className: 'vic' }, icon('video', 14)) : null,
+    v.deaf ? el('span', { className: 'vic red' }, icon('headphonesOff', 14)) : !v.mic ? el('span', { className: 'vic red' }, icon('micOff', 14)) : null);
+  return row;
+}
+// is this person talking right now? (only known for the call you're in)
+function speaking(uid, place) {
+  if (!call || call.place !== place) return false;
+  if (uid === Store.myId()) return call.api.self.speaking;
+  return call.api.people().some((p) => p.uid === uid && p.speaking);
+}
+// a channel: a text channel opens; a voice channel opens and joins its call (as on Discord)
+function openChannel(c) {
+  channelId = c.id;
+  if (c.kind !== 'voice') rememberChannel(serverId, c.id);
+  renderAll(); $('#app').classList.remove('show-side');
+  if (c.kind === 'voice' && !(call && call.place === c.id)) joinVoice(c);
 }
 // the Direct Messages side: find a conversation, Friends, and your DMs
 function dmSide(head, body) {
   head.replaceChildren(shown('findDM') ? el('button', { className: 'find-dm', onclick: () => newDMDialog() }, 'Find or start a conversation') : 'Messages');
   const parts = [];
-  if (shown('friendsNav')) parts.push(el('button', { className: 'nav-btn' + (!dmId ? ' on' : ''), onclick: () => { dmId = null; renderAll(); } }, icon('users'), 'Friends'));
+  const req = Store.friendRequests().incoming.length;
+  if (shown('friendsNav')) parts.push(el('button', { className: 'nav-btn' + (!dmId ? ' on' : ''), onclick: () => { dmId = null; renderAll(); } }, icon('users'), el('span', { className: 'grow' }, 'Friends'),
+    req ? el('span', { className: 'mbadge' }, String(req)) : null));
   parts.push(el('div', { className: 'cat dm-cat' }, el('span', { className: 'nm' }, 'Direct Messages'),
     shown('newDM') ? el('span', { className: 'add', title: 'Create DM', onclick: (e) => { e.stopPropagation(); newDMDialog(); } }, icon('plus')) : null));
-  for (const d of Store.dmList()) {
-    if (closedDMs.has(d.id) && d.id !== dmId) continue;
-    const row = el('button', { className: 'dm-row' + (dmId === d.id ? ' on' : ''), onclick: () => { dmId = d.id; renderAll(); $('#app').classList.remove('show-side'); },
+  // (newest conversation first, as on Discord)
+  const list = Store.dmList().map((d, i) => ({ d, i })).sort((a, b) => (b.d.last || 0) - (a.d.last || 0) || a.i - b.i).map((x) => x.d);
+  for (const d of list) {
+    if (closedDMs.has(d.id) && d.id !== dmId && !dmUnread(d.id)) continue;
+    const n = dmUnread(d.id), group = d.kind === 'group', inCall = call && call.place === d.id;
+    const sub = group ? `${d.people.length} Member${d.people.length === 1 ? '' : 's'}` : inCall ? 'In a call' : d.user.about;
+    const row = el('button', { className: 'dm-row' + (dmId === d.id ? ' on' : '') + (n ? ' unread' : ''), onclick: () => { dmId = d.id; renderAll(); $('#app').classList.remove('show-side'); },
       oncontextmenu: (e) => { e.preventDefault(); dmCtx(d, e.clientX, e.clientY); } },
-      avatarEl(d.user, { size: 32 }), el('div', { className: 'who' }, el('div', { className: 'nm2' }, d.user.name), d.user.about ? el('div', { className: 'sub2' }, d.user.about) : null));
-    parts.push(plateOn(row, d.user.plate));
+      dmAvatar(d, 32), el('div', { className: 'who' }, el('div', { className: 'nm2' }, dmName(d)), sub ? el('div', { className: 'sub2' + (inCall ? ' good' : '') }, sub) : null),
+      n ? el('span', { className: 'mbadge' }, n > 99 ? '99+' : String(n)) : null,
+      el('span', { className: 'close', title: 'Close DM', onclick: (e) => { e.stopPropagation(); closedDMs.add(d.id); saveClosed(); if (dmId === d.id) dmId = null; renderAll(); } }, icon('x', 16)));
+    parts.push(group ? row : plateOn(row, d.user.plate));
   }
   body.replaceChildren(...parts);
+}
+
+// ---------- Voice Connected (above your user panel while you're in a call) ----------
+function renderVoicePanel() {
+  const box = $('#vpanel'); if (!box) return;
+  if (!call) { box.hidden = true; box.replaceChildren(); return; }
+  const others = call.api.people(), live = others.some((p) => p.connected);
+  const status = call.kind === 'dm' && !others.length ? 'Calling…' : call.kind === 'vc' || live ? 'Voice Connected' : 'Connecting…';
+  const where = call.kind === 'vc' ? `${(Store.channel(call.place) || {}).name || 'Voice'} / ${(Store.server(call.server) || {}).name || ''}` : `Call with ${dmName(Store.dmInfo(call.place)) || 'someone'}`;
+  const me2 = call.api.self;
+  box.hidden = false;
+  box.replaceChildren(...[
+    el('div', { className: 'vp-top' },
+      el('div', { className: 'vp-what' }, el('div', { className: 'vp-status' + (status === 'Voice Connected' ? ' good' : '') }, icon('volume', 15), status),
+        el('button', { className: 'vp-where', title: 'Go to the call', onclick: () => goToCall() }, where)),
+      el('button', { className: 'vp-btn hang', title: 'Disconnect', onclick: () => leaveCall() }, icon('hangup', 18))),
+    me2.warning ? el('div', { className: 'vp-warn' }, me2.warning) : null,
+    el('div', { className: 'vp-row' },
+      el('button', { className: 'vp-btn wide' + (me2.cam ? ' on' : ''), title: me2.cam ? 'Turn Off Camera' : 'Turn On Camera', onclick: () => call && call.api.setCam(!call.api.self.cam) }, icon(me2.cam ? 'video' : 'camOff', 17), 'Video'),
+      el('button', { className: 'vp-btn wide' + (me2.screen ? ' on' : ''), title: me2.screen ? 'Stop Streaming' : 'Share Your Screen', onclick: () => call && call.api.setScreen(!call.api.self.screen) }, icon('screen', 17), 'Screen'))].filter(Boolean));
+}
+function goToCall() {
+  if (!call) return;
+  if (call.kind === 'dm') { view = 'home'; dmId = call.place; } else { view = 'server'; serverId = call.server; channelId = call.place; }
+  renderAll();
 }
 
 // ---------- the user panel ----------
@@ -268,7 +429,12 @@ function toggleMic() {
   savePrefs(); applyMic(); renderMe(); toast(prefs.micMuted ? 'Muted.' : 'Unmuted.');
 }
 function toggleDeafen() { prefs.deafened = !prefs.deafened; savePrefs(); applyMic(); renderMe(); toast(prefs.deafened ? 'Deafened: sounds are off and your mic is muted.' : 'Undeafened.'); }
-function applyMic() { micOn = !(prefs.micMuted || prefs.deafened); if (stream) { stream.getAudioTracks().forEach((t) => { t.enabled = micOn; }); syncCallButtons(); } }
+function applyMic() {
+  if (!call) return;
+  call.api.setDeaf(!!prefs.deafened);
+  if (!prefs.deafened) call.api.setMic(!prefs.micMuted);
+  if (call.kind === 'vc') Store.setVoice({ sv: call.server, ch: call.place, mic: !prefs.micMuted && !prefs.deafened, deaf: !!prefs.deafened, cam: call.api.self.cam, screen: call.api.self.screen });
+}
 
 // ---------- the top bar ----------
 function renderTop() {
@@ -279,20 +445,30 @@ function renderTop() {
   let where = null;
   if (view === 'discover') parts.push(el('span', { className: 'hash' }, icon('compass')), el('span', {}, 'Discover'));
   else if (view === 'home' && !dmId) parts.push(el('span', { className: 'hash' }, icon('users')), el('span', {}, 'Friends'));
-  else if (view === 'home') { const u = Store.dmUser(dmId) || { name: '?' }; parts.push(avatarEl(u, { size: 24 }), el('span', { className: 'ttl' }, u.name)); where = 'dm'; }
+  else if (view === 'home') {
+    const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
+    if (d && d.kind === 'group') { parts.push(dmAvatar(d, 24), el('button', { className: 'ttl ttl-edit', title: 'Rename the group', onclick: () => renameGroup(d) }, dmName(d))); where = 'group'; }
+    else { const u = Store.dmUser(dmId) || { name: '?' }; parts.push(avatarEl(u, { size: 24 }), el('span', { className: 'ttl' }, u.name)); where = 'dm'; }
+  }
   else {
     const c = Store.channel(channelId);
     if (!c) parts.push(el('span', {}, Store.syncState().loading ? 'Loading…' : 'Fluentdat'));
-    else { parts.push(el('span', { className: 'hash' }, icon(c.kind === 'voice' ? 'volume' : 'hash')), el('span', { className: 'ttl' }, c.name)); where = 'channel'; }
+    else {
+      parts.push(el('span', { className: 'hash' }, icon(c.kind === 'voice' ? 'volume' : 'hash')), el('span', { className: 'ttl' }, c.name));
+      if (c.topic) parts.push(el('span', { className: 'topic-sep' }), el('button', { className: 'topic', title: plainText(c.topic, fmtCtx()), onclick: () => showTopic(c) }, plainText(c.topic, fmtCtx())));
+      where = c.kind === 'voice' ? 'voice' : 'channel';
+    }
   }
   parts.push(el('span', { className: 'spacer' }));
+  const talk = where === 'dm' || where === 'group', inThis = call && call.place === dmId;
   if (where) for (const id of ordered('top')) {
     if (!shown(id)) continue;
-    if (id === 'call') parts.push(act('phone', 'Start a voice call', () => startCall(false)));
-    else if (id === 'video') parts.push(act('video', 'Start a video call', () => startCall(true)));
+    if (id === 'call' && talk) { const b = act('phone', inThis ? 'In this call' : 'Start Voice Call', () => (inThis ? goToCall() : startDMCall(false)), inThis); b.classList.toggle('incall', !!inThis); parts.push(b); }
+    else if (id === 'video' && talk) parts.push(act('video', 'Start Video Call', () => (inThis ? call.api.setCam(true) : startDMCall(true))));
+    else if (id === 'addPeople' && talk && Store.kind === 'supabase') parts.push(act('usersPlus', 'Add Friends to DM', () => addPeopleFlow()));
     else if (id === 'search') parts.push(searchOpen ? searchField : act('search', 'Search', () => { searchOpen = true; renderTop(); searchField.focus(); }));
     else if (id === 'dmProfile' && where === 'dm') parts.push(act('user', prefs.dmPanel ? 'Hide User Profile' : 'Show User Profile', () => { prefs.dmPanel = !prefs.dmPanel; savePrefs(); renderAll(); }, prefs.dmPanel));
-    else if (id === 'members' && where === 'channel') parts.push(act('users', showMembers ? 'Hide Member List' : 'Show Member List', () => { showMembers = !showMembers; renderAll(); }, showMembers));
+    else if (id === 'members' && (where === 'channel' || where === 'voice' || where === 'group')) parts.push(act('users', showMembers ? 'Hide Member List' : 'Show Member List', () => { showMembers = !showMembers; renderAll(); }, showMembers));
   }
   top.replaceChildren(...parts);
 }
@@ -306,7 +482,7 @@ searchField.addEventListener('blur', () => { if (!searchField.value) { searchOpe
 
 
 // ---------- messages ----------
-const fmt = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|\W)\*(.+?)\*(?=\W|$)/g, '$1<i>$2</i>').replace(/`(.+?)`/g, '<code>$1</code>');
+const fmtCtx = () => ({ who: (id) => { const p = Store.person && Store.person(id); return p ? { name: p.name } : null; }, chan: (id) => Store.channel(id) });
 function when(ts) {
   const d = new Date(ts);
   if (prefs.timestamps === '24') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -314,56 +490,193 @@ function when(ts) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
-function messageList(msgs, start) {
-  const wrap = el('div', { className: 'msgs' });
-  if (start) wrap.append(start);
+const lasted = (ms) => (ms < 60000 ? 'a few seconds' : ms < 120000 ? 'a minute' : ms < 3600000 ? `${Math.round(ms / 60000)} minutes` : ms < 7200000 ? 'an hour' : `${Math.round(ms / 3600000)} hours`);
+// does this message ping you? your @name, @everyone/@here from an admin (in a server), or a reply to you
+function pingsMe(m, all) {
+  if (Store.kind !== 'supabase' || m.mine) return false;
+  const text = m.text || '', mine = Store.myId();
+  if (mine && text.includes(`<@${mine}>`)) return true;
+  if (view === 'server' && /(^|[^\w@])@(everyone|here)(?![\w])/.test(text)) { const r = ((Store.members(serverId) || []).find((x) => x.id === m.user.id) || {}).role; if (r === 'owner' || r === 'admin') return true; }
+  if (m.reply) { const to = all.find((x) => x.id === m.reply); if (to && to.mine) return true; }
+  return false;
+}
+// the conversation's messages, drawn into wrap. Each message keeps its own piece of the page while it doesn't change, so
+// a video or voice message keeps playing (and a link's card stays put) while new messages arrive around it.
+function fillMessages(wrap, msgs, place, start) {
+  const keep = wrap._nodes || new Map(), next = new Map(), order = [];
+  const put = (key, make) => { let n = keep.get(key); if (!n) n = make(); next.set(key, n); order.push(n); };
+  const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars].join();
+  if (start) put('start:' + start.key, start.make);
+  if (!Store.loaded(place) && !msgs.length) put('loading', skeleton);
   if (searchQ) {
     const q = searchQ.toLowerCase();
-    msgs = msgs.filter((m) => (m.text || '').toLowerCase().includes(q) || String(m.user.name || '').toLowerCase().includes(q));
-    wrap.append(el('div', { className: 'search-note' }, `${msgs.length} result${msgs.length === 1 ? '' : 's'} for “${searchQ}”`));
+    msgs = msgs.filter((m) => !m.call && ((m.text || '').toLowerCase().includes(q) || String(m.user.name || '').toLowerCase().includes(q) || (m.files || []).some((f) => String(f.name || '').toLowerCase().includes(q))));
+    put('search:' + searchQ + ':' + msgs.length, () => el('div', { className: 'search-note' }, `${msgs.length} result${msgs.length === 1 ? '' : 's'} for “${searchQ}”`));
   }
-  let last = null, lastDay = null;
+  const all = view === 'home' ? Store.dm(dmId) : Store.messages(channelId);
+  let last = null, lastDay = null, newShown = false;
   for (const m of msgs) {
-    if (!lastDay || !sameDay(lastDay, m.ts)) { wrap.append(el('div', { className: 'day' }, new Date(m.ts).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }))); lastDay = m.ts; last = null; }
-    const cont = prefs.group && last && last.user.name === m.user.name && !last.user.bot === !m.user.bot && last.user.via === m.user.via && (m.ts - last.ts) < 5 * 60000;
-    const body = el('div', { className: 'body' });
-    if (!cont) {
-      const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, m.user.name);
-      nm.style.setProperty('--who', nameColor(m.user));
-      const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : ''); meta.append(el('span', { className: 'when' }, when(m.ts)));
-      body.append(meta);
-    }
-    if (m.sticker) {
-      const st = typeof m.sticker === 'string' ? { kind: 'emoji', data: m.sticker } : m.sticker;
-      if (st.kind === 'img') { const src = safeImg(st.data); if (src) body.append(el('div', { className: 'sticker' + (st.photo ? ' photo' : '') }, el('img', { src, alt: st.photo ? 'picture' : 'sticker', loading: 'lazy' }))); }
-      else body.append(el('div', { className: 'sticker' }, String(st.data || '').slice(0, 24)));
-    }
-    if (m.text != null) { const t = el('div', { className: 'text' + (m.action ? ' action' : '') }); t.innerHTML = fmt(m.action ? `${m.user.name} ${m.text}` : m.text); body.append(t); }
-    const av = avatarEl(m.user); av.onclick = (e) => showProfile(m.user, e.currentTarget);
-    wrap.append(el('div', { className: 'msg' + (cont ? ' cont' : ''), oncontextmenu: (e) => { if (e.target.closest('a')) return; e.preventDefault(); messageCtx(m, e.clientX, e.clientY); } }, av, body));
+    if (!lastDay || !sameDay(lastDay, m.ts)) { const day = new Date(m.ts).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }); put('day:' + day, () => el('div', { className: 'day' }, el('span', {}, day))); lastDay = m.ts; last = null; }
+    if (!newShown && newLine.place === place && newLine.at && m.ts > newLine.at && !m.mine && !m.call) { newShown = true; put('new:' + m.id, () => el('div', { className: 'newline' }, el('span', {}, 'NEW'))); last = null; }
+    if (m.call) { put('call:' + m.id + ':' + (m.call.ended || 0) + ':' + !!(call && call.callId === m.call.id), () => callNode(m)); last = null; continue; }
+    const cont = prefs.group && last && !last.call && !m.reply && last.user.name === m.user.name && !last.user.bot === !m.user.bot && last.user.via === m.user.via && (m.ts - last.ts) < 5 * 60000;
+    const to = m.reply ? all.find((x) => x.id === m.reply) : null;
+    const key = 'm:' + m.id + ':' + JSON.stringify([m.text, m.sticker && String(m.sticker.data || m.sticker).length, (m.files || []).map((f) => f.path || f.name), !!m.sending, cont, style,
+      m.user.name, m.user.color, String(m.user.avatar || '').length, nameColor(m.user), to ? [to.user.name, to.text, !!to.files] : m.reply]);
+    put(key, () => messageNode(m, cont, to, all, ctx));
     last = m;
   }
-  return wrap;
+  let i = 0;
+  for (const n of order) { if (wrap.childNodes[i] !== n) wrap.insertBefore(n, wrap.childNodes[i] || null); i++; }
+  while (wrap.childNodes.length > order.length) wrap.lastChild.remove();
+  wrap._nodes = next;
 }
+function messageNode(m, cont, to, all, ctx) {
+  const body = el('div', { className: 'body' });
+  if (!cont) {
+    const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, m.user.name);
+    nm.style.setProperty('--who', nameColor(m.user));
+    const meta = el('div', { className: 'meta' }, nm); if (m.user.bot) meta.append(el('span', { className: 'tag' }, 'bot'), m.user.via ? el('span', { className: 'when' }, 'for @' + m.user.via) : ''); meta.append(el('span', { className: 'when' }, when(m.ts)));
+    body.append(meta);
+  }
+  if (m.text != null && m.text !== '') {
+    const t = el('div', { className: 'text' + (m.action ? ' action' : '') + (!m.action && jumbo(m.text) ? ' jumbo' : '') });
+    t.innerHTML = richText(m.action ? `${m.user.name} ${m.text}` : m.text, ctx);
+    body.append(t);
+  }
+  if (m.sticker) {
+    const st = typeof m.sticker === 'string' ? { kind: 'emoji', data: m.sticker } : m.sticker;
+    if (st.kind === 'img') { const src = safeImg(st.data); if (src) body.append(el('div', { className: 'sticker' + (st.photo ? ' photo' : '') }, el('img', { src, alt: st.photo ? 'picture' : 'sticker', loading: 'lazy', onclick: st.photo ? () => lightbox({ name: 'picture' }, src) : null }))); }
+    else body.append(el('div', { className: 'sticker' }, String(st.data || '').slice(0, 24)));
+  }
+  const files = attachmentsNode(m); if (files) body.append(files);
+  const links = embedsNode(m); if (links) body.append(links);
+  const av = avatarEl(m.user); av.onclick = (e) => showProfile(m.user, e.currentTarget);
+  const tools = el('div', { className: 'msg-tools' },
+    !m.sending ? el('button', { title: 'Reply', onclick: (e) => { e.stopPropagation(); startReply(m); } }, icon('reply', 18)) : null,
+    el('button', { title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); messageCtx(m, r.left - 190, r.bottom + 4); } }, icon('more', 18)));
+  const node = el('div', { className: 'msg' + (cont ? ' cont' : '') + (pingsMe(m, all) ? ' pinged' : '') + (m.sending ? ' sending' : ''),
+    oncontextmenu: (e) => { if (e.target.closest('a')) return; e.preventDefault(); messageCtx(m, e.clientX, e.clientY); } });
+  node.dataset.id = m.id;
+  if (m.reply) node.append(replyLine(m, to, ctx));
+  node.append(av, body, tools);
+  return node;
+}
+// the line above a reply: who it answers, and the start of what they said (click to jump there)
+function replyLine(m, to, ctx) {
+  const line = el('div', { className: 'reply-line' }, el('span', { className: 'rl-curve' }));
+  if (!to) line.append(el('span', { className: 'rl-gone' }, 'Original message was deleted'));
+  else {
+    const nm = el('span', { className: 'rl-name' }, '@' + to.user.name); nm.style.setProperty('--who', nameColor(to.user));
+    line.append(avatarEl(face(to.user), { size: 16 }), nm, el('span', { className: 'rl-text' }, to.text ? plainText(to.text, ctx) : to.files ? 'Click to see attachment' : 'Click to see message'));
+    line.onclick = () => jumpTo(to.id);
+  }
+  return line;
+}
+function jumpTo(id) {
+  const n = $('#content').querySelector(`.msg[data-id="${CSS.escape(id)}"]`);
+  if (!n) return toast('That message isn’t loaded any more.');
+  n.scrollIntoView({ block: 'center', behavior: prefs.reduceMotion ? 'auto' : 'smooth' });
+  n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash');
+}
+// a call in a DM's history: who started it and how long it went on (with Join while it's still going)
+function callNode(m) {
+  const c = m.call, going = !c.ended && Date.now() - c.ts < 6 * 3600000, mineNow = call && call.callId === c.id;
+  const who = c.mine ? 'You' : c.by.name;
+  return el('div', { className: 'msg system' },
+    el('span', { className: 'sys-ic' + (going ? ' live' : '') }, icon(going ? 'phone' : c.mine ? 'phone' : 'phoneIn', 18)),
+    el('div', { className: 'body' }, el('span', { className: 'sys-text' }, el('b', {}, who), c.ended ? ` started a call that lasted ${lasted(c.ended - c.ts)}.` : ' started a call.'),
+      el('span', { className: 'when' }, when(c.ts)),
+      going && !mineNow ? el('button', { className: 'btn small green', onclick: () => joinDMCall(c) }, 'Join Call') : null));
+}
+// grey stand-ins while a conversation loads, like Discord's
+function skeleton() {
+  const row = (w) => el('div', { className: 'sk-row' }, el('span', { className: 'sk-av' }), el('div', { className: 'sk-lines' }, el('i', { style: `width:${w[0]}%` }), el('i', { style: `width:${w[1]}%` })));
+  return el('div', { className: 'skeleton' }, ...[[18, 62], [24, 44], [14, 70], [20, 36], [28, 58]].map(row));
+}
+// ---------- attachments in a message ----------
+function attachmentsNode(m) {
+  const files = (m.files || []).filter((f) => f && (f.path || f.data));
+  if (!files.length) return null;
+  const box = el('div', { className: 'atts' });
+  const pics = files.filter((f) => f.kind === 'image');
+  if (pics.length) box.append(el('div', { className: 'pics n' + Math.min(pics.length, 4) }, ...pics.map(pictureNode)));
+  for (const f of files) {
+    if (f.kind === 'voice') box.append(voicePlayer(f, (p) => Store.fileUrl(p)));
+    else if (f.kind === 'video') box.append(videoNode(f));
+    else if (f.kind !== 'image') box.append(fileCard(f));
+  }
+  return box;
+}
+function pictureNode(f) {
+  const img = el('img', { alt: f.name || 'picture', loading: 'lazy' });
+  if (f.w && f.h) img.style.aspectRatio = `${f.w} / ${f.h}`;
+  const a = el('button', { className: 'pic', title: f.name || '', onclick: () => lightbox(f, img.src) }, img);
+  if (f.data) img.src = safeImg(f.data);
+  else Store.fileUrl(f.path).then((u) => { img.src = u; }, () => a.classList.add('broken'));
+  return a;
+}
+function videoNode(f) {
+  const v = el('video', { controls: true, preload: 'metadata', playsInline: true });
+  Store.fileUrl(f.path).then((u) => { v.src = u; }, () => {});
+  return el('div', { className: 'vid' }, v);
+}
+function fileCard(f) {
+  const get = async () => { const u = await attempt(() => Store.downloadUrl(f.path, f.name || 'file')); if (u) { const a = el('a', { href: u, download: f.name || '', rel: 'noopener' }); document.body.append(a); a.click(); a.remove(); } };
+  return el('div', { className: 'filecard' }, el('span', { className: 'fc-ic' }, icon('file', 30)),
+    el('div', { className: 'fc-what' }, el('button', { className: 'fc-name', onclick: get, title: 'Download' }, f.name || 'file'), el('div', { className: 'fc-size' }, fileSize(f.size || 0))),
+    el('button', { className: 'fc-dl', title: 'Download', onclick: get }, icon('download', 20)));
+}
+function lightbox(f, src) {
+  if (!src) return;
+  const shut = () => { box.remove(); removeEventListener('keydown', esc); };
+  const esc = (e) => { if (e.key === 'Escape') shut(); };
+  const box = el('div', { className: 'lightbox', onclick: (e) => { if (e.target === box) shut(); } },
+    el('img', { src, alt: f.name || '' }),
+    el('div', { className: 'lb-bar' }, el('a', { href: src, target: '_blank', rel: 'noopener noreferrer' }, 'Open in Browser'), el('button', { onclick: shut }, 'Close')));
+  document.body.append(box); addEventListener('keydown', esc);
+}
+// link previews (Fluentdat invites, GitHub, YouTube), up to three a message
+const embedOpts = {
+  inviteInfo: (code) => (Store.kind === 'supabase' ? Store.inviteInfo(code) : null),
+  join: async (code) => { await joinServer(code); return Store.kind === 'supabase'; },
+  open: (id) => go(id), paint, safeImg, iconFor: (n) => (ICON[n] ? icon(n, 30) : null),
+  get signedIn() { return Store.kind === 'supabase'; },
+};
+function embedsNode(m) {
+  if (prefs.embeds === 'off' || !m.text || m.sending) return null;
+  const nodes = linksIn(m.text).slice(0, 3).map((u) => embed(u, embedOpts)).filter(Boolean);
+  return nodes.length ? el('div', { className: 'embeds' }, ...nodes) : null;
+}
+// spoilers show when clicked; @mentions open the person's profile
+$('#content').addEventListener('click', (e) => {
+  const sp = e.target.closest('.spoiler'); if (sp) { sp.classList.add('shown'); return; }
+  const mn = e.target.closest('.mention[data-uid]'); if (mn) { const p = Store.person && Store.person(mn.dataset.uid); if (p) showProfile(p, mn); }
+  const ch = e.target.closest('.mention[data-cid]'); if (ch) { const c = Store.channel(ch.dataset.cid); if (c) { view = 'server'; serverId = c.server; openChannel(c); } }
+});
 // the top of a conversation, as on Discord: who it's with, or which channel this is
 function startHeader() {
   if (prefs.startHeaders === 'off') return null;
   if (view === 'home') {
+    const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
+    if (d && d.kind === 'group') return { key: 'g:' + dmName(d) + d.icon.length, make: () => el('div', { className: 'start' }, dmAvatar(d, 80), el('h2', {}, dmName(d)),
+      el('p', {}, 'Welcome to the beginning of the ', el('b', {}, dmName(d)), ' group.'),
+      el('div', { className: 'start-acts' }, el('button', { className: 'btn small', onclick: () => addPeopleFlow() }, icon('usersPlus', 15), 'Add Friends'), el('button', { className: 'btn small', onclick: () => renameGroup(d) }, icon('edit', 15), 'Rename'))) };
     const u = Store.dmUser(dmId); if (!u) return null;
-    const friend = Store.friends().some((f) => f.id === u.id), mutual = Store.mutualServers(u.id);
-    return el('div', { className: 'start' }, avatarEl(u, { size: 80 }), el('h2', {}, u.name), u.login ? el('div', { className: 'start-handle' }, u.login) : null,
+    const st = friendState(u), mutual = Store.mutualServers(u.id);
+    return { key: ['dm', u.id, u.name, String(u.avatar || '').length, st, mutual].join(':'), make: () => el('div', { className: 'start' }, avatarEl(u, { size: 80 }), el('h2', {}, u.name), u.login ? el('div', { className: 'start-handle' }, u.login) : null,
       el('p', {}, 'This is the beginning of your direct message history with ', el('b', {}, u.name), '.'),
-      u.bot ? null : el('div', { className: 'start-acts' }, mutual ? el('span', { className: 'muted' }, `${mutual} Mutual Server${mutual === 1 ? '' : 's'}`) : null,
-        el('button', { className: 'btn small', onclick: () => (friend ? unfriend(u) : befriend(u)) }, friend ? 'Remove Friend' : 'Add Friend')));
+      u.bot ? null : el('div', { className: 'start-acts' }, mutual ? el('span', { className: 'muted' }, `${mutual} Mutual Server${mutual === 1 ? '' : 's'}`) : null, friendButton(u))) };
   }
   const c = Store.channel(channelId); if (!c) return null;
   const name = (c.kind === 'voice' ? '' : '#') + c.name;
-  return el('div', { className: 'start' }, el('div', { className: 'start-ic' }, icon(c.kind === 'voice' ? 'volume' : 'hash', 40)), el('h2', {}, `Welcome to ${name}!`), el('p', {}, `This is the start of the ${name} channel.`));
+  return { key: 'c:' + c.id + name, make: () => el('div', { className: 'start' }, el('div', { className: 'start-ic' }, icon(c.kind === 'voice' ? 'volume' : 'hash', 40)), el('h2', {}, `Welcome to ${name}!`), el('p', {}, `This is the start of the ${name} channel.`)) };
 }
 
 // ---------- the main content ----------
 function renderContent() {
   const content = $('#content'), composer = $('#composer');
+  renderCall();
   if (view === 'discover') {
     const key = 'discover:' + discoverCat;
     if (content.dataset.key !== key) { content.replaceChildren(discoverPage()); content.dataset.key = key; }
@@ -379,15 +692,22 @@ function renderContent() {
     content.replaceChildren(el('div', { className: 'empty-note' }, Store.syncState().loading ? 'Loading your servers…' : 'No channel here yet. Make one from the server menu.'));
     content.dataset.key = ''; composer.hidden = true; return;
   }
-  Store.setActive(view === 'home' ? 'dm' : 'channel', view === 'home' ? dmId : channelId);   // (what to load and keep live)
+  const place = view === 'home' ? dmId : channelId;
+  Store.setActive(view === 'home' ? 'dm' : 'channel', place);   // (what to load and keep live)
   const msgs = view === 'home' ? Store.dm(dmId) : Store.messages(channelId);
   // stay where you were reading, unless you were at the bottom already or this is a different conversation
-  const key = view + ':' + (view === 'home' ? dmId : channelId), same = content.dataset.key === key;
+  const key = view + ':' + place, same = content.dataset.key === key;
   if (key !== searchKey) { searchKey = key; if (searchQ || searchOpen) { searchQ = ''; searchOpen = false; searchField.value = ''; renderTop(); } }
+  if (!same) newLine = { place, at: Store.kind === 'supabase' && Store.unread(place).unread ? Store.readAt(place) : 0 };      // (the red NEW line: where you'd read up to)
   const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 80, was = content.scrollTop;
   const whole = Store.kind !== 'supabase' || msgs.length < 300;            // (the start banner only when the start is loaded)
-  content.replaceChildren(messageList(msgs, whole && !searchQ ? startHeader() : null)); content.dataset.key = key;
-  const name = view === 'home' ? (Store.dmUser(dmId) || {}).name : (ch.kind === 'voice' ? '' : '#') + ch.name;
+  let wrap = same ? content.querySelector(':scope > .msgs') : null;
+  if (!wrap) { wrap = el('div', { className: 'msgs' }); content.replaceChildren(wrap); }
+  fillMessages(wrap, msgs, place, whole && !searchQ ? startHeader() : null);
+  content.dataset.key = key;
+  if (Store.kind === 'supabase' && document.visibilityState === 'visible' && document.hasFocus() && Store.unread(place).unread) Store.markRead(place);
+  const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
+  const name = view === 'home' ? (d ? (d.kind === 'group' ? dmName(d) : '@' + d.user.name) : '') : (ch.kind === 'voice' ? '' : '#') + ch.name;
   $('#input').placeholder = 'Message ' + name;
   composer.hidden = false;
   renderComposer();
@@ -398,8 +718,9 @@ const CB = {};
 function composerBtn(id) {
   if (CB[id]) return CB[id];
   const make = (ic, title, onclick) => { const b = el('button', { className: 'tool', title, onclick }); b.append(icon(ic)); return b; };
-  if (id === 'upload') CB[id] = make('plusCircle', 'Send a picture', () => pickFile(sendPicture));
+  if (id === 'upload') CB[id] = make('plusCircle', 'Upload a File', () => pickFiles(addFiles));
   if (id === 'emoji') CB[id] = make('smile', 'Emoji', (e) => { e.stopPropagation(); togglePicker('emoji'); });
+  if (id === 'voice') CB[id] = make('mic', 'Record a Voice Message', () => startVoice());
   if (id === 'sticker') CB[id] = $('#sticker-btn');
   if (id === 'send') CB[id] = $('#send-btn');
   CB[id].dataset.btn = id;
@@ -410,10 +731,44 @@ function renderComposer() {
   for (const id of ordered('composer')) { if (id === 'input') parts.push($('#input')); else if (shown(id)) parts.push(composerBtn(id)); }
   const same = parts.length === box.children.length && parts.every((p, i) => box.children[i] === p);
   if (!same) box.replaceChildren(...parts);
+  renderComposerExtras();
 }
-async function sendPicture(file) {
-  try { postMine({ sticker: { kind: 'img', data: await shrink(file, 1280, 1280, 380000), photo: true } }); }
-  catch (e) { toast(String((e && e.message) || 'Couldn’t read that picture.')); }
+// above the message box: who you're replying to, and the attachments waiting to go
+function renderComposerExtras() {
+  const place = placeNow(), d = place ? draft(place) : { files: [], reply: null };
+  const rb = $('#reply-bar');
+  if (d.reply) {
+    const nm = el('b', {}, d.reply.name); nm.style.color = d.reply.color || '';
+    rb.replaceChildren(el('span', { className: 'grow' }, 'Replying to ', nm), el('button', { title: 'Stop replying', onclick: () => { d.reply = null; renderComposerExtras(); } }, icon('x', 16)));
+    rb.hidden = false;
+  } else { rb.hidden = true; rb.replaceChildren(); }
+  const tray = $('#attach-tray');
+  if (d.files.length) { tray.replaceChildren(...d.files.map(pendingCard)); tray.hidden = false; } else { tray.hidden = true; tray.replaceChildren(); }
+  $('#composer').classList.toggle('has-top', !rb.hidden || !tray.hidden);
+}
+function pendingCard(f) {
+  const card = el('div', { className: 'pend' + (f.progress != null ? ' up' : '') },
+    f.kind === 'image' ? el('div', { className: 'pend-pic' }, el('img', { src: f.url, alt: '' })) : el('div', { className: 'pend-pic ic' }, icon(f.kind === 'video' ? 'video' : 'file', 38)),
+    el('div', { className: 'pend-name', title: f.name }, f.name),
+    el('div', { className: 'pend-size' }, fileSize(f.size || 0)),
+    f.progress != null ? el('div', { className: 'pend-prog' }, el('i', { style: `width:${Math.round(f.progress * 100)}%` })) : null,
+    f.progress == null ? el('button', { className: 'pend-x', title: 'Remove Attachment', onclick: () => removeFile(f) }, icon('trash', 16)) : null);
+  card.dataset.id = f.id;
+  return card;
+}
+function removeFile(f) { const d = draft(placeNow()); d.files = d.files.filter((x) => x !== f); if (f.url) URL.revokeObjectURL(f.url); renderComposerExtras(); }
+// files dropped, pasted or picked: they wait in the message box until you send (nothing goes by itself)
+function addFiles(list) {
+  const place = placeNow(); if (!place || $('#composer').hidden) return;
+  const d = draft(place), live = Store.kind === 'supabase';
+  for (const file of list) {
+    if (d.files.length >= 10) { toast('You can attach up to 10 files at a time.'); break; }
+    const kind = isImage(file.type) ? 'image' : isVideo(file.type) ? 'video' : 'file';
+    if (live && file.size > 10 * 1048576) { toast(`${file.name || 'That file'} is bigger than 10 MB.`); continue; }
+    if (!live && kind !== 'image') { toast('Sign in to send files. (Signed out, you can still send pictures.)'); continue; }
+    d.files.push({ id: crypto.randomUUID(), file, kind, name: file.name || (kind === 'image' ? 'image.png' : 'file'), size: file.size || 0, url: kind === 'image' ? URL.createObjectURL(file) : '' });
+  }
+  renderComposerExtras(); $('#input').focus();
 }
 
 // ---------- members ----------
@@ -424,6 +779,15 @@ function memberList() {
 }
 function renderMembers() {
   const box = $('#members');
+  const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null;
+  if (g && g.kind === 'group') {
+    if (!showMembers) return box.replaceChildren();
+    const row = (m) => { const nm = el('div', { className: 'nm' }, m.name, m.id === g.owner ? roleMark('crown', 'Group owner') : null);
+      return plateOn(el('button', { className: 'mem' + (m.status && m.status !== 'offline' ? '' : ' off'), onclick: (e) => showProfile(m, e.currentTarget), oncontextmenu: (e) => { e.preventDefault(); memberCtx(m, e.clientX, e.clientY); } }, avatarEl(m), el('div', { className: 'who' }, nm)), m.plate); };
+    box.replaceChildren(el('div', { className: 'mem-cat' }, `Members — ${g.people.length}`), ...g.people.map(row),
+      el('button', { className: 'btn small wide', style: 'margin-top:12px', onclick: () => addPeopleFlow() }, icon('usersPlus', 15), 'Add Friends'));
+    return;
+  }
   if (view === 'home' && dmId && prefs.dmPanel) { const u = Store.dmUser(dmId); box.replaceChildren(u ? dmPanel(u) : ''); return; }
   if (view !== 'server' || !showMembers) { box.replaceChildren(); return; }
   const all = memberList(), isOn = (m) => m.status && m.status !== 'offline' && m.status !== 'invisible';
@@ -455,6 +819,7 @@ function dmPanel(u) {
   if (u.since) box.append(el('div', { className: 'dp-sec' }, el('h4', {}, 'Member Since'), el('div', {}, new Date(u.since).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))));
   const mutual = Store.mutualServers(u.id);
   if (mutual) box.append(el('div', { className: 'dp-sec' }, el('div', { className: 'muted' }, `${mutual} Mutual Server${mutual === 1 ? '' : 's'}`)));
+  const fb = friendButton(u); if (fb) box.append(el('div', { className: 'dp-sec' }, fb));
   if (!u.banner && u.id) Store.profileFull(u.id).then((p) => { if (p && p.banner) setBanner(banner, p.banner, u.color); }, () => {});
   return box;
 }
@@ -462,15 +827,22 @@ function dmPanel(u) {
 const roleMark = (ic, title) => { const s = el('span', { className: 'role-mark', title }); s.append(icon(ic, 13)); return s; };
 function renderAll() {
   ensureSelection(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner();
+  const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null, groupOn = !!g && g.kind === 'group' && showMembers;
   const dmPanelOn = view === 'home' && !!dmId && prefs.dmPanel && !!Store.dmUser(dmId);
-  $('#app').classList.toggle('show-members', (showMembers && view === 'server') || dmPanelOn);
+  $('#app').classList.toggle('show-members', (showMembers && view === 'server') || dmPanelOn || groupOn);
   $('#app').classList.toggle('dm-mode', dmPanelOn);
   applyLayout();
+  // the tab's title counts what's waiting for you: pings, unread DMs and friend requests
+  let n = Store.friendRequests().incoming.length;
+  for (const d of Store.dmList()) n += dmUnread(d.id);
+  for (const sv of Store.servers()) n += serverUnread(sv.id).mentions;
+  document.title = (n ? `(${n > 99 ? '99+' : n}) ` : '') + 'Fluentdat';
 }
 function renderBanner() {
   const b = $('#banner'), st = Store.syncState(), acc = Store.account();
   b.replaceChildren();
   if (Store.resuming) b.append('Signing you in…');
+  else if (Store.kind === 'supabase' && Store.needsSetup() && !st.error) { b.append('Run the newest supabase/setup.sql in Supabase to turn on calls, voice messages, files, group DMs and friend requests. '); b.append(el('a', { href: '#' }, 'How')); b.onclick = (e) => { e.preventDefault(); setupHelp(); }; return; }
   else if (Store.kind === 'supabase') b.append(st.error ? `Trouble: ${st.error}` : `Live, signed in as @${acc.login}`);
   else if (acc) {
     const when = st.lastSync ? 'synced ' + new Date(st.lastSync).toLocaleTimeString() : 'syncing…';
@@ -479,52 +851,116 @@ function renderBanner() {
   b.onclick = () => (acc || Store.resuming ? openUserSettings('sync') : signInDialog());
 }
 
+// what to do in Supabase to turn the new things on
+function setupHelp() {
+  const m = modal({ title: 'One step in Supabase', sub: 'Fluentdat’s database needs its newest rules for calls, voice messages, attachments, group DMs, friend requests and unread counts.',
+    body: [el('div', { className: 'note-box' }, el('ol', {},
+      el('li', {}, 'Open your project at ', el('a', { href: 'https://supabase.com/dashboard', target: '_blank', rel: 'noopener noreferrer' }, 'supabase.com/dashboard'), '.'),
+      el('li', {}, 'SQL Editor → New query.'),
+      el('li', {}, 'Paste all of ', el('a', { href: 'https://github.com/TrixWotel/Fluentdat/blob/main/supabase/setup.sql', target: '_blank', rel: 'noopener noreferrer' }, 'supabase/setup.sql'), ' and click Run (it should say “Success. No rows returned”).'),
+      el('li', {}, 'Come back here and reload.')),
+      el('div', { style: 'margin-top:8px' }, 'It’s safe to run again: it keeps everything that’s already there.'))],
+    actions: [el('button', { className: 'btn', textContent: 'Copy the link to setup.sql', onclick: () => copyText('https://github.com/TrixWotel/Fluentdat/blob/main/supabase/setup.sql', 'Link copied.') }),
+      el('button', { className: 'btn primary', textContent: 'Got it', onclick: () => m.close() })] });
+}
+
 // ---------- friends page ----------
+let friendSearch = '';
 function friendsPage() {
-  const wrap = el('div', { className: 'friends' });
-  const tabs = el('div', { className: 'ftabs' }, ...[['online', 'Online'], ['all', 'All'], ['add', 'Add Friend']].map(([id, label]) =>
-    el('button', { className: 'ftab' + (friendsTab === id ? ' on' : '') + (id === 'add' ? ' add' : ''), onclick: () => { friendsTab = id; renderContent(); } }, label)));
-  wrap.append(tabs);
+  const live = Store.kind === 'supabase', req = Store.friendRequests();
+  const tab = (id, label, n) => el('button', { className: 'ftab' + (friendsTab === id ? ' on' : '') + (id === 'add' ? ' add' : ''), onclick: () => { friendsTab = id; if (live) Store.refreshFriends(); renderContent(); } },
+    label, n ? el('span', { className: 'mbadge' }, String(n)) : null);
   const body = el('div', { className: 'fbody' });
-  if (friendsTab === 'add' && Store.kind === 'supabase') {
-    const inp = el('input', { placeholder: 'Their @handle, like @alex_robotics', autocapitalize: 'off', spellcheck: false });
-    const go = el('button', { className: 'btn primary' }, 'Add Friend');
-    const add = async () => {
-      const u = inp.value.trim(); if (!u) return;
-      go.disabled = true;
-      const f = await attempt(() => Store.addFriendByHandle(u));
-      go.disabled = false;
-      if (!f) return;
-      inp.value = ''; toast(`Added @${f.login}. They can message you now.`); friendsTab = 'all'; renderContent();
-    };
-    go.onclick = add;
-    inp.onkeydown = (e) => { if (e.key === 'Enter') add(); };
-    const mine = (Store.account() || {}).login;
-    body.append(el('h4', {}, 'Add Friend'),
-      el('div', { style: 'color:var(--muted);margin-bottom:4px' }, 'Type their exact @handle (there’s no list of everyone to browse). Adding someone lets them message you.'),
-      el('div', { className: 'add-form' }, inp, go),
-      mine ? el('div', { style: 'color:var(--muted);margin-top:18px;font-size:.9rem' }, 'Your handle is ', el('b', { style: 'color:var(--bright)' }, '@' + mine), '. ',
-        el('a', { href: '#', style: 'color:var(--accent)', onclick: (e) => { e.preventDefault(); copyText('@' + mine, 'Handle copied.'); } }, 'Copy it')) : null);
-    setTimeout(() => inp.focus(), 0);
-  } else if (friendsTab === 'add') {
+  if (friendsTab === 'pending' && !live) friendsTab = 'online';
+  if (friendsTab === 'add') body.append(...addFriendPane());
+  else if (friendsTab === 'pending') body.append(...pendingPane(req));
+  else body.append(...friendListPane());
+  return el('div', { className: 'friends' },
+    el('div', { className: 'ftabs' }, el('span', { className: 'ft-title' }, icon('users', 20), 'Friends'), el('span', { className: 'ft-sep' }),
+      tab('online', 'Online'), tab('all', 'All'), live ? tab('pending', 'Pending', req.incoming.length) : null, tab('add', 'Add Friend')),
+    body);
+}
+function friendListPane() {
+  let list = Store.friends();
+  if (friendsTab === 'online') list = list.filter((f) => f.status && f.status !== 'offline' && f.status !== 'invisible');
+  const rows = el('div', {});
+  const q = el('input', { type: 'search', className: 'f-search', placeholder: 'Search', value: friendSearch });
+  const draw = () => {
+    const s = friendSearch.toLowerCase(), hits = list.filter((f) => !s || String(f.name || '').toLowerCase().includes(s) || String(f.login || '').toLowerCase().includes(s));
+    if (!list.length) return rows.replaceChildren(el('div', { className: 'empty-note' }, friendsTab === 'online' ? 'No one’s around to play with right now.' : 'No friends yet. Add someone from the Add Friend tab.'));
+    rows.replaceChildren(el('h4', {}, `${friendsTab === 'online' ? 'Online' : 'All Friends'} — ${hits.length}`), ...hits.map((f) => {
+      const more = (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu([
+        Store.kind === 'supabase' && { label: 'Start Video Call', icon: 'video', action: async () => { if (await openDM(f)) startDMCall(true); } },
+        Store.kind === 'supabase' && { label: 'Start Voice Call', icon: 'phone', action: async () => { if (await openDM(f)) startDMCall(false); } },
+        { label: 'Remove Friend', danger: true, action: () => unfriend(f) }], r.left - 150, r.bottom + 4); };
+      return el('div', { className: 'frow', onclick: () => openDM(f), oncontextmenu: (e) => { e.preventDefault(); memberCtx(f, e.clientX, e.clientY); } },
+        avatarEl(f, { size: 40 }), el('div', { className: 'grow' }, el('div', { className: 'nm' }, f.name, f.login ? el('span', { className: 'handle' }, ' ' + f.login) : null),
+          el('div', { className: 'st2' }, f.bot ? 'Bot' : ({ online: 'Online', idle: 'Idle', dnd: 'Do Not Disturb' }[f.status] || 'Offline'))),
+        el('div', { className: 'acts' }, el('button', { title: 'Message', onclick: (e) => { e.stopPropagation(); openDM(f); } }, icon('message', 18)), el('button', { title: 'More', onclick: more }, icon('more', 18))));
+    }));
+  };
+  q.oninput = () => { friendSearch = q.value.trim(); draw(); };
+  draw();
+  return list.length ? [q, rows] : [rows];
+}
+function pendingPane(req) {
+  if (!req.incoming.length && !req.outgoing.length) return [el('div', { className: 'empty-note' }, 'There are no pending friend requests. Here’s a friend you could add: someone you sit next to.')];
+  const row = (u, incoming) => el('div', { className: 'frow', oncontextmenu: (e) => { e.preventDefault(); memberCtx(u, e.clientX, e.clientY); } },
+    avatarEl(u, { size: 40 }), el('div', { className: 'grow' }, el('div', { className: 'nm' }, u.name, u.login ? el('span', { className: 'handle show' }, ' ' + u.login) : null),
+      el('div', { className: 'st2' }, incoming ? 'Incoming Friend Request' : 'Outgoing Friend Request')),
+    el('div', { className: 'acts' },
+      incoming ? el('button', { className: 'ok', title: 'Accept', onclick: async () => { if ((await attempt(() => Store.acceptFriend(u.id))) !== null) toast(`You and ${u.name} are now friends!`); renderAll(); } }, icon('check', 18)) : null,
+      el('button', { className: 'no', title: incoming ? 'Ignore' : 'Cancel', onclick: async () => { await attempt(() => (incoming ? Store.ignoreFriend(u.id) : Store.cancelFriend(u.id))); renderAll(); } }, icon('x', 18))));
+  return [el('h4', {}, `Pending — ${req.incoming.length + req.outgoing.length}`), ...req.incoming.map((u) => row(u, true)), ...req.outgoing.map((u) => row(u, false))];
+}
+function addFriendPane() {
+  if (Store.kind !== 'supabase') {
     const inp = el('input', { placeholder: 'Enter a username to add' });
-    const add = () => { const u = inp.value.trim(); if (!u) return; Store.addFriend({ id: 'u_' + u.toLowerCase(), name: u, color: COLORS[Math.floor(Math.random() * COLORS.length)], status: 'offline' }); inp.value = ''; toast(`Added ${u} locally. Real friend requests come with accounts.`); friendsTab = 'all'; renderContent(); };
+    const add = () => { const u = inp.value.trim(); if (!u) return; Store.addFriend({ id: 'u_' + u.toLowerCase(), name: u, color: COLORS[Math.floor(Math.random() * COLORS.length)], status: 'offline' }); inp.value = ''; toast(`Added ${u} in this browser. Sign in to send real friend requests.`); friendsTab = 'all'; renderContent(); };
     inp.onkeydown = (e) => { if (e.key === 'Enter') add(); };
-    body.append(el('h4', {}, 'Add Friend'), el('div', { style: 'color:var(--muted);margin-bottom:4px' }, 'You can add anyone by their username. (For now this is local — friend requests sync once accounts land.)'), el('div', { className: 'add-form' }, inp, el('button', { className: 'btn primary', onclick: add }, 'Send Request')));
-  } else {
-    let list = Store.friends();
-    if (friendsTab === 'online') list = list.filter((f) => f.status && f.status !== 'offline' && f.status !== 'invisible');
-    if (!list.length) body.append(el('div', { className: 'empty-note' }, friendsTab === 'online' ? 'No friends online right now.' : 'No friends yet — add someone from the Add Friend tab.'));
-    else { body.append(el('h4', {}, `${friendsTab === 'online' ? 'Online' : 'All Friends'} — ${list.length}`));
-      for (const f of list) {
-        const msg = el('button', { title: 'Message', onclick: () => openDM(f) }, icon('message', 18));
-        const rm = el('button', { title: 'Remove friend', onclick: () => unfriend(f) }, icon('x', 18));
-        body.append(el('div', { className: 'frow', oncontextmenu: (e) => { e.preventDefault(); memberCtx(f, e.clientX, e.clientY); } }, avatarEl(f, { size: 40 }), el('div', {}, el('div', { className: 'nm' }, f.name), el('div', { className: 'st2' }, f.bot ? 'Bot' : (f.status === 'offline' ? 'Offline' : 'Online'))), el('div', { className: 'acts' }, msg, rm)));
-      }
-    }
+    return [el('h4', {}, 'Add Friend'), el('div', { className: 'f-hint' }, 'Signed out, friends are kept in this browser. Sign in to send people real friend requests.'),
+      el('div', { className: 'add-form' }, inp, el('button', { className: 'btn primary', onclick: add }, 'Add'))];
   }
-  wrap.append(body);
-  return wrap;
+  const inp = el('input', { placeholder: 'You can add friends with their @handle.', autocapitalize: 'off', spellcheck: false });
+  const go = el('button', { className: 'btn primary', disabled: true }, 'Send Friend Request');
+  const note = el('div', { className: 'f-note' }), form = el('div', { className: 'add-form big' }, inp, go);
+  inp.oninput = () => { go.disabled = !inp.value.trim(); form.classList.remove('good', 'bad'); note.textContent = ''; };
+  const add = async () => {
+    const h = inp.value.trim(); if (!h) return;
+    go.disabled = true;
+    try {
+      const f = await Store.addFriendByHandle(h);
+      form.classList.add('good'); note.className = 'f-note good';
+      note.textContent = f.state === 'accepted' ? `You and ${f.name} are now friends!` : `Success! Your friend request to ${f.name} was sent.`;
+      inp.value = '';
+    } catch (e) { form.classList.add('bad'); note.className = 'f-note bad'; note.textContent = String((e && e.message) || e); }
+    go.disabled = !inp.value.trim();
+  };
+  go.onclick = add;
+  inp.onkeydown = (e) => { if (e.key === 'Enter') add(); };
+  const mine = (Store.account() || {}).login;
+  setTimeout(() => inp.focus(), 0);
+  return [el('h4', { className: 'f-big' }, 'Add Friend'), el('div', { className: 'f-hint' }, 'You can add friends with their Fluentdat @handle. (There’s no list of everyone to browse.)'), form, note,
+    mine ? el('div', { className: 'f-hint', style: 'margin-top:18px' }, 'Your handle is ', el('b', { style: 'color:var(--bright)' }, '@' + mine), '. ',
+      el('a', { href: '#', style: 'color:var(--accent)', onclick: (e) => { e.preventDefault(); copyText('@' + mine, 'Handle copied.'); } }, 'Copy it')) : null];
+}
+// where you stand with someone: 'friend', 'incoming' (they asked you), 'outgoing' (you asked them) or 'none'
+const friendState = (u) => (!u || isMe(u) || u.bot ? 'self' : Store.kind === 'supabase' ? Store.friendState(u.id) : Store.friends().some((f) => f.id === (u.id || 'u_' + String(u.name).toLowerCase())) ? 'friend' : 'none');
+function friendButton(u, small = true) {
+  const st = friendState(u), cls = 'btn' + (small ? ' small' : '');
+  if (st === 'self') return null;
+  if (st === 'friend') return el('button', { className: cls, onclick: () => unfriend(u) }, 'Remove Friend');
+  if (st === 'outgoing') return el('button', { className: cls, title: 'Click to cancel the request', onclick: async () => { await attempt(() => Store.cancelFriend(u.id)); renderAll(); } }, 'Friend Request Sent');
+  if (st === 'incoming') return el('button', { className: cls + ' green', onclick: async () => { if ((await attempt(() => Store.acceptFriend(u.id))) !== null) toast(`You and ${u.name} are now friends!`); renderAll(); } }, 'Accept Friend Request');
+  return el('button', { className: cls + ' primary', onclick: () => befriend(u) }, icon('personAdd', 15), 'Add Friend');
+}
+function friendItem(u) {
+  const st = friendState(u);
+  if (st === 'self') return null;
+  if (st === 'friend') return { label: 'Remove Friend', action: () => unfriend(u) };
+  if (st === 'outgoing') return { label: 'Cancel Friend Request', action: async () => { await attempt(() => Store.cancelFriend(u.id)); renderAll(); } };
+  if (st === 'incoming') return { label: 'Accept Friend Request', icon: 'check', action: async () => { if ((await attempt(() => Store.acceptFriend(u.id))) !== null) toast(`You and ${u.name} are now friends!`); renderAll(); } };
+  return { label: 'Add Friend', icon: 'personAdd', action: () => befriend(u) };
 }
 
 // ---------- popouts ----------
@@ -558,9 +994,10 @@ function showProfile(user, anchor) {
       const text = say.value.trim(); closePop();
       if (await openDM(normFriend(u))) postMine({ text });
     };
-    const friend = Store.friends().some((f) => f.id === (u.id || 'u_' + String(u.name).toLowerCase()));
+    const fb = friendState(u) === 'friend' ? null : friendButton(u);
+    if (fb) fb.addEventListener('click', closePop);
     inner.append(el('div', { className: 'pmsg' }, say), el('div', { className: 'pacts' },
-      friend ? null : el('button', { className: 'btn small', onclick: () => { closePop(); befriend(u); } }, icon('personAdd', 15), 'Add Friend'),
+      fb,
       el('button', { className: 'btn small', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); closePop(); memberCtx(u, r.left, r.bottom + 4); } }, icon('more', 16))));
   }
   pop = el('div', { className: 'pop prof' }, banner, inner);
@@ -595,12 +1032,142 @@ function statusMenu() {
 // ---------- sending, commands, bot ----------
 function target() { return view === 'home' ? { send: (m) => Store.sendDM(dmId, m), bot: (Store.dmUser(dmId) || {}).bot } : { send: (m) => Store.send(channelId, m), bot: false }; }
 const postMine = (extra) => target().send({ user: stamp(), ...extra });
-function send() {
-  const inp = $('#input'), raw = inp.value.trim(); if (!raw) return;
-  inp.value = ''; inp.style.height = 'auto';
-  if (raw.startsWith('/') && view === 'server') return runCommand(raw.slice(1));
-  postMine({ text: raw });
-  if (view === 'server') botReplies(raw); else if (target().bot) dmBot(raw);
+let uploading = false;
+async function send() {
+  const inp = $('#input'), raw = inp.value.trim(), place = placeNow();
+  if (!place) return;
+  const d = draft(place), files = d.files.slice();
+  if (!raw && !files.length) return;
+  if (uploading) return toast('Still sending your files…');
+  if (raw.startsWith('/') && view === 'server' && !files.length) { inp.value = ''; inp.style.height = 'auto'; return runCommand(raw.slice(1)); }
+  const where = { dm: view === 'home', id: place }, reply = d.reply ? d.reply.id : null, text = withMentions(raw);
+  const post = (msg) => (where.dm ? Store.sendDM(where.id, { user: stamp(), ...msg }) : Store.send(where.id, { user: stamp(), ...msg }));
+  inp.value = ''; inp.style.height = 'auto'; d.reply = null; closeMentions();
+  if (newLine.place === place) newLine = { place: null, at: 0 };
+  if (!files.length) { post({ text, reply }); renderComposerExtras(); if (view === 'server') botReplies(raw); else if (target().bot) dmBot(raw); return; }
+  // signed out: pictures go along as photo stickers in this browser
+  if (Store.kind !== 'supabase') {
+    d.files = []; renderComposerExtras();
+    for (const f of files) { try { post({ sticker: { kind: 'img', data: await shrink(f.file, 1280, 1280, 380000), photo: true } }); } catch (e) { toast(String((e && e.message) || 'Couldn’t read that picture.')); } finally { if (f.url) URL.revokeObjectURL(f.url); } }
+    if (text) post({ text, reply });
+    return;
+  }
+  uploading = true;
+  const out = [];
+  try {
+    for (const f of files) {
+      f.progress = 0; renderComposerExtras();
+      const extra = f.kind === 'image' ? { kind: 'image', ...(await pictureSize(f.file)) } : { kind: f.kind };
+      out.push(await Store.uploadFile(where, f.file, (x) => { f.progress = x; const bar = document.querySelector(`#attach-tray .pend[data-id="${f.id}"] .pend-prog i`); if (bar) bar.style.width = Math.round(x * 100) + '%'; }, extra));
+    }
+  } catch (e) {
+    uploading = false;
+    for (const f of files) f.progress = null;
+    if (!inp.value) inp.value = raw;
+    toast(String((e && e.message) || e)); renderComposerExtras();
+    return;
+  }
+  uploading = false;
+  d.files = d.files.filter((f) => !files.includes(f));
+  for (const f of files) if (f.url) URL.revokeObjectURL(f.url);
+  post({ text: text || null, reply, files: out });
+  renderComposerExtras();
+}
+// @handle → <@their id>, for the people who can see this conversation (what Discord does when you pick someone)
+function withMentions(raw) {
+  if (Store.kind !== 'supabase' || !raw.includes('@')) return raw;
+  const ids = new Map(mentionPeople().filter((p) => p.login).map((p) => [p.login.toLowerCase(), p.id]));
+  return raw.replace(/(^|[^\w@<`])@([a-z0-9_]{1,24})\b/gi, (all, pre, h) => { const id = ids.get(h.toLowerCase()); return id ? `${pre}<@${id}>` : all; });
+}
+function mentionPeople() {
+  if (view === 'server') return (Store.members(serverId) || []).filter((m) => !m.bot);
+  const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
+  return d ? d.people : [];
+}
+// ---------- replying ----------
+function startReply(m) {
+  const place = placeNow(); if (!place || m.call) return;
+  draft(place).reply = { id: m.id, name: m.user.name, color: nameColor(m.user) };
+  renderComposerExtras(); $('#input').focus();
+}
+// ---------- @mentions: a list of people as you type @ ----------
+let mentionHits = [], mentionSel = 0;
+function mentionQuery() {
+  const i = $('#input'), upto = i.value.slice(0, i.selectionStart), m = upto.match(/(^|\s)@([\w.]{0,32})$/);
+  return m ? { q: m[2].toLowerCase(), start: i.selectionStart - m[2].length - 1 } : null;
+}
+function closeMentions() { mentionHits = []; $('#mention-pop').hidden = true; }
+function updateMentions() {
+  const pop = $('#mention-pop'), mq = Store.kind === 'supabase' ? mentionQuery() : null;
+  if (!mq) return closeMentions();
+  const can = view === 'server' && Store.canManage(serverId);
+  const people = mentionPeople().filter((p) => !mq.q || String(p.name || '').toLowerCase().includes(mq.q) || String(p.login || '').toLowerCase().startsWith(mq.q)).slice(0, 8);
+  const specials = can ? [['everyone', 'Notify everyone who can see this channel.'], ['here', 'Notify everyone online who can see this channel.']].filter(([n]) => n.startsWith(mq.q)).map(([n, sub]) => ({ special: n, name: n, sub })) : [];
+  mentionHits = [...people, ...specials];
+  if (!mentionHits.length) return closeMentions();
+  mentionSel = Math.min(mentionSel, mentionHits.length - 1);
+  pop.replaceChildren(el('div', { className: 'mp-head' }, 'Members'), ...mentionHits.map((p, i) => el('button', { className: 'mp-row' + (i === mentionSel ? ' on' : ''),
+    onmousedown: (e) => { e.preventDefault(); pickMention(i); }, onmousemove: () => { if (mentionSel !== i) { mentionSel = i; updateMentions(); } } },
+    p.special ? el('span', { className: 'mp-at' }, '@') : avatarEl(face(p), { size: 24 }), el('span', { className: 'mp-name' }, p.special ? '@' + p.name : p.name),
+    el('span', { className: 'mp-sub' }, p.special ? p.sub : p.login || ''))));
+  pop.hidden = false;
+}
+function pickMention(i) {
+  const p = mentionHits[i], mq = mentionQuery(); if (!p || !mq) return;
+  const inp = $('#input');
+  inp.setRangeText('@' + (p.special || p.login || p.name) + ' ', mq.start, inp.selectionStart, 'end');
+  closeMentions(); inp.focus(); inp.dispatchEvent(new Event('input'));
+}
+// ---------- formatting: ⌘B / Ctrl+B and friends, and Discord's little bar when you select text ----------
+const MARKS = { b: '**', i: '*', u: '__' };
+function wrapSel(mark) {
+  const i = $('#input'), a = i.selectionStart, b = i.selectionEnd, v = i.value;
+  if (mark === '>') {                     // a quote: each selected line starts with "> "
+    const s0 = v.lastIndexOf('\n', a - 1) + 1;
+    i.setRangeText(v.slice(s0, b).split('\n').map((l) => (l.startsWith('> ') ? l.slice(2) : '> ' + l)).join('\n'), s0, b, 'select');
+  } else if (v.slice(a - mark.length, a) === mark && v.slice(b, b + mark.length) === mark) {
+    i.setRangeText(v.slice(a, b), a - mark.length, b + mark.length, 'select');          // (already wrapped: unwrap it)
+  } else {
+    i.setRangeText(mark + v.slice(a, b) + mark, a, b, 'select');
+    i.setSelectionRange(a + mark.length, b + mark.length);
+  }
+  i.focus(); i.dispatchEvent(new Event('input')); updateFormatBar();
+}
+const FORMATS = [['bold', '**', 'Bold'], ['italic', '*', 'Italics'], ['underline', '__', 'Underline'], ['strike', '~~', 'Strikethrough'], ['code', '`', 'Code'], ['eyeOff', '||', 'Spoiler'], ['quote', '>', 'Quote']];
+function updateFormatBar() {
+  const i = $('#input'), bar = $('#format-bar');
+  const on = prefs.formatBar !== 'off' && document.activeElement === i && i.selectionStart !== i.selectionEnd;
+  if (on && !bar.childElementCount) bar.append(...FORMATS.map(([ic, mk, t]) => el('button', { title: t, onmousedown: (e) => { e.preventDefault(); wrapSel(mk); } }, icon(ic, 18))));
+  bar.hidden = !on;
+}
+// ---------- voice messages ----------
+let rec = null;
+async function startVoice() {
+  if (Store.kind !== 'supabase') return toast('Sign in to send voice messages, so they’re kept for the others.');
+  if (rec) return;
+  const place = placeNow(); if (!place) return;
+  const where = { dm: view === 'home', id: place };
+  const bar = $('#rec-bar'), time = el('span', { className: 'rec-time' }, '0:00'), lvl = el('div', { className: 'rec-wave' });
+  let r;
+  try { r = await record({ getMedia: TEST_MEDIA, onTick: ({ secs, level }) => { time.textContent = clock(secs); if (lvl.childElementCount > 60) lvl.firstChild.remove(); lvl.append(el('i', { style: `height:${Math.max(8, Math.round(level * 100))}%` })); } }); }
+  catch (e) { return toast(e && e.name ? mediaTrouble(e) : String((e && e.message) || e)); }
+  rec = { r, where, reply: draft(place).reply ? draft(place).reply.id : null };
+  bar.replaceChildren(el('button', { className: 'rec-x', title: 'Delete', onclick: () => stopVoice(false) }, icon('trash', 18)), el('span', { className: 'rec-dot' }), time, lvl,
+    el('button', { className: 'rec-send', title: 'Send', onclick: () => stopVoice(true) }, icon('send', 18)));
+  $('#composer').classList.add('recording'); bar.hidden = false;
+}
+async function stopVoice(sendIt) {
+  const cur = rec; if (!cur) return;
+  rec = null; $('#composer').classList.remove('recording'); $('#rec-bar').hidden = true; $('#rec-bar').replaceChildren();
+  if (!sendIt) return cur.r.cancel();
+  const v = await cur.r.stop();
+  if (!v || v.secs < 0.5) return toast('That was too short to send.');
+  try {
+    const f = await Store.uploadFile(cur.where, new File([v.blob], `voice-message.${extFor(v.type)}`, { type: v.type }), null, { kind: 'voice', secs: v.secs, wave: v.wave });
+    const msg = { user: stamp(), files: [f], reply: cur.reply };
+    if (cur.where.dm) Store.sendDM(cur.where.id, msg); else Store.send(cur.where.id, msg);
+    if (cur.reply) { draft(cur.where.id).reply = null; renderComposerExtras(); }
+  } catch (e) { toast(String((e && e.message) || e)); }
 }
 const botSay = (text) => view === 'home' ? Store.sendDM(dmId, { user: { name: 'Flubot', color: '#5b7fd6', bot: true }, text }) : Store.send(channelId, { user: { name: 'Flubot', color: '#5b7fd6', bot: true }, text });
 function runCommand(line) {
@@ -668,16 +1235,200 @@ function createSticker() {
 }
 
 // ---------- calls ----------
-let stream = null, micOn = true, camOn = true;
-async function startCall(video) {
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true, video }); } catch { toast('Couldn’t reach your camera or mic. Check the browser’s permission for this site.'); return; }
-  camOn = video; micOn = !(prefs.micMuted || prefs.deafened); stream.getAudioTracks().forEach((t) => { t.enabled = micOn; }); $('#call').classList.add('on');
-  const v = el('video', { autoplay: true, muted: true, playsInline: true }); v.srcObject = stream;
-  $('#call-videos').replaceChildren(el('div', { className: 'tile' }, v, el('span', {}, me.name + ' (you)')));
-  $('#c-cam').hidden = !video; syncCallButtons();
+// A DM or group call rings the others (Supabase tells them, calls.js connects everyone); a voice channel you just join.
+async function startDMCall(video) {
+  if (Store.kind !== 'supabase') return toast('Calls need you signed in (Discord, GitHub or email), so the other person can pick up.');
+  const place = dmId;
+  if (!place) return;
+  if (call && call.place === place) return goToCall();
+  if (call) leaveCall();
+  const id = await attempt(() => Store.startCall(place, video)); if (!id) return;
+  await enterCall({ kind: 'dm', place, callId: id, video, outgoing: true });
 }
-function syncCallButtons() { $('#c-mic').replaceChildren(icon(micOn ? 'mic' : 'micOff')); $('#c-mic').classList.toggle('off', !micOn); $('#c-cam').replaceChildren(icon(camOn ? 'cam' : 'camOff')); $('#c-cam').classList.toggle('off', !camOn); $('#c-leave').replaceChildren(icon('hangup')); }
-function closeCall() { if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; } $('#call').classList.remove('on'); $('#call-videos').replaceChildren(); }
+async function joinDMCall(c) {
+  if (call && call.callId === c.id) return goToCall();
+  if (call) leaveCall();
+  view = 'home'; dmId = c.dm;
+  await enterCall({ kind: 'dm', place: c.dm, callId: c.id, video: false });
+}
+async function joinVoice(c) {
+  if (Store.kind !== 'supabase') return toast('Voice channels need you signed in (Discord, GitHub or email), so others can hear you.');
+  if (call && call.place === c.id) return;
+  if (call) leaveCall();
+  await enterCall({ kind: 'vc', place: c.id, server: c.server, video: false });
+}
+let joining = false;
+async function enterCall({ kind, place, server, callId, video, outgoing }) {
+  if (joining) return;
+  joining = true; renderVoicePanel();
+  let api = null;
+  try {
+    api = await joinCall({ store: Store, topic: kind === 'dm' ? 'call:' + callId : 'vc:' + place, me: { id: Store.myId() }, video,
+      mic: !prefs.micMuted && !prefs.deafened, deaf: !!prefs.deafened, silent: SILENT, getMedia: TEST_MEDIA, getScreen: TEST_SCREEN, onUpdate: () => callUpdate() });
+  } catch (e) {
+    toast(String((e && e.message) || e));
+    if (kind === 'dm' && outgoing) Store.endCall(callId);
+  }
+  joining = false;
+  if (!api) return renderAll();
+  call = { api, kind, place, server, callId, outgoing, met: false, who: '', voiceKey: '' };
+  if (api.self.warning) toast(api.self.warning);
+  if (kind === 'dm' && outgoing) {
+    startTone('calling');
+    call.noAnswer = setTimeout(() => { if (call && call.callId === callId && !call.met) { toast('No answer.'); leaveCall(); } }, 45000);
+  }
+  callUpdate();
+  renderAll();
+}
+// something in the call changed: someone came or went, talked, turned a camera on…
+function callUpdate() {
+  if (!call) return;
+  const ppl = call.api.people(), me2 = call.api.self;
+  if (!call.met && ppl.some((p) => p.connected)) { call.met = true; clearTimeout(call.noAnswer); stopTone(); }
+  if (call.kind === 'dm' && call.met && !ppl.length) { toast('The call ended.'); return leaveCall(); }     // (everyone else has gone)
+  if (call.kind === 'vc') {          // (what the others see under the voice channel)
+    const v = { sv: call.server, ch: call.place, mic: me2.mic && !me2.deaf, deaf: me2.deaf, cam: me2.cam, screen: me2.screen }, key = JSON.stringify(v);
+    if (key !== call.voiceKey) { call.voiceKey = key; Store.setVoice(v); }
+  }
+  const who = ppl.map((p) => p.uid + (p.connected ? '+' : '')).sort().join();
+  if (who !== call.who) { call.who = who; renderSide(); renderTop(); renderRail(); }
+  else if (view === 'server') renderSide();
+  renderCall();
+}
+function leaveCall() {
+  if (!call) return;
+  const c = call; call = null;
+  clearTimeout(c.noAnswer); stopTone();
+  const alone = !c.api.people().length;
+  c.api.leave();
+  if (c.kind === 'dm' && alone) Store.endCall(c.callId);       // (the last one out ends it)
+  if (c.kind === 'vc') Store.setVoice(null);
+  callTiles.clear();
+  renderAll();
+}
+addEventListener('pagehide', () => { if (call) leaveCall(); });
+
+// someone's calling you (or a call you were rung for ended)
+Store.onCall(({ call: c, started }) => {
+  if (c.mine) {
+    if (c.ended && call && call.callId === c.id && !call.met) { toast('They didn’t pick up.'); leaveCall(); }
+  } else if (started && !c.ended && Date.now() - c.ts < 60000 && !(call && call.callId === c.id)) ring(c);
+  else if (c.ended && ringing && ringing.id === c.id) { stopRing(); toast(`Missed call from ${c.by.name}.`); }
+  if (view === 'home' && dmId === c.dm) renderContent();
+});
+function ring(c) {
+  if (ringing && ringing.id === c.id) return;
+  ringing = c;
+  const d = Store.dmInfo(c.dm), title = d && d.kind === 'group' ? dmName(d) : c.by.name;
+  const box = $('#ring');
+  box.replaceChildren(el('div', { className: 'ring-card' },
+    el('div', { className: 'ring-av' }, d && d.kind === 'group' ? dmAvatar(d, 80) : avatarEl(face(c.by), { size: 80 })),
+    el('div', { className: 'ring-name' }, title),
+    el('div', { className: 'ring-sub' }, d && d.kind === 'group' ? `${c.by.name} is calling…` : c.video ? 'Incoming Video Call…' : 'Incoming Call…'),
+    el('div', { className: 'ring-acts' },
+      el('button', { className: 'ring-btn no', title: 'Decline', onclick: () => declineCall(c) }, icon('hangup', 22)),
+      el('button', { className: 'ring-btn yes', title: 'Join with Video', onclick: () => acceptCall(c, true) }, icon('video', 22)),
+      el('button', { className: 'ring-btn yes', title: 'Join Call', onclick: () => acceptCall(c, false) }, icon('phone', 22)))));
+  box.hidden = false;
+  startTone('ring');
+  clearTimeout(ringTimer);
+  ringTimer = setTimeout(() => { if (ringing && ringing.id === c.id) { stopRing(); toast(`Missed call from ${c.by.name}.`); } }, 45000);
+  notifyDesktop(title, c.video ? 'Incoming video call' : 'Incoming call', () => { view = 'home'; dmId = c.dm; renderAll(); }, 'call-' + c.id);
+}
+function stopRing() { ringing = null; clearTimeout(ringTimer); stopTone(); const b = $('#ring'); b.hidden = true; b.replaceChildren(); }
+async function acceptCall(c, video) {
+  stopRing();
+  if (call) leaveCall();
+  view = 'home'; dmId = c.dm; renderAll();
+  await enterCall({ kind: 'dm', place: c.dm, callId: c.id, video });
+  if (video && call && !call.api.self.cam) call.api.setCam(true);
+}
+function declineCall(c) {
+  stopRing();
+  const d = Store.dmInfo(c.dm);
+  if (d && d.kind === 'dm') Store.endCall(c.id);          // (just the two of you: the call's over, and the caller hears so)
+}
+// a ring (someone calling you) or a ringback (you calling), made on the spot: no sound files
+let tone = null;
+function startTone(kind) {
+  stopTone();
+  if (SILENT || prefs.deafened || prefs.ring === false) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const beep = (f, at, len) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = f; g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(0.05, at + 0.02); g.gain.linearRampToValueAtTime(0, at + len); o.connect(g); g.connect(ctx.destination); o.start(at); o.stop(at + len + 0.05); };
+    const once = () => { const t = ctx.currentTime + 0.05; if (kind === 'ring') { beep(784, t, 0.16); beep(988, t + 0.2, 0.16); beep(784, t + 0.5, 0.16); beep(988, t + 0.7, 0.16); } else beep(440, t, 0.9); };
+    once();
+    tone = { ctx, timer: setInterval(once, kind === 'ring' ? 2600 : 3200) };
+  } catch {}
+}
+function stopTone() { if (tone) { clearInterval(tone.timer); tone.ctx.close().catch(() => {}); tone = null; } }
+
+// the call, above the conversation: everyone's tile (their camera, or their picture with a green ring while they talk),
+// screens being shared, and the buttons. Tiles stay put between updates, so videos don't restart.
+const callTiles = new Map();
+let myCamView = null;
+function renderCall() {
+  renderVoicePanel();
+  const box = $('#call'); if (!box) return;
+  const vc = view === 'server' ? Store.channel(channelId) : null;
+  const here = call && ((call.kind === 'dm' && view === 'home' && dmId === call.place) || (call.kind === 'vc' && vc && vc.id === call.place));
+  if (!here) {
+    callTiles.clear();
+    if (vc && vc.kind === 'voice' && Store.kind === 'supabase') return voicePrompt(box, vc);
+    box.className = 'call'; box.replaceChildren(); return;
+  }
+  box.className = 'call on' + (call.kind === 'vc' ? ' big' : '');
+  let grid = box.querySelector(':scope > .call-grid'), ctrls = box.querySelector(':scope > .call-ctrls');
+  if (!grid || !ctrls) { grid = el('div', { className: 'call-grid' }); ctrls = el('div', { className: 'call-ctrls' }); box.replaceChildren(grid, ctrls); }
+  const api = call.api, ppl = api.people(), seen = new Set(), order = [];
+  const tile = (key, who, { stream, talking, mic = true, deaf = false, label, waiting, screen, mirror }) => {
+    seen.add(key);
+    let t = callTiles.get(key);
+    if (!t) { const video = el('video', { autoplay: true, playsInline: true, muted: true }); t = { video, look: '', node: el('div', { className: 'tile' }, video, el('div', { className: 'tile-av' }), el('div', { className: 'tile-name' })) }; callTiles.set(key, t); }
+    const n = t.node;
+    n.classList.toggle('speaking', !!talking); n.classList.toggle('waiting', !!waiting); n.classList.toggle('screen', !!screen); n.classList.toggle('mirror', !!mirror); n.classList.toggle('has-video', !!stream);
+    if (t.video.srcObject !== (stream || null)) { t.video.srcObject = stream || null; if (stream) t.video.play().catch(() => {}); }
+    const look = [who.name, who.color, String(who.avatar || '').length].join();
+    if (t.look !== look) { t.look = look; n.querySelector('.tile-av').replaceChildren(avatarEl(face(who), { size: 80 })); }
+    n.querySelector('.tile-name').replaceChildren(deaf ? icon('headphonesOff', 14) : !mic ? icon('micOff', 14) : '', label || who.name);
+    order.push(n);
+  };
+  const meU = person(Store.myId()), cam = api.local().getVideoTracks()[0];
+  if (cam && (!myCamView || myCamView.getVideoTracks()[0] !== cam)) myCamView = new MediaStream([cam]);
+  tile('me', meU, { stream: api.self.cam && cam ? myCamView : null, talking: api.self.speaking, mic: api.self.mic, deaf: api.self.deaf, mirror: true });
+  if (api.self.screen && api.screenStream()) tile('me:screen', meU, { stream: api.screenStream(), screen: true, label: 'Your screen' });
+  for (const p of ppl) {
+    const u = person(p.uid);
+    tile(p.pid, u, { stream: p.cam, talking: p.speaking, mic: p.mic, deaf: p.deaf, label: u.name + (p.connected ? '' : ' · connecting…') });
+    if (p.screen) tile(p.pid + ':screen', u, { stream: p.screen, screen: true, label: u.name + '’s screen' });
+  }
+  if (call.kind === 'dm' && !ppl.length) {           // (nobody's picked up yet: the people being rung)
+    const d = Store.dmInfo(call.place);
+    for (const u of (d ? d.people : []).filter((x) => !isMe(x))) tile('wait:' + u.id, u, { waiting: true, label: call.outgoing ? 'Calling…' : u.name });
+  }
+  for (const k of [...callTiles.keys()]) if (!seen.has(k)) callTiles.delete(k);
+  grid.dataset.n = String(Math.min(order.length, 9));
+  let i = 0;
+  for (const n of order) { if (grid.childNodes[i] !== n) grid.insertBefore(n, grid.childNodes[i] || null); i++; }
+  while (grid.childNodes.length > order.length) grid.lastChild.remove();
+  const btn = (ic, title, cls, fn) => el('button', { className: 'cbtn' + (cls ? ' ' + cls : ''), title, onclick: fn }, icon(ic, 22));
+  const muted = !api.self.mic || api.self.deaf;
+  ctrls.replaceChildren(
+    btn(api.self.cam ? 'video' : 'camOff', api.self.cam ? 'Turn Off Camera' : 'Turn On Camera', api.self.cam ? 'on' : '', () => api.setCam(!api.self.cam)),
+    btn(api.self.screen ? 'screenOff' : 'screen', api.self.screen ? 'Stop Streaming' : 'Share Your Screen', api.self.screen ? 'on' : '', () => api.setScreen(!api.self.screen)),
+    btn(muted ? 'micOff' : 'mic', muted ? 'Unmute' : 'Mute', muted ? 'off' : '', () => toggleMic()),
+    btn(api.self.deaf ? 'headphonesOff' : 'headphones', api.self.deaf ? 'Undeafen' : 'Deafen', api.self.deaf ? 'off' : '', () => toggleDeafen()),
+    btn('hangup', 'Disconnect', 'leave', () => leaveCall()));
+}
+// a voice channel you haven't joined: who's there, and Join Voice
+function voicePrompt(box, c) {
+  const ppl = Store.voice(c.server)[c.id] || [];
+  box.className = 'call on prompt';
+  box.replaceChildren(el('div', { className: 'vc-prompt' }, el('div', { className: 'vc-ic' }, icon('volume', 34)), el('h3', {}, c.name),
+    el('p', {}, ppl.length ? `${ppl.length} ${ppl.length === 1 ? 'person is' : 'people are'} in here.` : 'No one’s here yet.'),
+    ppl.length ? el('div', { className: 'vc-ppl' }, ...ppl.map((v) => avatarEl(face(person(v.uid)), { size: 40 }))) : null,
+    el('button', { className: 'btn primary', disabled: joining, onclick: () => joinVoice(c) }, joining ? 'Joining…' : 'Join Voice')));
+}
 
 // ---------- settings (profile editor) ----------
 function openSettings() {
@@ -795,23 +1546,67 @@ async function deleteChannel(c) {
   if (!(await confirmBox({ title: 'Delete Channel', text: `Are you sure you want to delete ${c.kind === 'voice' ? '' : '#'}${c.name}? Its messages go with it, and this can’t be undone.`, ok: 'Delete Channel', danger: true }))) return;
   Store.removeChannel(c.id); if (channelId === c.id) channelId = firstChannel(serverId); renderAll();
 }
-// Discord's "Select Friends": start a DM with a friend (or, signed in, anyone you share a server with)
-function newDMDialog() {
+// Discord's "Select Friends": one person starts a DM, two or more a group DM (up to 10 people, your friends).
+// addTo: a group to add people to instead; with: people already in the conversation (they come along into the new group)
+function newDMDialog(addTo = null, withPeople = []) {
+  const live = Store.kind === 'supabase', group = addTo ? Store.dmInfo(addTo) : null;
+  const already = new Set([...(group ? group.people.map((p) => p.id) : []), ...withPeople.map((p) => p.id)]);
   const people = new Map();
-  for (const f of Store.friends()) people.set(f.id, f);
-  if (Store.kind === 'supabase') for (const s of Store.servers()) for (const p of Store.members(s.id) || []) if (!p.me) people.set(p.id, p);
+  for (const f of Store.friends()) if (!already.has(f.id)) people.set(f.id, f);
+  if (live && !addTo && !withPeople.length) for (const sv of Store.servers()) for (const p of Store.members(sv.id) || []) if (!p.me && !people.has(p.id)) people.set(p.id, { ...p, notFriend: friendState(p) !== 'friend' });
+  const room = 10 - Math.max(1, already.size + (group ? 0 : 1)) ;
+  const picked = new Map();
   const list = el('div', { className: 'pick-list' });
-  const q = el('input', { type: 'search', placeholder: 'Type the name of a friend', className: 'pick-q' });
+  const q = el('input', { type: 'search', placeholder: 'Type the username of a friend', className: 'pick-q' });
+  const left = el('p', { className: 'dlg-sub' });
+  const go = el('button', { className: 'btn primary' });
   const draw = () => {
     const s = q.value.trim().toLowerCase();
     const hits = [...people.values()].filter((p) => !s || String(p.name || '').toLowerCase().includes(s) || String(p.login || '').toLowerCase().includes(s));
-    list.replaceChildren(...(hits.length ? hits.map((p) => el('button', { className: 'pick', onclick: () => { m.close(); openDM(normFriend(p)); } },
-      avatarEl(p, { size: 32 }), el('span', { className: 'nm3' }, p.name), p.login ? el('span', { className: 'muted' }, '@' + p.login) : null))
-      : [el('div', { className: 'empty-note' }, people.size ? 'Nobody by that name.' : 'No friends yet. Add some from the Friends page.')]));
+    list.replaceChildren(...(hits.length ? hits.map((p) => el('button', { className: 'pick' + (picked.has(p.id) ? ' on' : ''), onclick: () => {
+      if (picked.has(p.id)) picked.delete(p.id); else if (picked.size >= room) return toast(`A group DM holds up to 10 people.`); else picked.set(p.id, p);
+      draw();
+    } }, avatarEl(p, { size: 32 }), el('span', { className: 'nm3' }, p.name), p.login ? el('span', { className: 'muted' }, p.login) : null, el('span', { className: 'tick' + (picked.has(p.id) ? ' on' : '') }, picked.has(p.id) ? icon('check', 13) : null)))
+      : [el('div', { className: 'empty-note' }, people.size ? 'Nobody by that name.' : addTo ? 'All your friends are already here.' : 'No friends yet. Add some from the Friends page.')]));
+    const n = picked.size + withPeople.length;
+    left.textContent = live ? (room - picked.size > 0 ? `You can add ${room - picked.size} more friend${room - picked.size === 1 ? '' : 's'}.` : 'This group is full.') : 'Start a conversation.';
+    go.textContent = addTo ? 'Add to Group' : n <= 1 ? 'Create DM' : 'Create Group DM';
+    go.disabled = !picked.size;
+  };
+  go.onclick = async () => {
+    const chosen = [...picked.values()];
+    if (!chosen.length) return;
+    if (!addTo && chosen.length + withPeople.length === 1) { m.close(); return openDM(normFriend(chosen[0])); }
+    if (!live) return toast('Group DMs need you signed in.');
+    if (chosen.some((p) => p.notFriend)) return toast('Only friends can be in a group DM. Send them a friend request first.');
+    go.disabled = true;
+    if (addTo) { if ((await attempt(() => Store.addToGroup(addTo, chosen.map((p) => p.id)))) !== null) { m.close(); toast('Added to the group.'); renderAll(); } else go.disabled = false; return; }
+    const id = await attempt(() => Store.createGroup([...withPeople, ...chosen].map((p) => p.id)));
+    if (!id) { go.disabled = false; return; }
+    m.close(); view = 'home'; dmId = id; renderAll();
   };
   q.oninput = draw;
-  const m = modal({ title: 'Select Friends', sub: 'Start a conversation.', body: [q, list], actions: [el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close() })] });
+  const m = modal({ title: addTo ? 'Add Friends to Group' : 'Select Friends', body: [left, q, list], actions: [el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close() }), go] });
   draw(); setTimeout(() => q.focus(), 0);
+}
+// "Add Friends to DM": from a group, add to it; from a DM, start a group with that person and more
+function addPeopleFlow() {
+  const d = Store.dmInfo ? Store.dmInfo(dmId) : null; if (!d) return;
+  if (d.kind === 'group') newDMDialog(d.id); else newDMDialog(null, [d.user]);
+}
+async function renameGroup(d) {
+  const n = await ask({ title: 'Rename Group', label: 'Group name', value: d.name || dmName(d), ok: 'Save', max: 100 });
+  if (n) { Store.updateGroup(d.id, { name: n }); renderAll(); }
+}
+function changeGroupIcon(d) {
+  pickFile(async (f) => { try { Store.updateGroup(d.id, { icon: await shrink(f, 256, 256, 150000) }); renderAll(); } catch (e) { toast(String((e && e.message) || e)); } });
+}
+async function leaveGroup(d) {
+  if (!(await confirmBox({ title: `Leave ‘${dmName(d)}’`, text: 'Are you sure you want to leave this group? You won’t be able to rejoin unless you are re-invited.', ok: 'Leave Group', danger: true }))) return;
+  if (call && call.place === d.id) leaveCall();
+  if ((await attempt(() => Store.leaveGroup(d.id))) === null) return;
+  if (dmId === d.id) dmId = null;
+  renderAll();
 }
 async function openDM(user) {
   const id = await attempt(() => Store.ensureDM(user));
@@ -821,8 +1616,9 @@ async function openDM(user) {
   return id;
 }
 async function befriend(u) {
-  if (Store.kind === 'supabase' && u.login) { const f = await attempt(() => Store.addFriendByHandle(u.login)); if (f) toast(`Added ${u.name} as a friend.`); }
-  else { Store.addFriend(normFriend(u)); toast(Store.kind === 'supabase' ? `Added ${u.name} as a friend.` : `Added ${u.name} locally.`); }
+  if (Store.kind === 'supabase' && u.login) { const f = await attempt(() => Store.addFriendByHandle(u.login)); if (f) toast(f.state === 'accepted' ? `You and ${u.name} are now friends!` : `Friend request sent to ${u.name}.`); }
+  else if (Store.kind === 'supabase') toast(`${u.name} can’t be added as a friend.`);
+  else { Store.addFriend(normFriend(u)); toast(`Added ${u.name} in this browser.`); }
   renderAll();
 }
 async function unfriend(u) {
@@ -924,6 +1720,88 @@ async function leaveServer(id) {
   serverId = null; channelId = null; renderAll(); toast(`You left ${sv.name}.`);
 }
 
+// Discord's invite window: your friends with an Invite button each (it sends them the link in a DM), and the link to copy
+async function inviteFriends(sv) {
+  const server = Store.server(sv); if (!server) return;
+  if (Store.kind !== 'supabase') return openServerSettings(sv, 'invite');
+  if (!Store.canManage(sv)) return toast('Only this server’s admins can invite people.');
+  const code = await attempt(() => Store.createInvite(sv)); if (!code) return;
+  const link = location.origin + location.pathname + '#invite=' + code;
+  const inside = new Set((Store.members(sv) || []).map((p) => p.id));
+  const friends = Store.friends().filter((f) => !inside.has(f.id));
+  const list = el('div', { className: 'pick-list invite-list' }), q = el('input', { type: 'search', className: 'pick-q', placeholder: 'Search for friends' });
+  const sent = new Set();
+  const draw = () => {
+    const s = q.value.trim().toLowerCase();
+    const hits = friends.filter((f) => !s || String(f.name || '').toLowerCase().includes(s) || String(f.login || '').toLowerCase().includes(s));
+    list.replaceChildren(...(hits.length ? hits.map((f) => {
+      const b = el('button', { className: 'btn small' + (sent.has(f.id) ? '' : ' green-outline'), disabled: sent.has(f.id) }, sent.has(f.id) ? 'Sent' : 'Invite');
+      b.onclick = async () => {
+        b.disabled = true; b.textContent = 'Sending…';
+        const id = await attempt(() => Store.ensureDM(f));
+        if (!id) { b.disabled = false; b.textContent = 'Invite'; return; }
+        Store.sendDM(id, { user: stamp(), text: link }); sent.add(f.id); draw();
+      };
+      return el('div', { className: 'pick static' }, avatarEl(f, { size: 32 }), el('span', { className: 'nm3' }, f.name), f.login ? el('span', { className: 'muted' }, f.login) : null, b);
+    }) : [el('div', { className: 'empty-note small' }, friends.length ? 'Nobody by that name.' : Store.friends().length ? 'All your friends are already here.' : 'No friends to invite yet.')]));
+  };
+  q.oninput = draw; draw();
+  const field = el('input', { type: 'text', value: link, readOnly: true, onclick: () => field.select() });
+  const m = modal({ title: `Invite friends to ${server.name}`, cls: 'invite-dlg', body: [q, list,
+    el('div', { className: 'field', style: 'margin-top:16px' }, el('label', {}, 'Or, send a server invite link to a friend'),
+      el('div', { className: 'invite-box' }, field, el('button', { className: 'btn primary', onclick: () => copyText(link, 'Invite link copied.') }, 'Copy'))),
+    el('div', { className: 'invite-note' }, 'Your invite link expires in 7 days. ', el('a', { href: '#', onclick: (e) => { e.preventDefault(); m.close(); openServerSettings(sv, 'invite'); } }, 'Edit invite link.'))],
+    actions: [] });
+  setTimeout(() => q.focus(), 0);
+}
+// muting a place, for a while or until you turn it back on
+function muteItem(place, what) {
+  if (Store.kind !== 'supabase') return null;
+  const st = Store.placeSettings(place);
+  if (st.muted) return { label: `Unmute ${what}`, icon: 'bell', hint: st.mutedUntil && isFinite(st.mutedUntil) && st.mutedUntil < 8.64e15 ? 'Muted until ' + new Date(st.mutedUntil).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '', action: () => { Store.setPlaceSettings(place, { mutedUntil: null }); renderAll(); } };
+  return { label: `Mute ${what}`, sub: () => [['For 15 Minutes', 15], ['For 1 Hour', 60], ['For 3 Hours', 180], ['For 8 Hours', 480], ['For 24 Hours', 1440], ['Until I turn it back on', Infinity]]
+    .map(([label, min]) => ({ label, action: () => { Store.setPlaceSettings(place, { mutedUntil: min === Infinity ? Infinity : Date.now() + min * 60000 }); renderAll(); } })) };
+}
+function notifyItem(place, server) {
+  if (Store.kind !== 'supabase') return null;
+  const cur = Store.placeSettings(place).notify;
+  const opts = server ? [['all', 'All Messages'], ['mentions', 'Only @mentions'], ['none', 'Nothing']] : [['default', 'Use Server Default'], ['all', 'All Messages'], ['mentions', 'Only @mentions'], ['none', 'Nothing']];
+  const on = (v) => cur === v || (server && cur === 'default' && v === 'all');
+  return { label: 'Notification Settings', hint: (opts.find(([v]) => on(v)) || opts[0])[1], sub: () => opts.map(([v, l]) => ({ label: l, check: on(v), action: () => { Store.setPlaceSettings(place, { notify: v }); renderAll(); } })) };
+}
+const markReadItem = (places) => Store.kind === 'supabase' && places.some((p) => Store.unread(p).unread) && { label: 'Mark As Read', icon: 'check', action: () => { for (const p of places) Store.markRead(p); renderAll(); } };
+function categoryCtx(cat, x, y) {
+  const can = Store.canManage(serverId), chans = Store.channels(serverId).filter((c) => c.category === cat.id);
+  menu([
+    markReadItem(chans.map((c) => c.id)),
+    { label: collapsed.has(cat.id) ? 'Expand Category' : 'Collapse Category', check: collapsed.has(cat.id), action: () => { if (collapsed.has(cat.id)) collapsed.delete(cat.id); else collapsed.add(cat.id); renderSide(); } },
+    { label: 'Collapse All Categories', action: () => { for (const c of Store.categories(serverId)) collapsed.add(c.id); renderSide(); } },
+    can && cat.id && '-', can && cat.id && { label: 'Create Channel', icon: 'plusCircle', action: () => newChannelFlow(cat.id) },
+    can && cat.id && { label: 'Edit Category', icon: 'edit', action: async () => { const n = await ask({ title: 'Edit Category', label: 'Category name', value: cat.name, ok: 'Save', max: 60 }); if (n) { Store.updateCategory(cat.id, { name: n }); renderAll(); } } },
+    can && cat.id && { label: 'Delete Category', icon: 'trash', danger: true, action: async () => { if (await confirmBox({ title: 'Delete Category', text: `Are you sure you want to delete ${cat.name}? Its channels and their messages go with it.`, ok: 'Delete Category', danger: true })) { Store.removeCategory(cat.id); renderAll(); } } },
+    '-', cat.id && { label: 'Copy Category ID', icon: 'id', action: () => copyText(cat.id, 'Category ID copied.') },
+  ], x, y);
+}
+// a channel's settings (admins): its name and topic
+function editChannel(c) {
+  const name = el('input', { type: 'text', value: c.name, maxLength: 60 });
+  const topic = el('textarea', { maxLength: 1024, placeholder: 'Let everyone know how to use this channel!', value: c.topic || '' });
+  const save = el('button', { className: 'btn primary', textContent: 'Save Changes' });
+  save.onclick = () => {
+    const n = name.value.trim(); if (!n) return name.focus();
+    Store.updateChannel(c.id, { name: c.kind === 'voice' ? n : n.replace(/\s+/g, '-').toLowerCase(), topic: topic.value.trim() });
+    m.close(); renderAll();
+  };
+  const m = modal({ title: 'Edit Channel', sub: (c.kind === 'voice' ? '' : '#') + c.name,
+    body: [el('div', { className: 'field' }, el('label', {}, 'Channel name'), name), c.kind === 'voice' ? null : el('div', { className: 'field' }, el('label', {}, 'Channel topic'), topic)],
+    actions: [Store.channels(serverId).length > 1 ? el('button', { className: 'btn ghost danger', onclick: () => { m.close(); deleteChannel(c); } }, 'Delete Channel') : null, el('span', { style: 'flex:1' }),
+      el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close() }), save] });
+  setTimeout(() => name.focus(), 0);
+}
+function showTopic(c) {
+  const t = el('div', { className: 'text topic-full' }); t.innerHTML = richText(c.topic, fmtCtx());
+  const m = modal({ title: (c.kind === 'voice' ? '' : '#') + c.name, body: [t], actions: [el('button', { className: 'btn primary', textContent: 'Close', onclick: () => m.close() })] });
+}
 function serverMenu(anchor) {
   closePop();
   const r = anchor.getBoundingClientRect();
@@ -934,8 +1812,11 @@ function serverItems(s, x, y) {
   if (!s) return;
   const can = Store.canManage(s.id), live = Store.kind === 'supabase', owner = Store.role(s.id) === 'owner';
   menu([
-    (live ? can : true) && { label: 'Invite People', icon: 'personAdd', action: () => openServerSettings(s.id, 'invite') },
+    markReadItem(Store.channels(s.id).map((c) => c.id)),
+    (live ? can : true) && { label: 'Invite People', icon: 'personAdd', action: () => inviteFriends(s.id) },
     '-',
+    muteItem(s.id, 'Server'), notifyItem(s.id, true),
+    live && '-',
     { label: 'Server Settings', icon: 'gear', action: () => openServerSettings(s.id) },
     can && { label: 'Create Channel', icon: 'plusCircle', action: () => { if (serverId !== s.id) go(s.id); newChannelFlow(Store.categories(s.id)[0]?.id); } },
     can && { label: 'Create Category', icon: 'plus', action: () => newCategory(s.id) },
@@ -948,8 +1829,12 @@ const serverCtx = (s, x, y) => serverItems(s, x, y);
 function channelCtx(c, x, y) {
   const can = Store.canManage(serverId), live = Store.kind === 'supabase';
   menu([
-    (live ? can : true) && { label: 'Invite People', icon: 'personAdd', action: () => openServerSettings(serverId, 'invite') },
-    can && '-', can && { label: 'Edit Channel', icon: 'edit', action: () => renameChannel(c) },
+    markReadItem([c.id]),
+    (live ? can : true) && { label: 'Invite to Channel', icon: 'personAdd', action: () => inviteFriends(serverId) },
+    { label: 'Copy Link', icon: 'link', action: () => copyText(`${location.origin}${location.pathname}#channel=${c.id}`, 'Link copied.') },
+    c.kind === 'voice' && live && (call && call.place === c.id ? { label: 'Disconnect', icon: 'hangup', danger: true, action: () => leaveCall() } : { label: 'Join Voice', icon: 'volume', action: () => joinVoice(c) }),
+    live && '-', muteItem(c.id, 'Channel'), notifyItem(c.id, false),
+    can && '-', can && { label: 'Edit Channel', icon: 'gear', action: () => editChannel(c) },
     can && Store.channels(serverId).length > 1 && { label: 'Delete Channel', icon: 'trash', danger: true, action: () => deleteChannel(c) },
     '-', { label: 'Copy Channel ID', icon: 'id', action: () => copyText(c.id, 'Channel ID copied.') },
   ], x, y);
@@ -959,12 +1844,14 @@ function memberCtx(u, x, y) {
   const self = isMe(u), live = Store.kind === 'supabase', sv = view === 'server' ? serverId : null;
   const can = sv && Store.canManage(sv), owner = sv && Store.role(sv) === 'owner';
   const m = sv && live ? (Store.members(sv) || []).find((p) => p.id === u.id) : null;
-  const friend = Store.friends().some((f) => f.id === u.id);
   const above = m && !self && m.role !== 'owner' && (owner || (can && m.role === 'member'));
+  const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null, groupOwner = g && g.kind === 'group' && g.owner === Store.myId() && g.people.some((p) => p.id === u.id);
   menu([
     { label: 'Profile', icon: 'user', action: () => profileAt(u, x, y) },
     !self && !u.bot && { label: 'Message', icon: 'message', action: () => openDM(normFriend(u)) },
-    !self && !u.bot && (friend ? { label: 'Remove Friend', action: () => unfriend(u) } : { label: 'Add Friend', icon: 'personAdd', action: () => befriend(u) }),
+    !self && !u.bot && live && friendState(u) === 'friend' && { label: 'Call', icon: 'phone', action: async () => { if (await openDM(normFriend(u))) startDMCall(false); } },
+    !self && !u.bot && friendItem(u),
+    groupOwner && !self && '-', groupOwner && !self && { label: 'Remove From Group', danger: true, action: async () => { if ((await attempt(() => Store.removeFromGroup(g.id, u.id))) !== null) renderAll(); } },
     '-',
     m && can && Store.roles(sv).length && { label: 'Roles', sub: () => roleItems(sv, u) },
     m && owner && !self && m.role !== 'owner' && { label: m.role === 'admin' ? 'Remove Admin' : 'Make Admin', icon: 'shield', action: () => setAdmin(sv, m, m.role !== 'admin') },
@@ -974,10 +1861,18 @@ function memberCtx(u, x, y) {
   ], x, y);
 }
 function dmCtx(d, x, y) {
+  const group = d.kind === 'group', live = Store.kind === 'supabase';
   menu([
-    { label: 'Profile', icon: 'user', action: () => profileAt(d.user, x, y) },
-    { label: 'Close DM', icon: 'x', action: () => { closedDMs.add(d.id); saveClosed(); if (dmId === d.id) dmId = null; renderAll(); } },
-    '-', { label: 'Copy User ID', icon: 'id', action: () => copyText(String(d.user.id || d.user.name), 'User ID copied.') },
+    markReadItem([d.id]),
+    !group && { label: 'Profile', icon: 'user', action: () => profileAt(d.user, x, y) },
+    live && { label: 'Call', icon: 'phone', action: () => { view = 'home'; dmId = d.id; renderAll(); startDMCall(false); } },
+    !group && friendItem(d.user),
+    live && '-', muteItem(d.id, 'Conversation'),
+    group && '-', group && { label: 'Change Icon', icon: 'image', action: () => changeGroupIcon(d) }, group && { label: 'Rename', icon: 'edit', action: () => renameGroup(d) },
+    '-',
+    group ? { label: 'Leave Group', icon: 'logout', danger: true, action: () => leaveGroup(d) }
+      : { label: 'Close DM', icon: 'x', action: () => { closedDMs.add(d.id); saveClosed(); if (dmId === d.id) dmId = null; renderAll(); } },
+    '-', group ? { label: 'Copy Group ID', icon: 'id', action: () => copyText(d.id, 'Group ID copied.') } : { label: 'Copy User ID', icon: 'id', action: () => copyText(String(d.user.id || d.user.name), 'User ID copied.') },
   ], x, y);
 }
 function messageCtx(m, x, y) {
@@ -985,7 +1880,9 @@ function messageCtx(m, x, y) {
   const mine = isMe(m.user) || (m.user.bot && m.user.via && m.user.via === (Store.account() || {}).login) || (Store.kind === 'local');
   const canDel = typeof Store.deleteMessage === 'function' && (mine || (!where.dm && Store.canManage(serverId)));
   menu([
-    m.text && { label: 'Copy Text', icon: 'copy', action: () => copyText(m.text, 'Copied.') },
+    !m.call && !m.sending && { label: 'Reply', icon: 'reply', action: () => startReply(m) },
+    m.text && { label: 'Copy Text', icon: 'copy', action: () => copyText(plainText(m.text, fmtCtx()), 'Copied.') },
+    (m.files || []).length === 1 && m.files[0].kind !== 'voice' && { label: 'Save File', icon: 'download', action: async () => { const f = m.files[0]; const u = await attempt(() => Store.downloadUrl(f.path, f.name || 'file')); if (u) { const a = el('a', { href: u, download: f.name || '' }); document.body.append(a); a.click(); a.remove(); } } },
     !m.user.bot && !isMe(m.user) && { label: 'Profile', icon: 'user', action: () => profileAt(m.user, x, y) },
     canDel && '-', canDel && { label: 'Delete Message', icon: 'trash', danger: true, action: async () => {
       if (await confirmBox({ title: 'Delete Message', text: 'Are you sure you want to delete this message?', ok: 'Delete', danger: true })) Store.deleteMessage(where, m.id);
@@ -1074,17 +1971,51 @@ function discoverCard(s) {
 // ---------- wiring ----------
 $('#sticker-btn').append(icon('sticker')); $('#sticker-btn').title = 'Stickers'; $('#send-btn').append(icon('send'));
 const input = $('#input');
-input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(innerHeight * 0.4, input.scrollHeight) + 'px'; });
-input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && prefs.sendOnEnter) { e.preventDefault(); send(); } });
+input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(innerHeight * 0.4, input.scrollHeight) + 'px'; updateMentions(); updateFormatBar(); });
+input.addEventListener('keydown', (e) => {
+  if (mentionHits.length && !$('#mention-pop').hidden) {         // (picking someone from the @ list)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); mentionSel = (mentionSel + (e.key === 'ArrowDown' ? 1 : -1) + mentionHits.length) % mentionHits.length; return updateMentions(); }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mentionSel); }
+    if (e.key === 'Escape') { e.preventDefault(); return closeMentions(); }
+  }
+  if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (!e.shiftKey && MARKS[k]) { e.preventDefault(); return wrapSel(MARKS[k]); }
+    if (e.shiftKey && k === 'x') { e.preventDefault(); return wrapSel('~~'); }
+  }
+  if (e.key === 'Escape') { const d = placeNow() && draft(placeNow()); if (d && d.reply) { d.reply = null; renderComposerExtras(); return; } }
+  if (e.key === 'ArrowUp' && !input.value && placeNow()) {                    // (Up in an empty box: reply to the last message, like Discord's quick reply)
+    const list = view === 'home' ? Store.dm(dmId) : Store.messages(channelId), m = [...list].reverse().find((x) => !x.call && !x.mine);
+    if (m && e.altKey) { e.preventDefault(); return startReply(m); }
+  }
+  if (e.key === 'Enter' && !e.shiftKey && prefs.sendOnEnter) { e.preventDefault(); send(); }
+});
+for (const ev of ['select', 'keyup', 'mouseup', 'focus']) input.addEventListener(ev, updateFormatBar);
+input.addEventListener('blur', () => setTimeout(() => { updateFormatBar(); if (document.activeElement !== input) closeMentions(); }, 120));
+input.addEventListener('paste', (e) => { const files = [...((e.clipboardData && e.clipboardData.files) || [])]; if (files.length) { e.preventDefault(); addFiles(files); } });
+// files dragged onto the conversation wait in the message box (and nothing else happens if they miss it)
+const hasFiles = (e) => [...((e.dataTransfer && e.dataTransfer.types) || [])].includes('Files');
+let dragDepth = 0;
+const dropZone = $('.main');
+dropZone.addEventListener('dragenter', (e) => { if (!hasFiles(e) || $('#composer').hidden) return; e.preventDefault(); if (++dragDepth === 1) showDrop(true); });
+dropZone.addEventListener('dragover', (e) => { if (!hasFiles(e) || $('#composer').hidden) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+dropZone.addEventListener('dragleave', (e) => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; showDrop(false); } });
+dropZone.addEventListener('drop', (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth = 0; showDrop(false); if (!$('#composer').hidden) addFiles([...e.dataTransfer.files]); });
+addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('drop', (e) => { if (hasFiles(e)) e.preventDefault(); });
+function showDrop(on) {
+  const box = $('#drop');
+  if (!on) { box.hidden = true; return; }
+  const where = view === 'home' ? dmName(Store.dmInfo ? Store.dmInfo(dmId) : null) || 'this conversation' : '#' + ((Store.channel(channelId) || {}).name || 'channel');
+  box.replaceChildren(el('div', { className: 'drop-card' }, el('div', { className: 'drop-ic' }, icon('file', 40)), el('h3', {}, 'Upload to ' + where), el('p', {}, 'Your files wait in the message box until you send.')));
+  box.hidden = false;
+}
 $('#send-btn').onclick = () => { send(); input.focus(); };
 $('#sticker-btn').onclick = (e) => { e.stopPropagation(); togglePicker('stickers'); };
 document.addEventListener('click', (e) => {
   if (picker && !picker.contains(e.target) && !e.target.closest('#composer .tool')) closePicker();
   if (pop && !pop.contains(e.target) && !e.target.closest('.msg .nm, .msg .avatar, #me-panel .avatar, #me-panel .who, .mem, .side-head, .ctx')) closePop();
 });
-$('#c-mic').onclick = () => { if (!stream) return; toggleMic(); };
-$('#c-cam').onclick = () => { if (!stream) return; camOn = !camOn; stream.getVideoTracks().forEach((t) => { t.enabled = camOn; }); syncCallButtons(); };
-$('#c-leave').onclick = closeCall;
 addEventListener('resize', closePop);
 
 let lastError = '';
@@ -1096,9 +2027,35 @@ Store.onChange(() => {
   lastError = err;
 });
 
-// a nudge when something new lands while you're looking elsewhere
+// a desktop notification (when allowed, and Fluentdat isn't what you're looking at); clicking it takes you there
+function notifyDesktop(title, body, go, tag) {
+  if (!prefs.notify || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    const n = new Notification(title, { body: String(body || '').slice(0, 160), icon: 'icons/icon-192.png', tag: tag || undefined });
+    n.onclick = () => { try { window.focus(); } catch {} if (go) go(); n.close(); };
+  } catch {}
+}
+// something new somewhere (signed in): a sound and a notification, if that place may tell you about it
+Store.onMessage(({ place, dm, ping, message: m, server }) => {
+  const looking = (dm ? view === 'home' && dmId === place : view === 'server' && channelId === place) && document.visibilityState === 'visible' && document.hasFocus();
+  if (!dm) renderRail();
+  if (looking) return;
+  const tell = dm ? !Store.placeSettings(place).muted : ping ? levelFor(place, server) !== 'none' : !mutedHere(place, server) && levelFor(place, server) === 'all';
+  if (!tell) return;
+  if (prefs.sound && !prefs.deafened && !SILENT) blip();
+  const d = dm ? Store.dmInfo(place) : null, c = dm ? null : Store.channel(place), sv = server ? Store.server(server) : null;
+  const what = m.text ? plainText(m.text, fmtCtx()) : (m.files || []).some((f) => f.kind === 'voice') ? 'sent a voice message' : (m.files || []).length ? `sent ${m.files.length === 1 ? 'an attachment' : m.files.length + ' attachments'}` : m.sticker ? 'sent a sticker' : '';
+  const title = dm ? (d && d.kind === 'group' ? `${m.user.name} (${dmName(d)})` : m.user.name) : `${m.user.name} (#${c ? c.name : 'channel'}${sv ? ', ' + sv.name : ''})`;
+  notifyDesktop(title, what, () => { if (dm) { view = 'home'; dmId = place; } else { view = 'server'; serverId = server; channelId = place; } renderAll(); }, place);
+});
+// seen again: what's in front of you counts as read
+addEventListener('focus', () => { if (Store.kind === 'supabase' && placeNow()) { Store.markRead(placeNow()); renderAll(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Store.kind === 'supabase' && placeNow()) { Store.markRead(placeNow()); renderAll(); } });
+
+// a nudge when something new lands while you're looking elsewhere (in this browser only: signed in, the above does it)
 let lastSeen = 0;
 function alertNew() {
+  if (Store.kind === 'supabase') return;
   const msgs = view === 'home' && dmId ? Store.dm(dmId) : (view === 'server' && channelId ? Store.messages(channelId) : []);
   const latest = msgs.length ? msgs[msgs.length - 1] : null;
   if (!latest || latest.ts <= lastSeen) { if (latest) lastSeen = Math.max(lastSeen, latest.ts); return; }
@@ -1108,7 +2065,7 @@ function alertNew() {
   if (prefs.notify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     try { new Notification(latest.user.name + ' in Fluentdat', { body: (latest.text || 'sent a sticker').slice(0, 120) }); } catch {}
   }
-  if (prefs.sound && !prefs.deafened) blip();
+  if (prefs.sound && !prefs.deafened && !SILENT) blip();
 }
 function blip() {
   try {
@@ -1122,6 +2079,15 @@ function blip() {
 }
 Store.init();
 renderAll();
+// a link to a channel opens it once your servers have loaded
+function followLink() {
+  const m = location.hash.match(/channel=([0-9a-f-]{36})/i); if (!m) return;
+  const c = Store.channel(m[1].toLowerCase()); if (!c) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  view = 'server'; serverId = c.server; openChannel(c);
+}
+ready.then(() => setTimeout(followLink, 0));
+addEventListener('hashchange', followLink);
 
 // ===================== preferences =====================
 function loadPrefs() {
@@ -1139,11 +2105,13 @@ function loadPrefs() {
   p.bannerH = was(saved.bannerH, { s: 96, m: 136, l: 180 }, 136);
   if (typeof saved.icTop !== 'number' && saved.btnSize) p.icTop = p.icComposer = p.icPanel = { s: 16, m: 20, l: 25 }[saved.btnSize] || 20;
   for (const k of ['callBtns', 'composerSticker', 'composerSend', 'railSize', 'memberW', 'avatarSize', 'btnSize']) delete p[k];
+  // (channels got Discord's settings cog on hover; the old × to delete one is now in it, and in the right-click menu)
+  if (!p.chanGear) { p.chanGear = true; if (!(saved.hidden && 'delChannel' in saved.hidden)) p.hidden.delChannel = true; }
   for (const k of Object.keys(SIZES)) p[k] = sizeOf(k, p[k]);
   return p;
 }
 // what a layout preset or reset leaves alone (they're not about layout)
-const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast'];
+const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar'];
 const keepOf = () => Object.fromEntries(KEEP.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
 function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); }
 function applyPrefs() {
@@ -1521,7 +2489,9 @@ function appearancePane(redraw) {
       el('button', { className: 'btn', onclick: () => openThemes() }, 'Manage Themes…')),
     el('h3', {}, 'Messages'),
     row2('Display', 'Cozy gives each message room. Compact fits more on screen.', sel(prefs.density, [['cozy', 'Cozy'], ['compact', 'Compact']], (v) => { prefs.density = v; savePrefs(); })),
-    row2('Text size', 'Everything in the app scales with this.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })())];
+    row2('Text size', 'Everything in the app scales with this.', (() => { const r = el('input', { type: 'range', min: 12, max: 20, step: 1, value: prefs.fontSize }); r.oninput = () => { prefs.fontSize = +r.value; savePrefs(); }; return r; })()),
+    row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos under the messages that link to them.', sw(prefs.embeds !== 'off', (on) => { prefs.embeds = on ? 'on' : 'off'; savePrefs(); renderAll(); })),
+    row2('Formatting bar', 'Bold, italics, code and more above the message box when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => { prefs.formatBar = on ? 'on' : 'off'; savePrefs(); }))];
 }
 
 function notificationsPane(redraw) {
@@ -1539,7 +2509,9 @@ function notificationsPane(redraw) {
       })),
     row2('Permission', 'What the browser currently allows.', el('span', { className: 'chip ' + (perm === 'granted' ? 'good' : perm === 'denied' ? 'bad' : '') }, perm)),
     el('h3', {}, 'Sounds'),
-    row2('Message sound', 'A short blip for new messages. (Off by default so nothing surprises you.)', sw(!!prefs.sound, (on) => { prefs.sound = on; savePrefs(); }))];
+    row2('Message sound', 'A short blip for new messages. (Off by default so nothing surprises you.)', sw(!!prefs.sound, (on) => { prefs.sound = on; savePrefs(); })),
+    row2('Ring for calls', 'A ringtone when someone calls you, and a ringback while you call them. Deafened, it stays quiet.', sw(prefs.ring !== false, (on) => { prefs.ring = on; savePrefs(); })),
+    Store.kind === 'supabase' ? el('div', { className: 'note-box', style: 'margin-top:14px' }, 'Each server, channel and DM can be muted, or set to tell you about everything, only @mentions, or nothing: right-click it.') : null];
 }
 
 function privacyPane() {
@@ -1570,7 +2542,8 @@ function accessibilityPane() {
 }
 
 function keysPane() {
-  const keys = [['Enter', 'Send the message'], ['Shift + Enter', 'New line'], ['Esc', 'Close settings or a dialog'], ['/help', 'List the chat commands'], ['/roll, /flip', 'Dice and coin'], ['/me <action>', 'Write an action'], ['/nick <name>', 'Change your display name'], ['/theme <name>', 'Switch theme'], ['/clear', 'Empty the channel'], ['!ping', 'Flubot replies']];
+  const keys = [['Enter', 'Send the message'], ['Shift + Enter', 'New line'], ['⌘B / Ctrl+B', 'Bold (also ⌘I / Ctrl+I italics, ⌘U / Ctrl+U underline, ⌘⇧X strikethrough). In the Fluent browser ⌘B shows and hides its sidebar, so use Ctrl+B or the bar that appears when you select text.'],
+    ['@', 'Mention someone (pick from the list with ↑ ↓ and Enter)'], ['Esc', 'Stop replying'], ['Alt + ↑', 'Reply to the last message (in an empty box)'], ['Esc', 'Close settings or a dialog'], ['/help', 'List the chat commands'], ['/roll, /flip', 'Dice and coin'], ['/me <action>', 'Write an action'], ['/nick <name>', 'Change your display name'], ['/theme <name>', 'Switch theme'], ['/clear', 'Empty the channel'], ['!ping', 'Flubot replies']];
   return [el('h2', {}, 'Keyboard Shortcuts'), el('p', { className: 'sub' }, 'And the commands you can type into any channel.'),
     el('div', { className: 'sx-list' }, ...keys.map(([k, what]) => el('div', { className: 'it' }, el('code', { style: 'background:var(--input);padding:3px 8px;border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:.85rem' }, k), el('span', { className: 'nm3', style: 'color:var(--muted)' }, what))))];
 }
