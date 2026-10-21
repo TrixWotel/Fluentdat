@@ -27,7 +27,7 @@ const listeners = new Set(), messageListeners = new Set(), callListeners = new S
 function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
-    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [] };
+    emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {} };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -64,7 +64,8 @@ function toUser(p) {
     plate: p.plate || '', since: p.created_at ? Date.parse(p.created_at) : 0, status: p.id === myId() ? myStatus() : online[p.id] || 'offline',
     theme: p.theme1 || p.theme2 ? [p.theme1 || '', p.theme2 || ''] : null,
     style: p.name_font || p.name_effect || p.name_color1 ? { font: p.name_font || '', effect: p.name_effect || '', c1: p.name_color1 || '', c2: p.name_color2 || '' } : null,
-    tag: p.tag && p.tag_server ? { text: p.tag, badge: p.tag_badge || '', color: p.tag_color || '', server: p.tag_server } : null };
+    tag: p.tag && p.tag_server ? { text: p.tag, badge: p.tag_badge || '', color: p.tag_color || '', server: p.tag_server } : null,
+    playing: p.playing && typeof p.playing === 'object' && p.playing.n ? p.playing : null };
 }
 const userOf = (id) => ({ ...toUser(cache.profiles[id]), id });
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
@@ -78,6 +79,8 @@ const toRole = (r) => ({ id: r.id, server: r.server_id, name: r.name, color: r.c
 // someone's roles in a server, top one first
 const rolesOf = (sv, uid) => cache.memberRoles.filter((x) => x.server_id === sv && x.user_id === uid)
   .map((x) => cache.roles.find((r) => r.id === x.role_id)).filter(Boolean).sort(byPos);
+const toExtras = (r) => ({ connections: Array.isArray(r && r.connections) ? r.connections : [], widgets: Array.isArray(r && r.widgets) ? r.widgets : [],
+  activity: Array.isArray(r && r.activity) ? r.activity : [] });
 const toCategory = (r) => ({ id: r.id, server: r.server_id, name: r.name, position: r.position });
 const toChannel = (r) => ({ id: r.id, server: r.server_id, category: r.category_id, name: r.name, kind: r.kind, position: r.position, topic: r.topic || '' });
 const otherIn = (d) => (d.user_a === myId() ? d.user_b : d.user_a);
@@ -122,10 +125,17 @@ const toSticker = (r) => ({ id: r.id, server: r.server_id, name: r.name, emoji: 
 // ---------- loading ----------
 const PROFILE_COLS = 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at';
 const PROFILE_STYLE = ',theme1,theme2,name_font,name_effect,name_color1,name_color2,tag_server,tag,tag_badge,tag_color';
+// (newest first: an older database lacks the later columns, and Fluentdat carries on with what it has)
+const PROFILE_SETS = [PROFILE_COLS + PROFILE_STYLE + ',playing', PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS];
+let profileSet = 0;
 async function profilesQ(q) {
-  if (!styled) return q('profiles', PROFILE_COLS);
-  try { return await q('profiles', PROFILE_COLS + PROFILE_STYLE); }
-  catch (e) { if (!missing(e)) throw e; styled = false; state.needsSetup = true; return q('profiles', PROFILE_COLS); }
+  for (;;) {
+    try { return await q('profiles', PROFILE_SETS[profileSet]); }
+    catch (e) {
+      if (!missing(e) || profileSet === PROFILE_SETS.length - 1) throw e;
+      profileSet++; state.needsSetup = true; if (profileSet === PROFILE_SETS.length - 1) styled = false;
+    }
+  }
 }
 async function loadAll() {
   if (!session) return;
@@ -449,7 +459,8 @@ export const SupabaseStore = {
     try {
       const j = await (await fetch(SUPABASE.url.replace(/\/$/, '') + '/auth/v1/settings', { headers: { apikey: SUPABASE.anonKey } })).json();
       const ext = j.external || {};
-      providersOn = { discord: !!ext.discord, github: !!ext.github, email: ext.email !== false };
+      providersOn = { discord: !!ext.discord, github: !!ext.github, email: ext.email !== false,
+        twitch: !!ext.twitch, spotify: !!ext.spotify, twitter: !!(ext.twitter || ext.x) };          // (the last three: for verified connections)
     } catch { providersOn = { discord: true, github: true, email: true }; }     // (can't tell: offer them all)
     return providersOn;
   },
@@ -865,6 +876,35 @@ export const SupabaseStore = {
       emit(); throw e;
     }
   },
+  // ---- a profile's extras, fetched when someone opens it: Connections, the Board's widgets, the games played lately ----
+  async profileExtras(id) {
+    if (!isUuid(id)) return toExtras(null);
+    const rows = await soft(sb.from('profile_extras').select('*').eq('id', id).then(must), []);
+    return (cache.extras[id] = toExtras(rows[0]));
+  },
+  extrasNow: (id) => cache.extras[id] || null,          // (what was fetched last, to show at once while it's fetched again)
+  async setProfileExtras(patch) {
+    const id = myId(), was = cache.extras[id], row = { id };
+    for (const k of ['connections', 'widgets', 'activity']) if (k in patch) row[k] = patch[k];
+    cache.extras[id] = { ...toExtras(was), ...patch }; emit();
+    try { const r = must(await sb.from('profile_extras').upsert(row).select('*')); cache.extras[id] = toExtras(r[0]); emit(); return cache.extras[id]; }
+    catch (e) { cache.extras[id] = was; emit(); throw e; }
+  },
+  // the game you say you're playing ({ n, s, l }), or null; the database times it and adds it to your recent activity
+  setPlaying(game) {
+    if (!cache.me || profileSet > 0) return;
+    const g = game ? Object.fromEntries(['n', 's', 'l'].filter((k) => game[k]).map((k) => [k, game[k]])) : null;
+    cache.me.playing = g ? { ...g, at: new Date().toISOString() } : null; emit();
+    push(sb.from('profiles').update({ playing: g }).eq('id', myId()).then(must), loadAll);
+  },
+  canPlay: () => profileSet === 0,
+  // the accounts you sign in with (Discord, GitHub…): what a connection can be checked against
+  identities: () => ((session && session.user && session.user.identities) || []).map((i) => {
+    const d = i.identity_data || {};
+    return { provider: i.provider, name: i.provider === 'discord' ? d.full_name || String(d.name || '').split('#')[0] : d.user_name || d.preferred_username || d.nickname || d.name || '' };
+  }),
+  // link another sign-in to your account (off unless the project allows it): the page goes there and comes back
+  async linkAccount(provider) { must(await sb.auth.linkIdentity({ provider, options: { redirectTo: location.origin + location.pathname } })); },
   // ---- server tags: a server's admins give it one; its members may wear it (only one at a time) ----
   styled: () => styled,
   async adoptTag(serverId) { must(await sb.rpc('adopt_tag', { p_server: serverId || null })); await loadAll(); },

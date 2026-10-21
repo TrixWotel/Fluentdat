@@ -7,7 +7,7 @@ export const ANIMS = [
   ['popouts', 'Windows & menus', 'Profile cards', 'A profile card slides out beside whoever you clicked, and slips away when you click again.', ['.pop', '.pop.out', '.pop .p-av .avatar .fill', '.cp']],
   ['dialogs', 'Windows & menus', 'Windows', 'Windows zoom in over a fading backdrop, and shrink away when they close.', ['.scrim', '.scrim > .dialog', '.scrim.closing', '.scrim.closing > .dialog']],
   ['settings', 'Windows & menus', 'Settings', 'Settings rises into place, each page slides in as you switch to it, and the unsaved-changes bar slides up.', ['.sx-backdrop', '.sx', '.sx-body > *', '.sx-backdrop.closing', '.sx-backdrop.closing .sx', '.sx-nav button', '.cs-bar', '.cs-bar.shake', '.pm-advh svg.ic', '.tri button']],
-  ['fullProfile', 'Windows & menus', 'Full profiles', 'The whole profile pops up, its tab underline slides, and its lists ripple in.', ['.dialog.fp-dlg', '.fp-tabs button::after', '.fp-list > *', '.fp-row', '.fp-row > svg.ic', '.fp-x']],
+  ['fullProfile', 'Windows & menus', 'Full profiles', 'The whole profile pops up, its tab underline slides, its lists ripple in, and game covers lift when you point at them.', ['.dialog.fp-dlg', '.fp-tabs button::after', '.fp-list > *', '.fp-row', '.fp-row > svg.ic', '.fp-x', '.gc .gt', '.gc-x', '.gp-tick', '.cx-pick']],
   ['picker', 'Windows & menus', 'Emoji picker', 'The emoji and sticker picker springs up from its button.', ['.xp', '.xp.out', '.xp-pv', '.xp-r', '.xp-tabs button']],
   ['tooltips', 'Windows & menus', 'Name tags', 'The name tags beside the server rail slide in.', ['.tip', '.tip.show']],
   ['toasts', 'Windows & menus', 'Toasts and notices', 'Little messages at the bottom rise up, and reminders bounce in.', ['#toast', '.notice']],

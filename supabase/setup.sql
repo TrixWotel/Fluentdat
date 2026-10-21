@@ -281,6 +281,16 @@ create table if not exists public.category_perms (
   check (allow <@ array['view','manage_channels','manage_perms','invite','send','attach','react','mention_everyone','manage_messages','connect']::text[] and deny <@ array['view','manage_channels','manage_perms','invite','send','attach','react','mention_everyone','manage_messages','connect']::text[])
 );
 
+-- what a profile shows besides its card, fetched when someone opens it (like Discord's): links to your accounts elsewhere
+-- (Connections), the Board's widgets (games you like, want to play, your favourite) and the games you played lately
+create table if not exists public.profile_extras (
+  id uuid primary key references public.profiles (id) on delete cascade,
+  connections jsonb not null default '[]'::jsonb,
+  widgets jsonb not null default '[]'::jsonb,
+  activity jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
 alter table public.profiles add column if not exists plate text not null default '';
@@ -297,6 +307,8 @@ alter table public.profiles add column if not exists tag_server uuid references 
 alter table public.profiles add column if not exists tag text not null default '';
 alter table public.profiles add column if not exists tag_badge text not null default '';
 alter table public.profiles add column if not exists tag_color text not null default '';
+-- the game you say you're playing, and since when (shown under your name, as on Discord)
+alter table public.profiles add column if not exists playing jsonb;
 alter table public.servers add column if not exists tag text not null default '';
 alter table public.servers add column if not exists tag_badge text not null default '';
 alter table public.servers add column if not exists tag_color text not null default '';
@@ -595,6 +607,12 @@ drop policy if exists "see people you know" on public.profiles;
 create policy "see people you know" on public.profiles for select to authenticated using (knows(id));
 drop policy if exists "edit your own profile" on public.profiles;
 create policy "edit your own profile" on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
+-- a profile's Connections, widgets and activity: seen by whoever can see the profile, kept by its owner
+alter table public.profile_extras enable row level security;
+drop policy if exists "see the extras of people you know" on public.profile_extras;
+create policy "see the extras of people you know" on public.profile_extras for select to authenticated using (knows(id));
+drop policy if exists "keep your own extras" on public.profile_extras;
+create policy "keep your own extras" on public.profile_extras for all to authenticated using (id = auth.uid()) with check (id = auth.uid());
 
 drop policy if exists "members see the server" on public.servers;
 create policy "members see the server" on public.servers for select to authenticated using (is_member(id) or public);
@@ -950,6 +968,100 @@ begin
 end $$;
 drop trigger if exists guard_profile_tag on public.profiles;
 create trigger guard_profile_tag before update on public.profiles for each row execute function public.guard_profile_tag();
+
+-- a game on a profile: its name, and maybe its Steam number (for its cover from Steam), the name of its logo on Wikimedia
+-- Commons, or a small picture of its own; never a web address, so nobody can see who looks at a profile
+create or replace function public.game_ok(g jsonb, p_pictures boolean default true) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce(jsonb_typeof(g) = 'object'
+    and not exists (select 1 from jsonb_object_keys(g) k where k not in ('n', 's', 'l', 'i', 'at'))
+    and jsonb_typeof(g->'n') = 'string' and length(g->>'n') between 1 and 80 and (g->>'n') !~ '[[:cntrl:]]'
+    and (g->'s' is null or (jsonb_typeof(g->'s') = 'string' and (g->>'s') ~ '^[0-9]{1,10}$'))
+    and (g->'l' is null or (jsonb_typeof(g->'l') = 'string' and (g->>'l') ~ '^[^/\\?#<>|"{}[:cntrl:]]{1,180}\.(svg|png|jpe?g|gif|webp)$'))
+    and (g->'i' is null or (p_pictures and jsonb_typeof(g->'i') = 'string' and length(g->>'i') <= 40000
+      and (g->>'i') ~ '^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$'))
+    and (g->'at' is null or (jsonb_typeof(g->'at') = 'string' and (g->>'at') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T')), false);
+$$;
+-- a connection: an account on one of the services Fluentdat knows, by its name there (a website by its https address)
+create or replace function public.connection_ok(c jsonb) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce(jsonb_typeof(c) = 'object'
+    and not exists (select 1 from jsonb_object_keys(c) k where k not in ('s', 'n', 'v', 'u'))
+    and c->>'s' in ('discord', 'github', 'steam', 'tiktok', 'youtube', 'twitch', 'spotify', 'x', 'instagram', 'reddit', 'roblox', 'bluesky',
+      'xbox', 'playstation', 'epicgames', 'battlenet', 'riot', 'leagueoflegends', 'crunchyroll', 'website')
+    and jsonb_typeof(c->'n') = 'string' and length(c->>'n') between 1 and 100 and (c->>'n') !~ '[[:cntrl:]]'
+    and (c->>'s' <> 'website' or (c->>'n') ~ '^https://[^[:space:]<>"]+\.[^[:space:]<>"]+$'), false);
+$$;
+-- is a connection an account you sign in with (or linked)? Then it's marked verified (v), with your number there (u) for
+-- its link. Whatever a connection says about itself is ignored.
+create or replace function public.verify_connection(p_user uuid, c jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare i record; names text[];
+begin
+  c := c - 'v' - 'u';
+  for i in select provider, provider_id, identity_data d from auth.identities where user_id = p_user loop
+    continue when not (i.provider = c->>'s' or (i.provider in ('twitter', 'x') and c->>'s' = 'x'));
+    names := case i.provider
+      when 'discord' then array[i.d->>'full_name', split_part(i.d->>'name', '#', 1)]
+      when 'github' then array[i.d->>'user_name', i.d->>'preferred_username']
+      when 'spotify' then array[i.provider_id, i.d->>'name', i.d->>'full_name']
+      else array[i.d->>'user_name', i.d->>'preferred_username', i.d->>'nickname', i.d->>'name'] end;
+    if lower(c->>'n') in (select lower(x) from unnest(names) x where coalesce(x, '') <> '') then
+      return c || jsonb_build_object('v', true, 'u', i.provider_id);
+    end if;
+  end loop;
+  return c;
+end $$;
+-- a profile's extras: up to 20 connections (checked against your sign-ins), up to 6 widgets (each kind once, up to 20
+-- games, a favourite just one), and up to 10 recent games
+create or replace function public.guard_profile_extras() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare w jsonb; kinds text[] := '{}';
+begin
+  if coalesce(jsonb_typeof(new.connections), '') <> 'array' or jsonb_array_length(new.connections) > 20
+     or exists (select 1 from jsonb_array_elements(new.connections) c where not connection_ok(c)) then
+    raise exception 'A connection is an account on one of the services Fluentdat knows (up to 20).';
+  end if;
+  new.connections := (select coalesce(jsonb_agg(verify_connection(new.id, c) order by o), '[]'::jsonb) from jsonb_array_elements(new.connections) with ordinality t(c, o));
+  if coalesce(jsonb_typeof(new.widgets), '') <> 'array' or jsonb_array_length(new.widgets) > 6 or length(new.widgets::text) > 400000 then
+    raise exception 'Up to 6 widgets, and not too many pictures in them.';
+  end if;
+  for w in select * from jsonb_array_elements(new.widgets) loop
+    if coalesce(jsonb_typeof(w), '') <> 'object' or exists (select 1 from jsonb_object_keys(w) k where k not in ('t', 'g'))
+       or coalesce(w->>'t', '') not in ('likes', 'want', 'fav') or (w->>'t') = any (kinds)
+       or coalesce(jsonb_typeof(w->'g'), '') <> 'array' or jsonb_array_length(w->'g') > (case w->>'t' when 'fav' then 1 else 20 end)
+       or exists (select 1 from jsonb_array_elements(w->'g') g where not game_ok(g)) then
+      raise exception 'A widget is a kind Fluentdat knows (each once) with up to 20 games.';
+    end if;
+    kinds := kinds || (w->>'t');
+  end loop;
+  if coalesce(jsonb_typeof(new.activity), '') <> 'array' or jsonb_array_length(new.activity) > 10
+     or exists (select 1 from jsonb_array_elements(new.activity) g where not game_ok(g, false)) then
+    raise exception 'Recent activity is up to 10 games.';
+  end if;
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists guard_profile_extras on public.profile_extras;
+create trigger guard_profile_extras before insert or update on public.profile_extras for each row execute function public.guard_profile_extras();
+-- the game you say you're playing: a game Fluentdat can show (no picture of its own), stamped with when you started
+-- (the same game again keeps its start), and put at the top of your recent activity
+create or replace function public.guard_playing() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.playing is not null and jsonb_typeof(new.playing) = 'null' then new.playing := null; end if;
+  if new.playing is null or (TG_OP = 'UPDATE' and new.playing is not distinct from old.playing) then return new; end if;
+  if not game_ok(new.playing - 'at', false) then raise exception 'That isn''t a game Fluentdat can show.'; end if;
+  if TG_OP = 'UPDATE' and old.playing is not null and (old.playing - 'at') = (new.playing - 'at') then new.playing := old.playing; return new; end if;
+  new.playing := (new.playing - 'at') || jsonb_build_object('at', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'));
+  insert into profile_extras (id, activity) values (new.id, jsonb_build_array(new.playing))
+  on conflict (id) do update set activity = (select coalesce(jsonb_agg(x.g order by x.o), '[]'::jsonb) from (
+    select new.playing g, 0::bigint o
+    union all select t.g, t.o from jsonb_array_elements(profile_extras.activity) with ordinality t(g, o) where t.g->>'n' is distinct from new.playing->>'n') x where x.o < 10);
+  return new;
+end $$;
+drop trigger if exists guard_playing on public.profiles;
+create trigger guard_playing before insert or update on public.profiles for each row execute function public.guard_playing();
 create or replace function public.sync_server_tag() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
@@ -1358,7 +1470,7 @@ grant execute on function public.is_member(uuid), public.is_admin(uuid), public.
   public.in_dm(uuid), public.knows(uuid), public.is_friend(uuid), public.topic_ok(text), public.file_ok(text, boolean),
   public.is_app_admin(), public.blocked_with(uuid), public.dm_blocked(uuid), public.expression_ok(text),
   public.place_ok(uuid), public.message_in(uuid, uuid), public.react_ok(uuid), public.react_with(uuid, uuid, text), public.cat_can(uuid, text), public.chan_can(uuid, text) to authenticated;
-revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text) from public, anon, authenticated;
+revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text), public.verify_connection(uuid, jsonb) from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -1366,11 +1478,11 @@ grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms to authenticated;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras to authenticated;
 revoke all on public.profiles, public.servers, public.server_members, public.categories,
   public.channels, public.messages, public.invites, public.dms, public.dm_messages, public.friends,
   public.roles, public.member_roles, public.bans, public.dm_members, public.calls, public.reads, public.seen,
-  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms from anon;
+  public.app_admins, public.app_invites, public.blocks, public.reports, public.server_emoji, public.server_stickers, public.reactions, public.category_perms, public.profile_extras from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;

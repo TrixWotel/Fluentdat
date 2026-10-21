@@ -69,6 +69,14 @@ const fallback = {
   setCategoryPerm: async () => { throw new Error(SIGN_IN + 'set permissions.'); },
   removeCategoryPerm: async () => {},
   moveCategories: (sv, ids) => ids.forEach((id, i) => Store.updateCategory(id, { position: i })),
+  // your profile's Connections, Board and recent games ('me': kept in this browser; nobody else's are known here)
+  profileExtras: async (id) => (id === 'me' ? localExtras() : blankExtras()),
+  extrasNow: (id) => (id === 'me' ? localExtras() : null),
+  setProfileExtras: async (patch) => saveExtras(patch),
+  setPlaying: (g) => { if (g) { const was = localExtras().activity.filter((x) => x.n !== g.n); saveExtras({ activity: [{ ...g, at: new Date().toISOString() }, ...was].slice(0, 10) }); } },
+  canPlay: () => true,
+  identities: () => [],
+  linkAccount: async () => { throw new Error(SIGN_IN + 'link your accounts.'); },
   adoptTag: async () => { throw new Error(SIGN_IN + 'wear a server tag.'); },
   tagInfo: async () => null,
   findUser: async () => null,
@@ -116,6 +124,17 @@ const fallback = {
   },
 };
 const SIGN_IN = 'Sign in with Discord, GitHub or email to ';
+const EXTRAS = 'fluentdat.extras';
+const blankExtras = () => ({ connections: [], widgets: [], activity: [] });
+function localExtras() {
+  try { const v = JSON.parse(localStorage.getItem(EXTRAS)) || {}; return { connections: Array.isArray(v.connections) ? v.connections : [], widgets: Array.isArray(v.widgets) ? v.widgets : [], activity: Array.isArray(v.activity) ? v.activity : [] }; }
+  catch { return blankExtras(); }
+}
+function saveExtras(patch) {
+  const next = { ...localExtras(), ...patch };
+  try { localStorage.setItem(EXTRAS, JSON.stringify(next)); } catch { throw new Error('This browser has no room left for that (try fewer pictures).'); }
+  emit(); return next;
+}
 // while a sign-in is being picked up
 const waiting = {
   servers: () => [], server: () => null, dmList: () => [], friends: () => [], stickers: () => [], account: () => null,

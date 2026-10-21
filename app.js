@@ -14,6 +14,7 @@ import { LOGOS, THEME_LOGO, logoEl, logoInfo, setFavicon } from './logo.js';
 import { openColor, colorSwatch, closeColor } from './color.js';
 import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily, loadFont } from './namestyle.js';
 import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
+import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (the test page hands in pretend cameras and microphones, and keeps everything quiet)
 const SILENT = !!globalThis.__fluentdatSilent, TEST_MEDIA = globalThis.__fluentdatMedia || null, TEST_SCREEN = globalThis.__fluentdatScreen || null;
 
@@ -76,7 +77,7 @@ const initials = (name) => String(name || '?').trim().slice(0, 2).toUpperCase();
 const stamp = () => { const u = { name: me.name, color: me.color }; if (me.avatar) u.avatar = me.avatar; if (me.pronouns) u.pronouns = me.pronouns; if (me.about) u.about = me.about; if (me.style) u.style = me.style; return u; };
 const myTag = () => (Store.kind === 'supabase' && Store.myProfile ? Store.myProfile().tag || null : null);
 const asMember = () => ({ id: 'me', name: me.name, color: me.color, avatar: me.avatar, pronouns: me.pronouns, about: me.about, status: me.status, plate: me.plate || '', banner: me.banner || '',
-  theme: me.theme || null, style: me.style || null, tag: myTag(), me: true });
+  theme: me.theme || null, style: me.style || null, tag: myTag(), playing: me.playing || null, me: true });
 
 // other people's profiles are theirs to fill in, so only colours and pictures of the expected shape are drawn
 // (a stray web address would let a stranger see who looked at their profile)
@@ -1192,7 +1193,7 @@ function renderMembers() {
   }
   if (view === 'home' && dmId && prefs.dmPanel) {
     const u = Store.dmUser(dmId), key = u ? JSON.stringify([u.id, u.name, u.login, u.pronouns, u.about, u.since, String(u.avatar || '').length, u.color, u.theme, u.style, u.tag, u.status,
-      friendState(u), Store.kind === 'supabase' && Store.blocked(u.id), Store.mutualServerList(u.id).map((x) => x.id), noteOn(u.id)]) : '';
+      friendState(u), Store.kind === 'supabase' && Store.blocked(u.id), Store.mutualServerList(u.id).map((x) => x.id), noteOn(u.id), playingNow(u.playing) && u.playing]) : '';
     if (box.dataset.dmp !== key) { box.dataset.dmp = key; box.replaceChildren(u ? dmPanel(u) : ''); }
     return;
   }
@@ -1205,8 +1206,9 @@ function renderMembers() {
     const nm = el('div', { className: 'nm' }, nmText, tagChipFor(m), m.role === 'owner' ? roleMark('crown', 'Server owner') : m.role === 'admin' ? roleMark('shield', 'Admin') : null);
     nm.style.setProperty('--who', safeColor(m.roleColor || m.color, 'var(--text)'));
     styledName(nmText, m, { roleColored: !!m.roleColor });
-    const who = el('div', { className: 'who' }, nm);
-    if (prefs.memberStatusText) who.append(el('div', { className: 'mem-sub' }, m.about || (m.bot ? 'Bot' : (m.status || 'offline'))));
+    const who = el('div', { className: 'who' }, nm), pl = playingNow(m.playing) ? m.playing : null;
+    if (pl) who.append(el('div', { className: 'mem-sub mem-play' }, 'Playing ', el('b', {}, pl.n)));
+    else if (prefs.memberStatusText) who.append(el('div', { className: 'mem-sub' }, m.about || (m.bot ? 'Bot' : (m.status || 'offline'))));
     const open = pop && pop.dataset.src === 'members' && pop.dataset.uid === String(m.id || m.name);
     const row = el('button', { className: 'mem' + (isOn(m) ? '' : ' off') + (open ? ' open' : ''), onclick: (e) => showProfile(m, e.currentTarget),
       oncontextmenu: (e) => { e.preventDefault(); memberCtx(m, e.clientX, e.clientY); } }, avatarEl(m), who);
@@ -1399,6 +1401,7 @@ function showProfile(user, anchor) {
     say(0); inner.append(line);
     Store.mutualFriends(u.id).then((fr) => { if (line.isConnected) say(fr.length); }, () => {});
   }
+  if (playingNow(u.playing)) inner.append(sec('Playing', playingRow(u.playing)));
   if (u.about) inner.append(sec('About Me', el('div', { className: 'ab' }, u.about)));
   if (u.since) inner.append(sec('Member Since', el('div', {}, new Date(u.since).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))));
   // their roles in this server (admins can hand them out from here)
@@ -1482,6 +1485,7 @@ function dmPanel(u) {
     el('div', { className: 'dmp-tags' }, u.login ? el('span', {}, u.login) : null, u.pronouns ? el('span', { className: 'dmp-pro' }, u.pronouns) : null, tagFor(u) ? el('span', { className: 'dmp-tagwrap' }, tagChipFor(u)) : null));
   const body = el('div', { className: 'dmp-body' });
   if (live && Store.blocked(u.id)) body.append(el('div', { className: 'dmp-card dmp-blocked' }, icon('ban', 16), el('span', {}, 'You blocked them. ', el('button', { className: 'link-btn', onclick: () => unblockUser(u) }, 'Unblock'))));
+  if (playingNow(u.playing)) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Playing'), playingRow(u.playing)));
   if (u.about) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'About Me'), el('div', { className: 'dmp-about' }, u.about)));
   if (u.since) body.append(el('section', { className: 'dmp-card' }, el('h4', {}, 'Member Since'), el('div', { className: 'dmp-since' }, icon('logo', 16), el('span', {}, dateLong(u.since)))));
   // what you have in common
@@ -1503,13 +1507,14 @@ function dmPanel(u) {
     el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'))), u.theme);
 }
 
-// the whole profile, in the middle of the screen: their card on the left (message them, befriend them, your note on them),
-// and on the right the friends and servers you share (click a server to go there, a friend to see theirs)
+// the whole profile, in the middle of the screen (Discord's): their card on the left (message them, befriend them, their
+// connections, your note on them), and on the right their Board, Activity and Wishlist, and the friends and servers you
+// share (click a server to go there, a friend to see theirs)
 let fullOpen = null;
-function fullProfile(user, tab = 'friends') {
+function fullProfile(user, tab = null) {
   closePop(); if (fullOpen) fullOpen.close();
   const self = isMe(user), live = Store.kind === 'supabase';
-  const u = self ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, login: (Store.account() || {}).login || user.login } : user;
+  const u = self ? { ...asMember(), ...user, me: true, name: me.name, avatar: me.avatar, color: me.color, about: me.about, pronouns: me.pronouns, banner: me.banner, playing: me.playing || null, login: (Store.account() || {}).login || user.login } : user;
   const banner = el('div', { className: 'fp-banner' }); setBanner(banner, u.banner, u.color);
   const acts = el('div', { className: 'fp-acts' });
   const drawActs = () => {
@@ -1532,6 +1537,16 @@ function fullProfile(user, tab = 'friends') {
   if (since.length) card.append(sec('Member Since', ...since));
   const fs = live && !self ? Store.friendSince(u.id) : 0;
   if (fs) card.append(sec('Friends Since', el('div', { className: 'fp-since' }, icon('users', 16), el('span', {}, dateLong(fs)))));
+  // what they've added to their profile: their accounts elsewhere, the Board, the games they played (fetched now)
+  const xid = u.bot ? null : self ? (live ? Store.myId() : 'me') : live ? u.id : null;
+  let extras = (xid && Store.extrasNow(xid)) || null, fetched = !xid;
+  const conns = el('div', { className: 'fp-conns' }), connSec = sec('Connections', conns);
+  const drawConns = () => {
+    const list = (extras && extras.connections) || [];
+    conns.replaceChildren(...list.map(connectionRow), ...(self ? [el('button', { className: 'fp-addconn', onclick: () => { w.close(); openUserSettings('connections'); } }, icon('plus', 15), 'Add Connection')] : []));
+    connSec.hidden = !list.length && !self;
+  };
+  if (xid) { card.append(connSec); drawConns(); }
   if (!self && !u.bot && u.id) {
     const note = el('textarea', { className: 'fp-note', placeholder: 'Click to add a note', maxLength: 256, rows: 1, value: noteOn(u.id) });
     const fit = () => { note.style.height = 'auto'; note.style.height = note.scrollHeight + 'px'; };
@@ -1539,20 +1554,32 @@ function fullProfile(user, tab = 'friends') {
     note.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); note.blur(); } };
     card.append(sec('Note (only you see it)', note)); setTimeout(fit, 0);
   }
-  if (!card.childElementCount) card.append(el('div', { className: 'fp-quiet' }, 'Nothing here yet.'));
+  const quiet = el('div', { className: 'fp-quiet' }, 'Nothing here yet.');
+  card.append(quiet); quiet.hidden = [...card.children].some((c) => c !== quiet && !c.hidden);
   left.append(card);
   themeCard(left, u.theme);
-  // the right side: what you share
+  // the right side: their Board, Activity and Wishlist, and what you share
   const right = el('div', { className: 'fp-right' });
   const ms = live && !self ? Store.mutualServerList(u.id) : [];
   let friends = null;
+  const tabs = () => [...(xid ? [['board', 'Board'], ['activity', 'Activity'], ['wishlist', 'Wishlist']] : []),
+    ...(!self && live && !u.bot ? [['friends', 'Mutual Friends', friends ? friends.length : null], ['servers', 'Mutual Servers', ms.length]] : [])];
+  if (!tabs().some(([id]) => id === tab)) tab = (tabs()[0] || [])[0] || null;
   const tabsEl = el('nav', { className: 'fp-tabs', role: 'tablist' }), list = el('div', { className: 'fp-list' });
-  const pick = (t) => { tab = t; draw(); };
-  const draw = () => {
-    tabsEl.replaceChildren(...[['friends', 'Mutual Friends', friends ? friends.length : null], ['servers', 'Mutual Servers', ms.length]].map(([id, label, n]) =>
-      el('button', { className: id === tab ? 'on' : '', role: 'tab', ariaSelected: String(id === tab), onclick: () => pick(id) }, label, n != null ? el('span', { className: 'fp-n' }, String(n)) : null)));
+  // (your own: changes show at once, then as the database kept them)
+  const save = async (patch) => {
+    extras = { ...(extras || { connections: [], widgets: [], activity: [] }), ...patch }; draw(false);
+    const r = await attempt(() => Store.setProfileExtras(patch));
+    extras = r || Store.extrasNow(xid) || extras; if (fullOpen === w) draw(false);
+  };
+  const draw = (anim = true) => {
+    tabsEl.replaceChildren(...tabs().map(([id, label, n]) =>
+      el('button', { className: id === tab ? 'on' : '', role: 'tab', ariaSelected: String(id === tab), onclick: () => { if (tab !== id) { tab = id; draw(); } } }, label, n != null ? el('span', { className: 'fp-n' }, String(n)) : null)));
     let rows;
-    if (tab === 'servers') rows = ms.length ? ms.map((sv) => el('button', { className: 'fp-row', onclick: () => { w.close(); go(sv.id); } }, serverFace(sv, 40),
+    if (tab === 'board' || tab === 'activity' || tab === 'wishlist') {
+      if (!fetched && !extras) rows = [el('div', { className: 'fp-empty' }, 'Loading…')];
+      else rows = tab === 'board' ? boardView(extras, self, save) : tab === 'activity' ? activityView(u, extras, self, () => { u.playing = me.playing || null; draw(false); }) : wishlistView(extras, self, save);
+    } else if (tab === 'servers') rows = ms.length ? ms.map((sv) => el('button', { className: 'fp-row', onclick: () => { w.close(); go(sv.id); } }, serverFace(sv, 40),
       el('div', { className: 'fp-who' }, el('b', {}, sv.name), el('small', {}, plural(((Store.members(sv.id) || []).length), 'Member'))), icon('chevR', 18)))
       : [el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('compass', 34)), 'No servers in common.')];
     else if (!friends) rows = [el('div', { className: 'fp-empty' }, 'Loading…')];
@@ -1560,17 +1587,161 @@ function fullProfile(user, tab = 'friends') {
       el('div', { className: 'fp-who' }, el('b', {}, f.name), el('small', {}, f.login || '')), icon('chevR', 18)))
       : [el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('users', 34)), 'No friends in common.')];
     list.replaceChildren(...rows);
-    list.classList.remove('swap'); void list.offsetWidth; list.classList.add('swap');
+    if (anim) { list.classList.remove('swap'); void list.offsetWidth; list.classList.add('swap'); }
   };
-  if (!self && live && !u.bot) {
+  if (tab) {
     right.append(tabsEl, list); draw();
-    Store.mutualFriends(u.id).then((f) => { friends = f; if (fullOpen === w) draw(); }, () => { friends = []; if (fullOpen === w) draw(); });
-  } else right.append(el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon(self ? 'user' : 'users', 34)), self ? 'This is how others see your profile.' : 'Sign in to see what you have in common.'));
+    if (!self && live && !u.bot) Store.mutualFriends(u.id).then((f) => { friends = f; if (fullOpen === w) draw(false); }, () => { friends = []; if (fullOpen === w) draw(false); });
+  } else right.append(el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('users', 34)), u.bot ? 'Nothing to show here.' : 'Sign in to see what you have in common.'));
   const w = modal({ cls: 'fp-dlg', body: [el('div', { className: 'fp' }, left, right)], onClose: () => { if (fullOpen === w) fullOpen = null; } });
   fullOpen = w;
   w.box.prepend(el('button', { className: 'fp-x', title: 'Close', onclick: () => w.close() }, icon('x', 20)));
   if (!u.banner && u.id && !self) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
+  if (xid) Store.profileExtras(xid).then((x) => { extras = x; fetched = true; if (fullOpen === w) { drawConns(); quiet.hidden = [...card.children].some((c) => c !== quiet && !c.hidden); draw(false); } },
+    () => { fetched = true; if (fullOpen === w) draw(false); });
   return w;
+}
+// one of someone's connections, on their profile (it opens their page there, when the service has one)
+function connectionRow(c) {
+  const href = connectionLink(c), s = SERVICE[c.s] || { name: '' };
+  const kids = [brandIcon(c.s, 22, { tile: true }), el('span', { className: 'fp-conn-n' }, connectionLabel(c)),
+    c.v ? el('span', { className: 'cx-v', title: `Verified: they sign in with this ${s.name} account` }, icon('check', 11)) : null, href ? icon('external', 15) : null];
+  return href ? el('a', { className: 'fp-conn', href, target: '_blank', rel: 'noopener noreferrer', title: `${s.name}: ${connectionLabel(c)}` }, ...kids)
+    : el('div', { className: 'fp-conn', title: s.name }, ...kids);
+}
+// "Playing" with the game's cover and for how long
+const playingRow = (p) => el('div', { className: 'p-play' }, gameTile(p), el('div', { className: 'p-play-t' }, el('b', {}, p.n),
+  p.at && Date.parse(p.at) ? el('small', {}, 'for ' + lasted(Math.max(0, Date.now() - Date.parse(p.at)))) : null));
+
+// ---------- a profile's Board (widgets), Activity and Wishlist, as on Discord ----------
+const widgetsOf = (x) => (x && Array.isArray(x.widgets) ? x.widgets : []);
+const WIDGET = Object.fromEntries(WIDGETS.map(([t, title, max]) => [t, { t, title, max }]));
+// a game as a tile you can point at (and on your own profile, take away)
+function gameCell(g, onRemove) {
+  const c = el('div', { className: 'gc', title: g.n }, gameTile(g), el('span', { className: 'gc-n' }, g.n));
+  if (onRemove) c.append(el('button', { className: 'gc-x', title: 'Remove', onclick: (e) => { e.stopPropagation(); onRemove(); } }, icon('x', 14)));
+  return c;
+}
+function boardView(x, self, save) {
+  const ws = widgetsOf(x), out = [];
+  if (self) out.push(el('div', { className: 'bd-head' }, el('h3', {}, 'Your Widgets'), el('button', { className: 'btn bd-add', onclick: (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    menu(WIDGETS.map(([t, title]) => { const on = ws.some((w) => w.t === t); return { label: title, disabled: on, hint: on ? 'On your Board' : null, action: () => save({ widgets: [...ws, { t, g: [] }] }) }; }), r.left, r.bottom + 6);
+  } }, icon('plus', 16), 'Add Widget')));
+  if (!ws.length) out.push(el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('game', 34)), self ? 'Show off the games you love: add a widget.' : 'No widgets here yet.'));
+  ws.forEach((w, i) => out.push(widgetCard(w, i, ws, self, save)));
+  return out;
+}
+function widgetCard(w, i, ws, self, save) {
+  const k = WIDGET[w.t] || { title: 'Games', max: 20 }, games = Array.isArray(w.g) ? w.g : [];
+  const put = (g) => save({ widgets: ws.map((x, j) => (j === i ? { ...x, g } : x)) });
+  const addGames = async () => { const picked = await pickGames({ title: k.max === 1 ? 'Your Favorite Game' : `Add to ${k.title}`, max: k.max - games.length, have: games }); if (picked.length) put([...games, ...picked].slice(0, k.max)); };
+  const head = el('div', { className: 'wg-head' }, el('div', { className: 'wg-t' }, el('b', {}, k.title),
+    el('small', {}, self ? (k.max === 1 ? 'Pick one game' : `Add up to ${k.max} games`) : plural(games.length, 'game'))));
+  if (self) {
+    if (games.length < k.max) head.append(el('button', { className: 'wg-btn', title: 'Add Games', onclick: addGames }, icon('plus', 18)));
+    head.append(el('button', { className: 'wg-btn', title: 'More', onclick: (e) => {
+      const r = e.currentTarget.getBoundingClientRect(), swap = (a, b) => { const l = ws.slice(); [l[a], l[b]] = [l[b], l[a]]; save({ widgets: l }); };
+      menu([{ label: 'Move Up', disabled: i === 0, action: () => swap(i - 1, i) }, { label: 'Move Down', disabled: i === ws.length - 1, action: () => swap(i, i + 1) },
+        '-', { label: 'Remove Widget', danger: true, action: () => save({ widgets: ws.filter((_, j) => j !== i) }) }], r.right - 190, r.bottom + 4);
+    } }, icon('more', 18)));
+  }
+  const grid = el('div', { className: 'wg-games' + (w.t === 'fav' ? ' fav' : '') }, ...games.map((g, j) => gameCell(g, self ? () => put(games.filter((_, x) => x !== j)) : null)));
+  if (self && !games.length) grid.append(el('button', { className: 'gc gc-add', onclick: addGames }, el('span', { className: 'gt' }, icon('plus', 26)), el('span', { className: 'gc-n' }, 'Add Games')));
+  if (!self && !games.length) grid.append(el('div', { className: 'wg-none' }, 'Nothing here yet.'));
+  return el('section', { className: 'wg' }, head, grid);
+}
+// the Wishlist: the Want to Play widget's games (adding to it puts that widget on the Board if it isn't yet)
+function wishlistView(x, self, save) {
+  const ws = widgetsOf(x), i = ws.findIndex((w) => w.t === 'want'), games = i >= 0 && Array.isArray(ws[i].g) ? ws[i].g : [];
+  const put = (g) => save({ widgets: i >= 0 ? ws.map((w, j) => (j === i ? { ...w, g } : w)) : [...ws, { t: 'want', g }] });
+  const add = async () => { const picked = await pickGames({ title: 'Add to your Wishlist', max: 20 - games.length, have: games }); if (picked.length) put([...games, ...picked].slice(0, 20)); };
+  const out = [];
+  if (self) out.push(el('div', { className: 'bd-head' }, el('h3', {}, 'Want to Play'), games.length < 20 ? el('button', { className: 'btn bd-add', onclick: add }, icon('plus', 16), 'Add Games') : null));
+  if (!games.length) out.push(el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('bookmark', 34)), self ? 'Games you’d like to play go here, and on your Board.' : 'Nothing on the wishlist yet.'));
+  else out.push(el('div', { className: 'wg-games' }, ...games.map((g, j) => gameCell(g, self ? () => put(games.filter((_, k) => k !== j)) : null))));
+  return out;
+}
+// Activity: what they're playing now and lately (you add your own: a web page can't see your games)
+const PLATFORMS = ['steam', 'playstation', 'xbox', 'twitch', 'battlenet', 'leagueoflegends', 'epicgames', 'riot', 'roblox', 'spotify', 'youtube', 'crunchyroll'];
+function activityView(u, x, self, after) {
+  const p = self ? me.playing : u.playing, now = playingNow(p) ? p : null;
+  const recent = ((x && x.activity) || []).filter((g) => g && g.n && !(now && sameGame(g, now))).slice(0, 8);
+  const pick = async () => { const [g] = await pickGames({ title: 'What are you playing?', max: 1 }); if (g) { setPlaying(g); after(); } };
+  const out = [];
+  if (now) out.push(el('div', { className: 'ac-now' }, gameTile(now, { big: true }), el('div', { className: 'ac-what' }, el('small', {}, 'Playing'), el('b', {}, now.n),
+    now.at && Date.parse(now.at) ? el('span', {}, 'for ' + lasted(Math.max(0, Date.now() - Date.parse(now.at)))) : null,
+    self ? el('div', { className: 'ac-acts' }, el('button', { className: 'btn small', onclick: () => { setPlaying(null); after(); } }, 'Stop Playing'), el('button', { className: 'btn small ghost', onclick: pick }, 'Something Else')) : null)));
+  else if (self && recent.length) out.push(el('div', { className: 'ac-acts' }, el('button', { className: 'btn small', onclick: pick }, icon('game', 15), 'Add Game')));
+  if (recent.length) out.push(el('h4', { className: 'ac-h' }, 'Recently Played'), ...recent.map((g) => el('div', { className: 'ac-row' }, gameTile(g),
+    el('div', { className: 'ac-what' }, el('b', {}, g.n), g.at && Date.parse(g.at) ? el('small', {}, when(Date.parse(g.at), true)) : null),
+    self ? el('button', { className: 'btn small ghost', onclick: () => { setPlaying(g); after(); } }, 'Play') : null)));
+  if (!out.length) out.push(self ? el('div', { className: 'ac-empty' }, el('h3', {}, 'You don’t have any activity here'),
+    el('p', {}, 'Say what you’re playing and it shows under your name, like on Discord. (A web page can’t see your games, so you add them yourself.)'),
+    el('div', { className: 'ac-brands' }, ...PLATFORMS.map((id) => brandIcon(id, 30))),
+    el('div', { className: 'ac-acts' }, el('button', { className: 'btn', onclick: () => { if (fullOpen) fullOpen.close(); openUserSettings('connections'); } }, 'Connect Accounts'), el('button', { className: 'btn', onclick: pick }, 'Add Game')))
+    : el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('game', 34)), 'Nothing to show here yet.'));
+  return out;
+}
+// pick games: Fluentdat's popular ones, any game Wikidata knows, or one you add yourself (a name, and a picture if you
+// like). Resolves to the games picked (none if you cancel)
+function pickGames({ title = 'Add Games', max = 20, have = [] } = {}) {
+  return new Promise((done) => {
+    if (max < 1) { toast('That’s full: take a game away first.'); done([]); return; }
+    const chosen = [], had = (g) => have.some((h) => sameGame(h, g));
+    const q = el('input', { type: 'search', className: 'gp-q', placeholder: 'Search for a game', autocomplete: 'off', spellcheck: false });
+    const say = el('div', { className: 'gp-say' }), grid = el('div', { className: 'gp-grid' });
+    const count = el('span', { className: 'gp-count' }), add = el('button', { className: 'btn primary', disabled: true }, 'Add');
+    let shown = [], seq = 0, timer = 0;
+    const paint = () => {
+      grid.replaceChildren(...shown.map((g) => {
+        const on = chosen.some((h) => sameGame(h, g)), was = had(g);
+        const b = el('button', { className: 'gp-cell' + (on ? ' on' : ''), disabled: was, title: was ? 'Already there' : g.d ? `${g.n} — ${g.d}` : g.n },
+          gameTile(g), el('span', { className: 'gp-n' }, g.n), el('span', { className: 'gp-tick' }, icon('check', 14)));
+        b.onclick = () => {
+          const i = chosen.findIndex((h) => sameGame(h, g));
+          if (i >= 0) chosen.splice(i, 1);
+          else if (max === 1) chosen.splice(0, chosen.length, g);
+          else if (chosen.length >= max) return toast(`You can add ${max} more.`);
+          else chosen.push(g);
+          paint();
+        };
+        return b;
+      }));
+      count.textContent = chosen.length ? `${chosen.length} picked` : max === 1 ? 'Pick one' : `Up to ${max}`;
+      add.disabled = !chosen.length;
+    };
+    const run = () => {
+      const text = q.value.trim(), mine = ++seq, local = text ? localGames(text) : POPULAR.slice(0, 36);
+      shown = local; say.textContent = !text ? 'Popular games' : text.length < 2 ? '' : 'Searching every game…'; paint();
+      clearTimeout(timer);
+      if (text.length < 2) return;
+      timer = setTimeout(() => searchGames(text).then((found) => {
+        if (mine !== seq) return;
+        shown = [...local, ...found.filter((g) => !local.some((h) => sameGame(h, g)))];
+        say.textContent = shown.length ? '' : 'No game by that name. Add it yourself below.'; paint();
+      }, () => { if (mine === seq) say.textContent = 'Couldn’t search every game just now. The popular ones still work, or add it yourself below.'; }), 320);
+    };
+    q.oninput = run;
+    let pic = '';
+    const ownName = el('input', { type: 'text', maxLength: 80, placeholder: 'The game’s name' });
+    const picBtn = el('button', { className: 'btn small', type: 'button' }, icon('image', 15), el('span', {}, 'Add a Picture'));
+    picBtn.onclick = () => pickFile(async (f) => { try { pic = await shrink(f, 200, 268, 36000); picBtn.lastChild.textContent = 'Picture Added'; } catch (e) { toast(String((e && e.message) || e)); } });
+    const ownAdd = el('button', { className: 'btn small primary', type: 'button' }, 'Add');
+    ownAdd.onclick = () => {
+      const g = cleanGame({ n: ownName.value, i: pic }); if (!g) return ownName.focus();
+      if (had(g)) return toast('That one’s there already.');
+      shown = [g, ...shown.filter((h) => !sameGame(h, g))];
+      if (max === 1) chosen.splice(0, chosen.length, g); else if (chosen.length < max && !chosen.some((h) => sameGame(h, g))) chosen.push(g);
+      ownName.value = ''; pic = ''; picBtn.lastChild.textContent = 'Add a Picture'; paint();
+    };
+    ownName.addEventListener('keydown', (e) => { if (e.key === 'Enter') ownAdd.click(); });
+    const own = el('details', { className: 'gp-own' }, el('summary', {}, 'Can’t find it? Add it yourself'), el('div', { className: 'gp-own-row' }, ownName, picBtn, ownAdd));
+    const m = modal({ title, cls: 'gp-dlg', body: [q, say, grid, own], actions: [count, el('span', { style: 'flex:1' }), el('button', { className: 'btn', onclick: () => m.close(null) }, 'Cancel'), add],
+      onClose: (v) => done(Array.isArray(v) ? v : []) });
+    add.onclick = () => m.close(chosen.map(cleanGame).filter(Boolean));
+    run(); setTimeout(() => q.focus(), 0);
+  });
 }
 
 // your own account popout (click your avatar in the user panel)
@@ -2927,7 +3098,7 @@ let joinCode = null;
 }
 ready.then((ok) => {
   if (joinCode) { if (ok) { adoptProfile(); renderAll(); } return appJoin(joinCode); }
-  if (ok) { adoptProfile(); renderAll(); joinPendingInvite(); return; }
+  if (ok) { adoptProfile(); renderAll(); joinPendingInvite(); finishLinking(); return; }
   if (Store.resumeError) toast('Sign-in trouble: ' + Store.resumeError);
   let code = null; try { code = localStorage.getItem(PENDING_INVITE); } catch {}
   if (code && Store.configured) signInDialog(null, 'Sign in to join the server you were invited to');
@@ -3209,11 +3380,20 @@ function adoptProfile() {
   const p = Store.myProfile();
   if (p && p.name) {
     const next = { ...me, name: p.name, color: p.color || me.color, avatar: p.avatar || '', pronouns: p.pronouns || '', about: p.about || '', status: p.status || me.status,
-      banner: p.banner || '', plate: p.plate || '', ...(Store.styled && Store.styled() ? { theme: p.theme || null, style: p.style || null } : {}) };
+      banner: p.banner || '', plate: p.plate || '', ...(Store.styled && Store.styled() ? { theme: p.theme || null, style: p.style || null } : {}),
+      ...(Store.canPlay && Store.canPlay() ? { playing: p.playing || null } : {}) };
     if (p.id) next.id = p.id;
     if (JSON.stringify(next) !== JSON.stringify(me)) { me = next; saveMe(); }
   }
   else pushProfile();
+}
+// what you're playing: you say so (a web page can't see your games), and it shows under your name for up to 12 hours
+function setPlaying(g) {
+  if (Store.kind === 'supabase' && !Store.canPlay()) return toast('Showing what you play needs the newest supabase/setup.sql: run it again in Supabase.');
+  const game = g ? cleanGame(g) : null; if (game) delete game.i;
+  me.playing = game ? { ...game, at: new Date().toISOString() } : null; saveMe();
+  Store.setPlaying(game);
+  renderMembers();
 }
 const pushProfile = () => {
   if (!Store.signedIn) return;
@@ -3443,6 +3623,7 @@ function openUserSettings(section = 'account') {
     { head: 'User Settings' },
     { id: 'account', label: 'My Account', icon: 'user' },
     { id: 'profile', label: 'Profile', icon: 'edit', action: (shut) => { shut(); openProfileEditor(); } },
+    { id: 'connections', label: 'Connections', icon: 'link' },
     { id: 'sync', label: 'Data & Sync', icon: 'cloud' },
     Store.kind === 'supabase' && Store.isAppAdmin() && { id: 'admin', label: 'Invites & Reports', icon: 'key' },
     { hr: true }, { head: 'App Settings' },
@@ -3463,6 +3644,7 @@ function openUserSettings(section = 'account') {
   openUserSettings.ref = overlay(nav, section, (sec, redraw, shut) => {
     if (sec === 'account') return accountPane(redraw);
     if (sec === 'sync') return syncPane(redraw);
+    if (sec === 'connections') return connectionsPane(redraw);
     if (sec === 'appearance') return appearancePane(redraw);
     if (sec === 'layout') return layoutPane(redraw);
     if (sec === 'notifications') return notificationsPane(redraw);
@@ -3473,6 +3655,80 @@ function openUserSettings(section = 'account') {
     if (sec === 'keys') return keysPane();
     return aboutPane();
   });
+}
+
+// ---------- Connections (Settings → Connections, as on Discord): your accounts elsewhere, on your profile ----------
+const LINKING = 'fluentdat.linking';            // (a sign-in being linked: finished when the page comes back)
+const identityFor = (s) => (Store.kind === 'supabase' && s.verify ? Store.identities().find((i) => i.name && (i.provider === s.verify || (s.verify === 'twitter' && i.provider === 'x'))) : null);
+function connectionsPane(redraw) {
+  const live = Store.kind === 'supabase', xid = live ? Store.myId() : 'me';
+  if (!connectionsPane.at || Date.now() - connectionsPane.at > 20000) { connectionsPane.at = Date.now(); Store.profileExtras(xid).then(() => redraw(), () => {}); }
+  const list = ((Store.extrasNow(xid) || {}).connections) || [];
+  const out = [el('h2', {}, 'Connections'), el('p', { className: 'sub' }, 'Add your accounts elsewhere to your profile, so people can find you there. They show on your full profile.')];
+  // the accounts you sign in with go on in one click, verified
+  for (const s of SERVICES) {
+    const i = identityFor(s);
+    if (!i || list.some((c) => c.s === s.id && c.n.toLowerCase() === i.name.toLowerCase())) continue;
+    out.push(el('div', { className: 'cx-suggest' }, brandIcon(s.id, 24, { tile: true }), el('div', { className: 'cx-who' }, el('b', {}, `${s.name}: ${i.name}`), el('small', {}, 'You sign in with this account, so it shows as verified.')),
+      el('button', { className: 'btn small primary', onclick: async () => { if ((await attempt(() => Store.setProfileExtras({ connections: [...list, { s: s.id, n: i.name }] }))) !== null) { toast(`${s.name} added to your profile.`); redraw(); } } }, 'Add')));
+  }
+  out.push(el('div', { className: 'cx-add' }, el('b', {}, 'Add accounts to your profile'),
+    el('div', { className: 'cx-grid' }, ...SERVICES.map((s) => el('button', { className: 'cx-pick', title: s.name, onclick: () => addConnection(s.id, redraw) }, brandIcon(s.id, 26))))));
+  if (list.length) out.push(el('h3', {}, 'Your Connections'), el('div', { className: 'cx-list' }, ...list.map((c) => {
+    const href = connectionLink(c), s = SERVICE[c.s] || { name: c.s };
+    return el('div', { className: 'cx-row' }, brandIcon(c.s, 24, { tile: true }),
+      el('div', { className: 'cx-who' }, el('b', {}, connectionLabel(c), c.v ? el('span', { className: 'cx-v', title: 'Verified: you sign in with this account' }, icon('check', 11)) : null), el('small', {}, s.name)),
+      href ? el('a', { className: 'cx-btn', href, target: '_blank', rel: 'noopener noreferrer', title: 'Open' }, icon('external', 16)) : null,
+      el('button', { className: 'cx-btn del', title: 'Remove', onclick: async () => { if ((await attempt(() => Store.setProfileExtras({ connections: list.filter((y) => y !== c) }))) !== null) redraw(); } }, icon('x', 16)));
+  })));
+  out.push(el('div', { className: 'note-box' }, live
+    ? 'A ✓ means Fluentdat checked it: you sign in with that account. Everything else is what you typed. To check GitHub, Twitch, Spotify or X accounts too, whoever runs Fluentdat switches them on in Supabase (Authentication → Sign In / Providers) and allows linking accounts; then their Add window offers Verify.'
+    : 'Signed out, connections stay in this browser. Sign in to put them on your profile for others to see.'));
+  return out;
+}
+// add one: a name there (or a pasted link to it); a service you can sign in to can be verified by signing in once
+function addConnection(id, after) {
+  const s = SERVICE[id], live = Store.kind === 'supabase', xid = live ? Store.myId() : 'me', mine = identityFor(s);
+  const input = el('input', { type: 'text', maxLength: 100, placeholder: s.hint, value: mine ? mine.name : '', autocomplete: 'off', spellcheck: false });
+  const err = el('div', { className: 'sg-msg' }), verify = el('div', { className: 'cx-verify' });
+  if (live && s.verify && !mine) Store.providers().then((on) => {
+    if (!on[s.verify] || !verify.isConnected) return;
+    verify.replaceChildren(el('button', { className: 'btn', onclick: async () => {
+      try { localStorage.setItem(LINKING, s.verify); } catch {}
+      try { await Store.linkAccount(s.verify); }
+      catch (e) {
+        try { localStorage.removeItem(LINKING); } catch {}
+        err.textContent = /manual linking|linking is disabled/i.test(String(e.message)) ? 'Linking accounts is switched off for this Fluentdat. Whoever runs it can allow it in Supabase (Authentication → Sign In / Providers → Allow manual linking).' : String((e && e.message) || e);
+      }
+    } }, brandIcon(s.id, 16), `Verify with ${s.name}`), el('p', { className: 'hint' }, `Sign in to ${s.name} once to prove it’s yours, and it shows as verified.`));
+  });
+  const save = el('button', { className: 'btn primary' }, 'Add');
+  const m = modal({ title: `Add ${s.name}`, cls: 'cx-dlg', body: [el('div', { className: 'cx-dlg-top' }, brandIcon(s.id, 40, { tile: true })),
+    el('div', { className: 'field' }, el('label', {}, id === 'website' ? 'Address' : 'Name'), input),
+    mine ? el('p', { className: 'hint cx-mine' }, icon('check', 13), el('span', {}, `You sign in with this ${s.name} account, so it shows as verified.`)) : null, err, verify],
+    actions: [el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), save] });
+  save.onclick = async () => {
+    const r = parseConnection(id, input.value); if (r.error) { err.textContent = r.error; input.focus(); return; }
+    save.disabled = true;
+    const cur = ((await Store.profileExtras(xid).catch(() => null)) || Store.extrasNow(xid) || { connections: [] }).connections, same = (c) => c.s === id && c.n.toLowerCase() === r.n.toLowerCase();
+    if (cur.length >= 20 && !cur.some(same)) { err.textContent = 'Up to 20 connections: take one away first.'; save.disabled = false; return; }
+    const ok = await attempt(() => Store.setProfileExtras({ connections: [...cur.filter((c) => !same(c)), { s: id, n: r.n }] }));
+    save.disabled = false;
+    if (ok === null) return;
+    m.close(); toast(`${s.name} added to your profile.`); if (after) after();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click(); });
+  setTimeout(() => input.focus(), 0);
+}
+// back from linking a sign-in (Add → Verify): it goes on your profile, verified
+async function finishLinking() {
+  let p = null; try { p = localStorage.getItem(LINKING); localStorage.removeItem(LINKING); } catch {}
+  if (!p || Store.kind !== 'supabase') return;
+  const s = SERVICES.find((x) => x.verify === p), i = s && identityFor(s);
+  if (!i) return toast('That account wasn’t linked, so it isn’t verified.');
+  const x = await Store.profileExtras(Store.myId()).catch(() => null);
+  if (!x) return;
+  if ((await attempt(() => Store.setProfileExtras({ connections: [...x.connections.filter((c) => c.s !== s.id), { s: s.id, n: i.name }] }))) !== null) toast(`${s.name} connected and verified.`);
 }
 
 // ---------- for the people who run Fluentdat: one-time links to make an account, and what people reported ----------

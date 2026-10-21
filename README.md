@@ -8,6 +8,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 
 * Servers with categories, text channels and voice channels, invites, Discover for public servers, roles, bans and banners
 * Category settings and permissions like Discord's: private categories, and what @everyone, each role and each member may do there
+* Profile connections (GitHub, Steam, TikTok, YouTube, Twitch, Spotify, X and more; the accounts you sign in with show as verified), a Board of game widgets with real covers, a Wishlist, and "Playing …" under your name
 * Direct messages and group DMs (up to 10 people), with friend requests you accept or ignore
 * Voice and video calls in DMs and groups (they ring), voice channels you just join, and screen sharing
 * Voice messages, pictures and files (dragged in, pasted or picked, sent when you press Enter)
