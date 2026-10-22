@@ -34,11 +34,11 @@ const DEFAULT_PREFS = {
   avatars: 'on', avatarShape: 'round', timestamps: '12', group: true, dividers: 'on', msgWidth: 'full', hover: 'on',
   membersDefault: true, membersStyle: 'panel', memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
   // the window's frame: a title bar on top, rounded panels, your controls at the foot of the server rail, the server's banner
-  // under its name, and category names with a line under them (Customize → Layout)
-  titlebar: 'on', titleAlign: 'center', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'line', layoutV: 3,
+  // under its name, and category names that are dimmed while they're closed (Customize → Layout)
+  titlebar: 'on', titleAlign: 'center', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'dim', layoutV: 4,
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
   railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 88, statusH: 30, titleH: 32, panelR: 14, panelGap: 6,
-  avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20,
+  avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20, topGap: 8,
   // where things sit: the columns left to right, the sidebar and main area top to bottom, and the status bar
   cols: ['rail', 'side', 'main', 'members'], sideOrder: ['head', 'body', 'panel'], mainOrder: ['top', 'content', 'composer'], statusPos: 'top',
   radius: 'soft', uiFont: 'system',
@@ -51,13 +51,16 @@ const DEFAULT_PREFS = {
   sound: false, ring: true, embeds: 'on', formatBar: 'on',
   // animations you turned off (Settings → Animations), and the logo ('theme': whatever the theme brings)
   anim: {}, logo: 'theme',
+  // a line under someone's name in the chat while the mouse is on it ('off': none), the sidebar hidden with its shortcut
+  // (on this device), and the keys you chose for the shortcuts (User Settings → Keyboard Shortcuts)
+  nameHover: 'off', sideOff: false, keys: {},
 };
 const LAYOUT_PRESETS = {
   Default: {},
   Compact: { density: 'compact', fontSize: 14, avatarPx: 28, memberAv: 26, railW: 60, sideW: 190, membersW: 180, topH: 44, panelH: 46, chanH: 28,
-    composerH: 40, icTop: 18, icComposer: 18, icPanel: 18, dividers: 'off', radius: 'sharp' },
+    composerH: 40, icTop: 18, icComposer: 18, icPanel: 18, topGap: 4, dividers: 'off', radius: 'sharp' },
   Spacious: { density: 'cozy', fontSize: 16, avatarPx: 44, memberAv: 38, railW: 84, sideW: 300, membersW: 300, topH: 58, panelH: 62, chanH: 40,
-    composerH: 56, icTop: 22, icComposer: 22, icPanel: 22, msgWidth: 'readable', radius: 'round' },
+    composerH: 56, icTop: 22, icComposer: 22, icPanel: 22, topGap: 12, msgWidth: 'readable', radius: 'round' },
   Minimal: { rail: 'off', sideHead: 'off', userPanel: 'off', avatars: 'off', timestamps: 'off', dividers: 'off', banner: 'off', membersDefault: false, hover: 'off',
     serverBanner: 'off', plates: 'off', startHeaders: 'off', dmPanel: false, hidden: { call: true, video: true, search: true, emoji: true, sticker: true, upload: true, mic: true, deafen: true, chanInvite: true, findDM: true, voice: true, chanSettings: true, addPeople: true } },
 };
@@ -67,10 +70,106 @@ const SIZES = {
   topH: ['Top bar height', 36, 90], composerH: ['Message box height', 40, 160], panelH: ['User panel height', 40, 100],
   bannerH: ['Server banner height', 60, 260], statusH: ['Status bar height', 20, 56], titleH: ['Title bar height', 22, 56], panelR: ['Panel corners', 0, 28], panelGap: ['Space between panels', 0, 16],
   avatarPx: ['Message avatars', 20, 64],
-  memberAv: ['Member list avatars', 20, 56], chanH: ['Channel rows', 24, 48], icTop: ['Top bar icons', 14, 32],
+  memberAv: ['Member list avatars', 20, 56], chanH: ['Channel rows', 24, 48], icTop: ['Top bar icons', 14, 32], topGap: ['Space between top bar buttons', 0, 28],
   icComposer: ['Message box icons', 14, 32], icPanel: ['User panel icons', 14, 32], fontSize: ['Text size', 12, 20],
 };
 const COLS = ['rail', 'side', 'main', 'members'];
+// ---------- keyboard shortcuts you can change (User Settings → Keyboard Shortcuts, and Customize → Layout) ----------
+// [id, what it does, its key to start with ('' = none)]. A key is written like "Mod+Shift+KeyS": Mod is ⌘ on a Mac and Ctrl
+// elsewhere, so one choice works on both, and the last part is the key's place on the keyboard (KeyboardEvent.code)
+const KEYBINDS = [['toggleSide', 'Hide or show the sidebar (channels and DMs)', 'Mod+Shift+KeyS'], ['toggleMembers', 'Hide or show the member list', ''],
+  ['toggleRail', 'Hide or show the server rail', '']];
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+const keyFor = (id) => { const own = (prefs.keys || {})[id]; return typeof own === 'string' ? own : (KEYBINDS.find((k) => k[0] === id) || [])[2] || ''; };
+// what was pressed, written the same way ('' while it's only Shift, Ctrl, ⌥ or ⌘ so far)
+function comboOf(e) {
+  if (!e.code || ['Shift', 'Control', 'Alt', 'Meta', 'OS'].includes(e.key) || /^(Shift|Control|Alt|Meta|OS)(Left|Right)$/.test(e.code)) return '';
+  const p = [];
+  if (MAC ? e.metaKey : e.ctrlKey) p.push('Mod');
+  if (MAC && e.ctrlKey) p.push('Ctrl');
+  if (e.altKey) p.push('Alt');
+  if (e.shiftKey) p.push('Shift');
+  if (!MAC && e.metaKey) p.push('Meta');
+  return [...p, e.code].join('+');
+}
+const KEY_NAMES = { Backslash: '\\', Slash: '/', BracketLeft: '[', BracketRight: ']', Backquote: '`', Minus: '-', Equal: '=', Semicolon: ';', Quote: "'", Comma: ',', Period: '.',
+  Space: 'Space', Enter: 'Enter', Escape: 'Esc', Tab: 'Tab', Backspace: '⌫', Delete: 'Del', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', PageUp: 'Page Up', PageDown: 'Page Down' };
+// a key as people read it: ⇧⌘S on a Mac, Ctrl+Shift+S elsewhere
+function keyLabel(combo) {
+  if (!combo) return '';
+  const parts = combo.split('+'), code = parts.pop();
+  const k = /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit\d$/.test(code) ? code.slice(5) : /^Numpad/.test(code) ? 'Num ' + code.slice(6) : KEY_NAMES[code] || code;
+  if (MAC) return ['Ctrl', 'Alt', 'Shift', 'Mod'].filter((m) => parts.includes(m)).map((m) => ({ Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Mod: '⌘' })[m]).join('') + k;
+  return [...['Mod', 'Ctrl', 'Alt', 'Shift', 'Meta'].filter((m) => parts.includes(m)).map((m) => ({ Mod: 'Ctrl', Ctrl: 'Ctrl', Alt: 'Alt', Shift: 'Shift', Meta: 'Win' })[m]), k].join('+');
+}
+// keys a browser (or Fluent) keeps for itself, so a page may never see them
+const KEPT = new Set(['KeyT', 'KeyW', 'KeyN', 'KeyQ', 'KeyR', 'KeyL', 'KeyK', 'KeyE', 'KeyJ', 'KeyB', 'KeyD', 'KeyF', 'KeyG', 'KeyP', 'KeyY', 'KeyS', 'KeyH', 'KeyM', 'Comma',
+  'Backslash', 'BracketLeft', 'BracketRight', 'Equal', 'Minus', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].map((c) => 'Mod+' + c)
+  .concat(['KeyT', 'KeyN', 'KeyO', 'KeyP', 'KeyB', 'KeyG', 'KeyR', 'KeyJ', 'KeyZ'].map((c) => 'Mod+Shift+' + c), ['KeyB', 'KeyC', 'KeyT', 'KeyN', 'KeyI', 'Equal', 'Minus', 'Digit0'].map((c) => 'Mod+Alt+' + c)));
+const keyClash = (combo) => (KEPT.has(combo) ? 'Your browser (or Fluent) may keep this key for itself, so it might not reach Fluentdat.' : '');
+// do what a shortcut is for
+function runKey(id) {
+  if (id === 'toggleSide') {
+    if (innerWidth <= 720) return $('#app').classList.toggle('show-side');
+    if (!prefs.sideOff && prefs.rail === 'off') return toast('The sidebar has your settings while the server rail is hidden, so it stays. Show the server rail first (Customize → Layout).');
+    prefs.sideOff = !prefs.sideOff; savePrefs(); renderAll();
+    const k = keyLabel(keyFor('toggleSide'));
+    if (prefs.sideOff) toast(k ? `Sidebar hidden: ${k} brings it back.` : 'Sidebar hidden.');
+  } else if (id === 'toggleMembers') { showMembers = !showMembers; renderAll(); }
+  else if (id === 'toggleRail') {
+    prefs.rail = prefs.rail === 'off' ? 'on' : 'off';
+    if (prefs.rail === 'off' && prefs.sideOff) { prefs.sideOff = false; toast('The sidebar is back: it keeps your settings while the server rail is hidden.'); }
+    savePrefs(); renderAll();
+  }
+}
+// (the shortcuts themselves: not while a key is being chosen, and a plain key or Shift with one, while you type, is the text's)
+let keyRecording = false;
+addEventListener('keydown', (e) => {
+  if (CUSTOMIZE || keyRecording || e.repeat || e.isComposing) return;
+  const c = comboOf(e); if (!c) return;
+  const b = KEYBINDS.find(([id]) => keyFor(id) === c); if (!b) return;
+  const typing = e.target && (e.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName || ''));
+  if (typing && !/^(Mod|Ctrl|Alt|Meta)\+/.test(c) && !/^F\d+$/.test(e.code)) return;
+  e.preventDefault(); e.stopPropagation(); runKey(b[0]);
+}, true);
+// choosing a shortcut's key: click it, then press the keys (Esc keeps the old one, Backspace leaves it with none)
+function keyPicker(id, onChange) {
+  const b = el('button', { className: 'kb-key', type: 'button' });
+  const show = () => { const k = keyFor(id); b.textContent = k ? keyLabel(k) : 'None'; b.classList.toggle('none', !k); b.classList.remove('rec'); };
+  b.onclick = () => {
+    if (keyRecording) return;
+    keyRecording = true; b.classList.add('rec'); b.textContent = 'Press keys…';
+    const done = () => { keyRecording = false; removeEventListener('keydown', grab, true); removeEventListener('mousedown', away, true); show(); };
+    const away = (e) => { if (e.target !== b) done(); };
+    const plain = (e) => !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey;
+    const grab = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (e.key === 'Escape' && plain(e)) return done();
+      if ((e.key === 'Backspace' || e.key === 'Delete') && plain(e)) { setKey(id, ''); done(); if (onChange) onChange(); return; }
+      const c = comboOf(e); if (!c) return;
+      if (!/^(Mod|Ctrl|Alt|Meta)\+/.test(c) && !/^F\d+$/.test(e.code)) return toast(MAC ? 'Use it with ⌘, ⌃ or ⌥ (or pick an F key), so it doesn’t get in the way of typing.' : 'Use it with Ctrl or Alt (or pick an F key), so it doesn’t get in the way of typing.');
+      setKey(id, c); done(); if (onChange) onChange();
+    };
+    addEventListener('keydown', grab, true); setTimeout(() => addEventListener('mousedown', away, true), 0);
+  };
+  show();
+  return b;
+}
+function setKey(id, combo) {
+  const keys = { ...(prefs.keys || {}) };
+  // (one key does one thing: another shortcut that had it lets go of it)
+  if (combo) for (const [other, what] of KEYBINDS) if (other !== id && keyFor(other) === combo) { keys[other] = ''; toast(`${keyLabel(combo)} was for “${what}”, which has no key now.`); }
+  if (combo === ((KEYBINDS.find((k) => k[0] === id) || [])[2] || '')) delete keys[id]; else keys[id] = combo;
+  prefs.keys = keys; savePrefs();
+}
+// the shortcuts, each with its key, a note when a browser may keep that key, and a way back to the key it came with
+function keyRows(redraw) {
+  return KEYBINDS.map(([id, what, def]) => {
+    const k = keyFor(id), clash = keyClash(k);
+    return el('div', { className: 'kb-row' }, el('div', { className: 'kb-what' }, el('b', {}, what), clash ? el('small', {}, clash) : null), keyPicker(id, redraw),
+      k !== def ? el('button', { className: 'link-btn kb-reset', type: 'button', title: def ? `Back to ${keyLabel(def)}` : 'Back to none', onclick: () => { setKey(id, def); redraw(); } }, 'Reset') : el('span', { className: 'kb-reset' }));
+  });
+}
 // an order someone saved, cleaned up: only known parts, each once, and any missing ones added at the end
 const validOrder = (o, all) => { const mine = (Array.isArray(o) ? o : []).filter((x, i, arr) => all.includes(x) && arr.indexOf(x) === i); return [...mine, ...all.filter((x) => !mine.includes(x))]; };
 const sizeOf = (k, v) => { const [, lo, hi] = SIZES[k]; const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : DEFAULT_PREFS[k]; };
@@ -332,7 +431,7 @@ const BUTTONS = {
   dms: ['Direct messages header', [['findDM', 'Find or start a conversation', 'search'], ['newDM', 'New DM (+)', 'plus']]],
   dmNav: ['Direct messages sidebar', [['browseNav', 'Browse', 'search'], ['friendsNav', 'Friends', 'users'], ['datbuxNav', 'Bank', 'coin'], ['collectionNav', 'Collection', 'collection'],
     ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quest', 'quest']]],
-  top: ['Top bar', [['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['threads', 'Threads', 'thread'],
+  top: ['Top bar', [['sideShow', 'Show the sidebar (while it’s hidden)', 'menu'], ['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['threads', 'Threads', 'thread'],
     ['notify', 'Notification settings', 'bell'], ['pins', 'Pinned messages', 'pin'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['search', 'Search', 'search'], ['saved', 'Bookmarks', 'bookmark']]],
   msgActions: ['Message buttons (on hover)', [['quick', 'Quick reactions', 'smile'], ['react', 'Add Reaction', 'smilePlus'], ['reply', 'Reply', 'reply'], ['forward', 'Forward', 'forward'],
     ['thread', 'Create Thread', 'thread'], ['more', 'More', 'more', 1]]],
@@ -417,7 +516,7 @@ applyTheme(currentTheme(), false);
 // about this device) goes with your account: changed here, it's saved there a moment later; changed on another device,
 // it comes here. Whichever was changed last wins.
 const SYNC_AT = 'fluentdat.settingsAt', SYNC_SEEN = 'fluentdat.settingsSeen';
-const DEVICE_ONLY = ['micMuted', 'deafened', 'notify', 'syncSettings'];
+const DEVICE_ONLY = ['micMuted', 'deafened', 'notify', 'syncSettings', 'sideOff'];
 const syncable = () => Store.kind === 'supabase' && !!Store.canSync && Store.canSync() && prefs.syncSettings !== false;
 const settingsData = () => ({ v: 1, prefs: Object.fromEntries(Object.entries(prefs).filter(([k]) => !DEVICE_ONLY.includes(k))), theme: currentTheme(), themes: loadThemes() });
 // (this browser's settings are just the ones Fluentdat comes with)
@@ -812,10 +911,12 @@ function renderSide() {
   for (const cat of groups) {
     const mine = chans.filter((c) => (cat.id ? c.category === cat.id : true));
     const isCollapsed = collapsed.has(cat.id);
-    body.append(swapIn(el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), onclick: () => { if (isCollapsed) { collapsed.delete(cat.id); unfolding = cat.id; } else collapsed.add(cat.id); renderSide(); unfolding = null; },
+    const head = el('div', { className: 'cat' + (isCollapsed ? ' collapsed' : ''), title: isCollapsed ? 'Show its channels' : 'Hide its channels', onclick: () => { if (isCollapsed) { collapsed.delete(cat.id); unfolding = cat.id; } else collapsed.add(cat.id); renderSide(); unfolding = null; },
       oncontextmenu: (e) => { e.preventDefault(); categoryCtx(cat, e.clientX, e.clientY); } },
       el('span', { className: 'caret' }, icon('chevD')), el('span', { className: 'nm' }, el('span', { className: 'nm-t' }, cat.name)),
-      canChans(cat.id) && shown('newChannel') ? el('span', { className: 'add', title: 'Create Channel', onclick: (e) => { e.stopPropagation(); newChannelFlow(cat.id); } }, icon('plus')) : null), k++));
+      canChans(cat.id) && shown('newChannel') ? el('span', { className: 'add', title: 'Create Channel', onclick: (e) => { e.stopPropagation(); newChannelFlow(cat.id); } }, icon('plus')) : null);
+    head.setAttribute('role', 'button'); head.setAttribute('aria-expanded', String(!isCollapsed));
+    body.append(swapIn(head, k++));
     // (a collapsed category still shows the channel you're in, and ones with something new, as on Discord; hiding
     // muted channels keeps the one you're in and ones that ping you)
     for (const c of mine) {
@@ -949,7 +1050,9 @@ function goToCall() {
 
 // ---------- the user panel ----------
 // your controls sit at the foot of the server rail (when it's shown, on a wide screen), or under the sidebar
-const panelInRail = () => prefs.panelPos === 'rail' && prefs.rail !== 'off' && innerWidth > 720;
+// (the sidebar hidden with its shortcut: only while the server rail is there to hold your controls)
+const sideHidden = () => !!prefs.sideOff && prefs.rail !== 'off' && innerWidth > 720;
+const panelInRail = () => (prefs.panelPos === 'rail' || sideHidden()) && prefs.rail !== 'off' && innerWidth > 720;
 function renderMe() {
   const panel = $('#me-panel'), parts = [], inRail = panelInRail();
   const pbtn = (ic, title, onclick, on, cls = '') => { const b = el('button', { className: 'pbtn' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), title, onclick }); b.append(icon(ic)); return b; };
@@ -997,7 +1100,9 @@ function applyMic() {
 function renderTop() {
   const top = $('#top');
   if (document.activeElement === searchField && top.contains(searchField)) return;     // (don't pull the search box out from under you)
-  const parts = [el('button', { className: 'menu', title: 'Menu', onclick: () => $('#app').classList.toggle('show-side') }, icon('menu'))];
+  const sideBtn = sideHidden() && shown('sideShow'), sk = keyLabel(keyFor('toggleSide'));
+  const parts = [el('button', { className: 'menu' + (sideBtn ? ' side-show' : ''), title: sideBtn ? 'Show Sidebar' + (sk ? ` (${sk})` : '') : 'Menu',
+    onclick: () => (sideHidden() ? runKey('toggleSide') : $('#app').classList.toggle('show-side')) }, icon('menu'))];
   const act = (ic, title, onclick, on) => el('button', { className: 'act' + (on ? ' on' : ''), title, onclick }, icon(ic), prefs.btnLabels === 'on' ? el('span', { className: 'lbl' }, title) : null);
   let where = null;
   if (view === 'discover') parts.push(el('span', { className: 'hash' }, icon('compass')), el('span', {}, 'Discover'));
@@ -1026,6 +1131,7 @@ function renderTop() {
     }
   }
   parts.push(el('span', { className: 'spacer' }));
+  const atActs = parts.length;
   const talk = where === 'dm' || where === 'group', inThis = call && call.place === dmId, live = Store.kind === 'supabase', text = where && where !== 'voice';
   if (where) for (const id of ordered('top')) {
     if (!shown(id)) continue;
@@ -1049,6 +1155,9 @@ function renderTop() {
     else if (id === 'members' && (where === 'channel' || where === 'voice' || where === 'group' || where === 'thread')) parts.push(act('users', showMembers ? 'Hide Member List' : 'Show Member List', () => { showMembers = !showMembers; renderAll(); }, showMembers));
     else if (id === 'saved') { const b = act('bookmark', 'Bookmarks', (e) => { e.stopPropagation(); showBookmarks(b); }, pop && pop.classList.contains('saved')); b.classList.toggle('has', bookmarks().length > 0); parts.push(b); }
   }
+  // (the buttons, in a group with room between them: Customize → Layout → Space between top bar buttons)
+  const acts = parts.splice(atActs);
+  if (acts.length) parts.push(el('div', { className: 'top-acts' }, ...acts));
   top.replaceChildren(...parts);
 }
 // your bookmarks (Bookmark Message), newest first: click one to go to it
@@ -4635,6 +4744,10 @@ function loadPrefs(from = null) {
   p.bannerH = was(saved.bannerH, { s: 96, m: 136, l: 180 }, DEFAULT_PREFS.bannerH);
   // (the banner under a server's name got shorter, from 136 to 88: unless you'd made it another height yourself)
   if ((saved.layoutV || 1) < 3) { if (p.bannerH === 136) p.bannerH = DEFAULT_PREFS.bannerH; p.layoutV = 3; }
+  // (category names lost their line and arrow: open ones are bright and closed ones dimmed, unless you'd picked capitals)
+  if ((saved.layoutV || 1) < 4) { if (p.catStyle === 'line') p.catStyle = 'dim'; p.layoutV = 4; }
+  p.keys = Object.fromEntries(Object.entries(p.keys && typeof p.keys === 'object' ? p.keys : {}).filter(([k, v]) => KEYBINDS.some((b) => b[0] === k) && typeof v === 'string' && v.length < 60));
+  p.sideOff = p.sideOff === true;
   if (typeof saved.icTop !== 'number' && saved.btnSize) p.icTop = p.icComposer = p.icPanel = { s: 16, m: 20, l: 25 }[saved.btnSize] || 20;
   for (const k of ['callBtns', 'composerSticker', 'composerSend', 'railSize', 'memberW', 'avatarSize', 'btnSize']) delete p[k];
   // (channels got Discord's settings cog on hover; the old × to delete one is now in it, and in the right-click menu)
@@ -4644,7 +4757,7 @@ function loadPrefs(from = null) {
 }
 // what a layout preset or reset leaves alone (they're not about layout)
 const KEEP = ['notify', 'sound', 'sendOnEnter', 'dmFrom', 'micMuted', 'deafened', 'reduceMotion', 'highContrast', 'ring', 'embeds', 'formatBar', 'anim', 'logo', 'decorations', 'effects', 'liveBanner',
-  'labels', 'layoutV', 'syncSettings'];
+  'labels', 'layoutV', 'syncSettings', 'keys'];
 const keepOf = () => Object.fromEntries(KEEP.filter((k) => k in prefs).map((k) => [k, prefs[k]]));
 function savePrefs() { try { localStorage.setItem('fluentdat.prefs', JSON.stringify(prefs)); } catch {} applyPrefs(); changedSettings(); }
 function applyPrefs() {
@@ -4661,6 +4774,8 @@ function applyPrefs() {
     ['radius', prefs.radius], ['uifont', prefs.uiFont], ['btnlabels', prefs.btnLabels], ['titlebar', prefs.titlebar], ['titlealign', prefs.titleAlign],
     ['frame', prefs.frame], ['catstyle', prefs.catStyle], ['memstyle', prefs.membersStyle], ['bannerstyle', prefs.bannerStyle]]) S(attr, val);
   S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
+  S('namehover', prefs.nameHover === 'underline' ? 'underline' : 'off');
+  V('--top-gap', prefs.topGap);
   V('--rail-w', prefs.railW); V('--side-w', prefs.sideW); V('--members-w', prefs.membersW); V('--top-h', prefs.topH);
   V('--composer-h', prefs.composerH); V('--panel-h', prefs.panelH); V('--banner-h', prefs.bannerH); V('--status-h', prefs.statusH);
   V('--title-h', prefs.titleH); V('--panel-r', prefs.panelR); V('--panel-gap', prefs.panelGap);
@@ -4676,8 +4791,9 @@ function applyPrefs() {
 function applyLayout() {
   const app = $('#app'); if (!app) return;
   const cols = validOrder(prefs.cols, COLS);
-  const membersOn = app.classList.contains('show-members') && innerWidth > 820;
-  const width = { rail: prefs.rail === 'off' ? 0 : prefs.railW, side: prefs.sideW, members: membersOn ? (app.classList.contains('finding') ? Math.max(prefs.membersW, innerWidth >= 1300 ? 440 : 340)
+  const membersOn = app.classList.contains('show-members') && innerWidth > 820, sideGone = sideHidden();
+  app.classList.toggle('side-off', sideGone);
+  const width = { rail: prefs.rail === 'off' ? 0 : prefs.railW, side: sideGone ? 0 : prefs.sideW, members: membersOn ? (app.classList.contains('finding') ? Math.max(prefs.membersW, innerWidth >= 1300 ? 440 : 340)
     : app.classList.contains('dm-mode') ? Math.max(prefs.membersW, innerWidth >= 1200 ? 340 : 280) : prefs.membersW) : 0 };
   // (the member list beside the chat is a card in it, under the top bar, like Discord's: when it's next to the chat and the
   // top bar is on top; otherwise it's a column of its own)
@@ -5761,7 +5877,10 @@ function accessibilityPane() {
 function keysPane() {
   const keys = [['Enter', 'Send the message'], ['Shift + Enter', 'New line'], ['⌘B / Ctrl+B', 'Bold (also ⌘I / Ctrl+I italics, ⌘U / Ctrl+U underline, ⌘⇧X strikethrough). In the Fluent browser ⌘B shows and hides its sidebar, so use Ctrl+B or the bar that appears when you select text.'],
     ['@', 'Mention someone (pick from the list with ↑ ↓ and Enter)'], ['Esc', 'Stop replying'], ['Alt + ↑', 'Reply to the last message (in an empty box)'], ['Esc', 'Close settings or a dialog'], ['/help', 'List the chat commands'], ['/roll, /flip', 'Dice and coin'], ['/me <action>', 'Write an action'], ['/nick <name>', 'Change your display name'], ['/theme <name>', 'Switch theme'], ['/clear', 'Empty the channel'], ['!ping', 'Flubot replies']];
-  return [el('h2', {}, 'Keyboard Shortcuts'), el('p', { className: 'sub' }, 'And the commands you can type into any channel.'),
+  const list = el('div', { className: 'kb-list' }), draw = () => list.replaceChildren(...keyRows(draw));
+  draw();
+  return [el('h2', {}, 'Keyboard Shortcuts'), el('p', { className: 'sub' }, 'Click a key to change it, then press the keys you want (with ' + (MAC ? '⌘, ⌃ or ⌥' : 'Ctrl or Alt') + '). Backspace leaves it with none, and Esc keeps it.'),
+    list, el('h3', {}, 'Built in'), el('p', { className: 'sub' }, 'And the commands you can type into any channel.'),
     el('div', { className: 'sx-list' }, ...keys.map(([k, what]) => el('div', { className: 'it' }, el('code', { style: 'background:var(--input);padding:3px 8px;border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:.85rem' }, k), el('span', { className: 'nm3', style: 'color:var(--muted)' }, what))))];
 }
 
@@ -6628,7 +6747,7 @@ function layoutStudio(redraw) {
     });
   }
   const partForSize = (key) => ({ railW: 'rail', sideW: 'side', membersW: 'members', topH: 'top', composerH: 'composer', panelH: 'panel', bannerH: 'head',
-    statusH: 'status', avatarPx: 'content', memberAv: 'members', chanH: 'body', icTop: 'top', icComposer: 'composer', icPanel: 'panel', fontSize: 'content' })[key] || studio.sel;
+    statusH: 'status', avatarPx: 'content', memberAv: 'members', chanH: 'body', icTop: 'top', topGap: 'top', icComposer: 'composer', icPanel: 'panel', fontSize: 'content' })[key] || studio.sel;
   function makeGhost(node, ev) {
     const r = node.getBoundingClientRect(), g = node.cloneNode(true);
     g.classList.add('m-ghost');
@@ -6771,19 +6890,19 @@ function layoutStudio(redraw) {
     if (id === 'side') out.push(size('sideW'), sideways('cols', COLS), size('chanH'), flag('cats', 'Category headings', 'TEXT CHANNELS, VOICE CHANNELS…'), flag('chanIcons', 'Channel icons', 'The # and speaker marks.'), ...buttonRows('dms'));
     if (id === 'head') out.push(flag('sideHead', 'Show the server header', 'The server’s name and menu.'), flag('serverBanner', 'Server banners', 'A server’s picture at the top of its channels.'),
       pickRow('bannerStyle', 'Banner', [['under', 'Under the server’s name'], ['behind', 'Behind the server’s name']]), size('bannerH', 'When a server has a banner.'), updown('sideOrder', SIDE_PARTS), ...buttonRows('header'));
-    if (id === 'body') out.push(size('chanH'), flag('cats', 'Category headings', ''), pickRow('catStyle', 'Category names', [['line', 'With a line under them'], ['caps', 'SMALL CAPITALS']]),
+    if (id === 'body') out.push(size('chanH'), flag('cats', 'Category headings', ''), pickRow('catStyle', 'Category names', [['dim', 'Bright when open, dimmed when closed'], ['line', 'With a line under them, and an arrow'], ['caps', 'SMALL CAPITALS, with an arrow']]),
       flag('chanIcons', 'Channel icons', ''), updown('sideOrder', SIDE_PARTS), ...buttonRows(studio.view === 'dm' ? 'dmNav' : 'serverTop'), ...buttonRows('channels'));
     if (id === 'panel') out.push(flag('userPanel', 'Show your controls', 'Your picture, mute, deafen and the settings cog.'),
       pickRow('panelPos', 'Where', [['rail', 'At the foot of the server rail'], ['side', 'Under the sidebar']]), ...(prefs.panelPos === 'rail' && prefs.rail !== 'off' ? [] : [size('panelH'), updown('sideOrder', SIDE_PARTS)]), size('icPanel'),
       flag('plates', 'Nameplates', 'Pictures behind names here, in member lists and DMs.'), ...buttonRows(prefs.panelPos === 'rail' && prefs.rail !== 'off' ? 'railPanel' : 'panel'));
     if (id === 'main') out.push(sideways('cols', COLS), pickRow('frame', 'Panels', [['panels', 'Rounded, with room between them'], ['flat', 'Flat, side by side']]), size('panelR'), size('panelGap'),
       pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']], 'Long lines can stop at a comfortable width.'));
-    if (id === 'top') out.push(flag('topbar', 'Show the top bar', 'The channel name and its buttons.'), size('topH'), size('icTop'),
+    if (id === 'top') out.push(flag('topbar', 'Show the top bar', 'The channel name and its buttons.'), size('topH'), size('icTop'), size('topGap'),
       pickRow('btnLabels', 'Labels', [['off', 'Icons only'], ['on', 'Icons and words']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('top'));
     if (id === 'content') out.push(flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), pickRow('avatarShape', 'Avatar shape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']]),
       size('fontSize', 'Everything in the app scales with it.'), pickRow('density', 'Spacing', [['cozy', 'Cozy'], ['compact', 'Compact']]),
       pickRow('timestamps', 'Timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']]), flag('group', 'Group messages', 'One heading for several messages in a row.'),
-      pickRow('dividers', 'Date dividers', onoff), pickRow('hover', 'Highlight on hover', onoff), pickRow('startHeaders', 'Conversation start', onoff, '“Welcome to #channel”.'),
+      pickRow('dividers', 'Date dividers', onoff), pickRow('hover', 'Highlight on hover', onoff), pickRow('nameHover', 'Names on hover', [['off', 'No line'], ['underline', 'A line under them']]), pickRow('startHeaders', 'Conversation start', onoff, '“Welcome to #channel”.'),
       pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('msgActions'));
     if (id === 'composer') out.push(size('composerH'), size('icComposer'), updown('mainOrder', MAIN_PARTS), ...buttonRows('composer'));
     if (id === 'members') out.push(flag('membersDefault', 'Open by default', 'You can always open it from the top bar.', (on) => { showMembers = on; }), size('membersW', 'The DM profile panel uses it too.'),
@@ -6891,8 +7010,10 @@ function czPane(id, redraw) {
     row2('Title', 'Where the name sits in the title bar.', pick('titleAlign', [['center', 'In the middle'], ['left', 'On the left']])),
     row2('Your controls', 'Your picture, mute, deafen and the settings cog.', pick('panelPos', [['rail', 'At the foot of the server rail'], ['side', 'Under the sidebar']])),
     row2('Server banner', 'A server’s picture, at the top of its channels.', pick('bannerStyle', [['under', 'Under the server’s name'], ['behind', 'Behind the server’s name']])),
-    row2('Category names', '“Example Group” above its channels.', pick('catStyle', [['line', 'With a line under them'], ['caps', 'SMALL CAPITALS']])),
+    row2('Category names', '“Example Group” above its channels.', pick('catStyle', [['dim', 'Bright when open, dimmed when closed'], ['line', 'With a line under them, and an arrow'], ['caps', 'SMALL CAPITALS, with an arrow']])),
     row2('Member list and DM profile', 'Beside the chat.', pick('membersStyle', [['panel', 'Under the top bar, beside the chat'], ['card', 'A card in the chat'], ['column', 'A column of its own']])),
+    el('h3', {}, 'Shortcuts'), el('p', { className: 'sub' }, 'Click a key to change it, then press the keys you want. Backspace leaves it with none, and Esc keeps it. User Settings → Keyboard Shortcuts has them too.'),
+    el('div', { className: 'kb-list' }, ...keyRows(redraw)),
     el('h3', {}, 'Start over'), row2('Reset layout', 'Every size, position, part and button on this page, the way Fluentdat comes.', el('button', { className: 'btn danger', onclick: async () => {
       if (!(await confirmBox({ title: 'Reset Layout', text: 'Put every layout option, size, position and button back the way Fluentdat comes?', ok: 'Reset', danger: true }))) return;
       prefs = { ...prefs, ...DEFAULT_PREFS, ...keepOf() }; savePrefs(); showMembers = true; renderAll(); redraw(); toast('Layout reset.');
@@ -6909,6 +7030,7 @@ function czPane(id, redraw) {
     flag('group', 'Group messages', 'One heading for several messages in a row from the same person.'),
     row2('Date dividers', 'A line with the date between days.', pick('dividers', [['on', 'Shown'], ['off', 'Hidden']])),
     row2('Highlight on hover', '', pick('hover', [['on', 'Shown'], ['off', 'Hidden']])),
+    row2('Names on hover', 'A line under someone’s name in the chat while the mouse is on it.', pick('nameHover', [['off', 'No line'], ['underline', 'A line under them']])),
     row2('Conversation start', '“Welcome to #channel”, and a DM’s big picture and name.', pick('startHeaders', [['on', 'Shown'], ['off', 'Hidden']])),
     row2('Reading width', 'Long lines can stop at a comfortable width.', pick('msgWidth', [['full', 'Use the full width'], ['readable', 'Readable column']])),
     row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos.', sw(prefs.embeds !== 'off', (on) => set('embeds', on ? 'on' : 'off'))),
