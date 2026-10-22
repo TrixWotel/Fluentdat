@@ -32,7 +32,7 @@ function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
     emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [], pins: {}, boosts: [], threadInfo: {},
-    wallet: null, owned: [], shop: {}, trades: [], bundles: [], sales: [], settings: null };
+    wallet: null, owned: [], shop: {}, trades: [], bundles: [], sales: [], settings: null, ban: null };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -160,7 +160,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 14;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 15;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -200,6 +200,12 @@ async function loadOnce() {
         const op = meOps.get(k);
         if (op && op.v && (cache.shop[kind + ':' + op.v] || 0) > 0 && !owned.some((o) => o.kind === kind && o.item === op.v)) meOps.delete(k);
       }
+    }
+    // (banned from Fluentdat: why, and since when; the database shows such a person nothing else)
+    if (ver >= 15) {
+      const ban = await soft(sb.from('app_bans').select('reason,created_at').eq('user_id', myId()).then(must), []);
+      if (seq !== loadSeq) return newestLoad;
+      cache.ban = ban[0] ? { reason: ban[0].reason || '', at: Date.parse(ban[0].created_at) || 0 } : null;
     }
     // (your settings, as Customize keeps them with your account)
     if (ver >= 10) {
@@ -404,7 +410,7 @@ function watchStructure() {
   structure6.subscribe();
   // (Datbux: your wallet, what you have, and trades for you; an offer is told to the app)
   structure7 = sb.channel('fluentdat-structure-7');
-  for (const table of ['wallets', 'owned_items', 'user_settings']) structure7.on('postgres_changes', { event: '*', schema: 'public', table }, again);
+  for (const table of ['wallets', 'owned_items', 'user_settings', 'app_bans']) structure7.on('postgres_changes', { event: '*', schema: 'public', table }, again);
   structure7.on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, ({ eventType, new: row }) => {
     again();
     if (eventType === 'INSERT' && row && row.to_user === myId()) for (const cb of tradeListeners) try { cb(toTrade(row)); } catch {}
@@ -1212,6 +1218,16 @@ export const SupabaseStore = {
   },
   // ---- for the people who run Fluentdat (TrixWotel): one-time links to make an account, and the reports ----
   isAppAdmin: () => !!cache.admin,
+  // (and TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux for anyone)
+  canStaff: () => (cache.version || 0) >= 15,
+  banned: () => cache.ban,
+  async appBan(user, reason = '') { must(await sb.rpc('app_ban', { p_user: user, p_reason: reason })); },
+  async appUnban(user) { return !!must(await sb.rpc('app_unban', { p_user: user })); },
+  async appBans() {
+    return (must(await sb.rpc('app_ban_list')) || []).map((r) => ({ id: r.user_id, login: r.handle, name: r.name || r.handle, avatar: r.avatar || '', reason: r.reason || '', ts: Date.parse(r.created_at) || 0, by: r.by_handle || '' }));
+  },
+  async staffKick(sv, user) { const gone = !!must(await sb.rpc('staff_kick', { p_server: sv, p_user: user })); await loadAll(); return gone; },
+  async staffGiveBux(user, amount) { const b = Number(must(await sb.rpc('staff_give_bux', { p_user: user, p_amount: amount }))); if (user === myId()) await loadAll(); return b; },
   async createAppInvite(note = '', days = 7) { return must(await sb.rpc('create_app_invite', { p_note: note, p_days: days })); },
   async appInvites() {
     return must(await sb.rpc('app_invites_list')).map((r) => ({ code: r.code, note: r.note, ts: Date.parse(r.created_at), expires: r.expires_at ? Date.parse(r.expires_at) : 0,

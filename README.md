@@ -9,6 +9,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Fluentdat's own layout (from TrixWotel's drawings): a title bar across the top, your controls at the foot of the server rail, a server's banner under its name with Browse, Guide, Event, Boost, Shop, Rules and Servers above its channels, Browse, Friends, Bank, Collection, Shop and Quest in Direct Messages, a profile beside DMs, and full profiles that float over everything
 * Customize, a site of its own (customize.html): the theme, the layout (a small copy of the screen to drag and resize), every element (shown or hidden, where it goes, what it's called), messages, profiles and animations. The open chat changes with it at once, and signed in, it all follows your account to every device
 * Servers with categories, text channels and voice channels, invites, Discover for public servers, roles, bans and banners
+* Commands for the people who run Fluentdat (type / in a server): ban someone from all of Fluentdat and let them back in, take someone out of a server, and give Datbux
 * Browse in Direct Messages: search the messages and files in all your DMs and group chats at once (Files, Images, Videos, Links, and from someone)
 * Keyboard shortcuts you can change (User Settings → Keyboard Shortcuts, or Customize → Layout): hide the sidebar (⇧⌘S, Ctrl+Shift+S elsewhere), the member list or the server rail
 * Category settings and permissions like Discord's: private categories, and what @everyone, each role and each member may do there

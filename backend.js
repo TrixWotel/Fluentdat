@@ -123,7 +123,7 @@ const fallback = {
   block: async () => { throw new Error(SIGN_IN + 'block people.'); },
   unblock: async () => {},
   report: async () => { throw new Error(SIGN_IN + 'report something.'); },
-  isAppAdmin: () => false,
+  isAppAdmin: () => false, canStaff: () => false, banned: () => null,
   markUnread: () => {},
   emojiAll: () => [], serverEmoji: () => [], serverStickers: () => [], expressionUrl: () => '',
   addEmoji: async () => { throw new Error(SIGN_IN + 'add server emoji.'); },

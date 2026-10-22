@@ -94,6 +94,16 @@ insert into public.app_admins (user_id) select id from public.profiles where han
 
 Password sign-in uses Supabase's **Email** provider, which is on from the start: leave **Authentication → Sign In / Providers → Email** turned on.
 
+### TrixWotel's commands
+
+The people who run Fluentdat have commands of their own: type `/` in any server's message box to see them (nobody else sees or can use them; the database checks).
+
+* `/ban @someone why` bans them from all of Fluentdat: they can't post, react, message, call, upload, buy or change anything, and see only that they're banned (and why). `/unban @someone` lets them back in, and `/bans` (or **Invites & Reports**) lists who's banned. Nobody who runs Fluentdat can be banned.
+* `/kick @someone` takes them out of the server you're in (never its owner). They can come back with an invite.
+* `/givebux 500` gives you 500 Datbux; `/givebux 500 @someone` gives them to someone else (1 to 1,000,000 at a time). It shows in their Bank as a gift from Fluentdat.
+
+A server's own bans stay with its admins (a member's **⋯ → Ban**, and **Server Settings → Bans**).
+
 ## 10. Boosts that renew while nobody's on (optional)
 
 A boost gets its next day while the person boosting has Fluentdat open (in its last day). To renew boosts even when nobody has Fluentdat open:

@@ -2459,12 +2459,28 @@ button.pc-name:hover { text-decoration: underline; }
 .fp-log-plate { width: 34px; height: 18px; border-radius: 5px; background-size: cover; box-shadow: inset 0 0 0 1px #ffffff1f; }
 /* Round P: every profile card (the popout, your own popout, the DM profile, the full profile, and the previews of one)
    laid out as the DM profile is: the banner, then the picture (no ring round it) with the name and username beside it,
-   then its parts with no lines between them; and a status that's a plain dot on the edge of the picture */
+   then its parts with no lines between them; and a status that's a plain dot on the edge of the picture, a fifth of its
+   size (never under 6px) */
 .pop .inner.pc-inner { margin-top: 0; padding: 0 0 14px; }
 .pop .inner.pc-inner > .role-chips, .pop .inner.pc-inner > .pmsg, .pop .inner.pc-inner > .card { margin-left: 16px; margin-right: 16px; }
 .pop .inner.pc-inner > .role-chips { margin-top: 10px; }
 .pop .dmp-about { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
 .pc-sec, .fp-card2 .pc-sec { border-top: 0; padding: 7px 0; }
-.avatar .dot { border: 0 !important; box-shadow: none !important; width: clamp(8px, 26%, 20px) !important; height: clamp(8px, 26%, 20px) !important;
-  right: calc(14.6% - clamp(8px, 26%, 20px) / 2) !important; bottom: calc(14.6% - clamp(8px, 26%, 20px) / 2) !important; }
+.avatar .dot { border: 0 !important; box-shadow: none !important; width: max(6px, 20%) !important; height: max(6px, 20%) !important;
+  right: calc(14.6% - max(6px, 20%) / 2) !important; bottom: calc(14.6% - max(6px, 20%) / 2) !important; }
 .dmp-foot, .dmp.themed .dmp-foot { border-top: 0; }
+/* Round R: no status dots in the Shop (or your Collection); your badges in your Collection; TrixWotel's commands in the
+   list as you type /; and the note someone banned from Fluentdat sees instead of it */
+.shp-page .avatar .dot { display: none !important; }
+.col-badges { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.col-badge { align-items: center; text-align: center; color: var(--text); cursor: pointer; font: inherit; }
+.col-badge-ic { height: 64px; display: grid; place-items: center; }
+.col-badge .shp-meta small { justify-content: center; }
+.mp-row .mp-at svg.ic { width: 15px; height: 15px; }
+.banned { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 16px; background: var(--main); color: var(--text); }
+.banned-card { width: min(420px, 100%); display: grid; justify-items: center; gap: 10px; padding: 32px 28px; border-radius: 18px; background: var(--side); box-shadow: inset 0 0 0 1px var(--edge-soft), 0 20px 50px #0007; text-align: center; }
+.banned-ic { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, #ed4245 18%, transparent); color: #ed4245; }
+.banned-ic svg.ic { width: 34px; height: 34px; }
+.banned-card h1 { margin: 6px 0 0; font-size: 1.35rem; color: var(--bright); }
+.banned-card p { margin: 0; line-height: 1.45; } .banned-card b { color: var(--bright); } .banned-when { color: var(--muted); font-size: .86rem; }
+.banned-card .btn { margin-top: 8px; }

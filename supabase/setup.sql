@@ -202,6 +202,14 @@ create table if not exists public.seen (
 create table if not exists public.app_admins (
   user_id uuid primary key references public.profiles (id) on delete cascade
 );
+-- the people they've banned from all of Fluentdat (TrixWotel's /ban): while banned, someone can't write anything (a
+-- message, a reaction, a DM, a call, a file, a purchase…) and sees nothing but why they're banned
+create table if not exists public.app_bans (
+  user_id uuid primary key references public.profiles (id) on delete cascade,
+  banned_by uuid references public.profiles (id) on delete set null,
+  reason text not null default '' check (char_length(reason) <= 200),
+  created_at timestamptz not null default now()
+);
 -- a one-time link to make an account with a username and a password (no email), made by one of the people who run Fluentdat
 create table if not exists public.app_invites (
   code text primary key,
@@ -357,7 +365,7 @@ create table if not exists public.datbux_log (
   id bigserial primary key,
   user_id uuid not null references public.profiles (id) on delete cascade,
   amount bigint not null,
-  kind text not null check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade', 'boost')),
+  kind text not null check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade', 'boost', 'staff')),
   note text not null default '' check (char_length(note) <= 160),
   other uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now()
@@ -386,7 +394,7 @@ create table if not exists public.owned_items (
   primary key (user_id, kind, item)
 );
 alter table public.datbux_log drop constraint if exists datbux_log_kind_check;
-alter table public.datbux_log add constraint datbux_log_kind_check check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade', 'boost'));
+alter table public.datbux_log add constraint datbux_log_kind_check check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade', 'boost', 'staff'));
 alter table public.shop_items drop constraint if exists shop_items_kind_check;
 alter table public.shop_items add constraint shop_items_kind_check check (kind in ('deco', 'font', 'effect', 'frame', 'plate'));
 alter table public.owned_items drop constraint if exists owned_items_kind_check;
@@ -644,6 +652,7 @@ create or replace function public.topic_ok(p_topic text) returns boolean
 language plpgsql stable security definer set search_path = public as $$
 declare t text := regexp_replace(coalesce(p_topic, ''), '^realtime:', ''); k text; v text;
 begin
+  if app_banned() then return false; end if;
   k := split_part(t, ':', 1); v := split_part(t, ':', 2);
   if v !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or split_part(t, ':', 3) <> '' then return false; end if;
   if k = 'call' then return exists (select 1 from calls c where c.id = v::uuid and in_dm(c.dm_id)); end if;
@@ -659,7 +668,7 @@ declare k text := split_part(p_name, '/', 1); place text := split_part(p_name, '
   re text := '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 begin
   if place !~ re or who !~ re or split_part(p_name, '/', 4) !~ '^[0-9a-f-]{36}\.[a-z0-9]{1,8}$' or split_part(p_name, '/', 5) <> '' then return false; end if;
-  if p_write and who <> auth.uid()::text then return false; end if;
+  if p_write and (who <> auth.uid()::text or app_banned()) then return false; end if;
   if k = 'dm' then return in_dm(place::uuid); end if;
   if k = 'ch' then return chan_can(place::uuid, case when p_write then 'attach' else 'view' end); end if;
   return false;
@@ -669,6 +678,11 @@ end $$;
 create or replace function public.is_app_admin() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from app_admins where user_id = auth.uid());
+$$;
+-- banned from all of Fluentdat?
+create or replace function public.app_banned() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from app_bans where user_id = auth.uid());
 $$;
 
 -- has either of you blocked the other?
@@ -691,7 +705,7 @@ declare sv text := split_part(p_name, '/', 1);
 begin
   if sv !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or split_part(p_name, '/', 2) not in ('emoji', 'sticker')
      or split_part(p_name, '/', 3) !~ '^[0-9a-f-]{36}\.(png|gif|webp|jpg)$' or split_part(p_name, '/', 4) <> '' then return false; end if;
-  return is_admin(sv::uuid);
+  return is_admin(sv::uuid) and not app_banned();
 end $$;
 
 -- what someone may do in a category: owners and admins anything; members see, post, attach, react and join voice unless
@@ -999,6 +1013,7 @@ drop policy if exists "admins lift bans" on public.bans;
 create policy "admins lift bans" on public.bans for delete to authenticated using (is_admin(server_id));
 
 alter table public.app_admins enable row level security;
+alter table public.app_bans enable row level security;
 alter table public.app_invites enable row level security;
 alter table public.blocks enable row level security;
 alter table public.reports enable row level security;
@@ -1007,6 +1022,8 @@ alter table public.server_stickers enable row level security;
 
 drop policy if exists "see whether you're one" on public.app_admins;
 create policy "see whether you're one" on public.app_admins for select to authenticated using (user_id = auth.uid());
+drop policy if exists "your own ban, or every one for the people who run fluentdat" on public.app_bans;
+create policy "your own ban, or every one for the people who run fluentdat" on public.app_bans for select to authenticated using (user_id = auth.uid() or is_app_admin());
 
 drop policy if exists "the people who run fluentdat see its links" on public.app_invites;
 create policy "the people who run fluentdat see its links" on public.app_invites for select to authenticated using (is_app_admin());
@@ -1597,8 +1614,9 @@ begin
   if not found then raise exception 'You aren''t in that server.'; end if;
 end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
--- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 14 $$;
+-- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates;
+-- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 15 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -2208,6 +2226,58 @@ language sql stable security definer set search_path = public as $$
   order by b.created_at desc;
 $$;
 
+-- ===================== TrixWotel's commands (for the people who run Fluentdat) =====================
+-- /ban: ban someone from all of Fluentdat (never yourself, nor anyone else who runs it)
+create or replace function public.app_ban(p_user uuid, p_reason text default '')
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_app_admin() then raise exception 'Only the people who run Fluentdat can ban someone from it.'; end if;
+  if p_user is null or not exists (select 1 from profiles where id = p_user) then raise exception 'There''s nobody like that.'; end if;
+  if p_user = auth.uid() then raise exception 'You can''t ban yourself.'; end if;
+  if exists (select 1 from app_admins where user_id = p_user) then raise exception 'Nobody who runs Fluentdat can be banned from it.'; end if;
+  insert into app_bans (user_id, banned_by, reason) values (p_user, auth.uid(), left(coalesce(p_reason, ''), 200))
+    on conflict (user_id) do update set reason = excluded.reason, banned_by = excluded.banned_by, created_at = now();
+end $$;
+-- /unban: let them back in (true if they were banned)
+create or replace function public.app_unban(p_user uuid) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_app_admin() then raise exception 'Only the people who run Fluentdat can lift a ban.'; end if;
+  delete from app_bans where user_id = p_user;
+  return found;
+end $$;
+-- /bans: who's banned, why, and by whom
+create or replace function public.app_ban_list()
+returns table (user_id uuid, handle text, name text, avatar text, reason text, created_at timestamptz, by_handle text)
+language sql stable security definer set search_path = public as $$
+  select b.user_id, p.handle, p.name, p.avatar, b.reason, b.created_at, q.handle
+  from app_bans b join profiles p on p.id = b.user_id left join profiles q on q.id = b.banned_by
+  where is_app_admin()
+  order by b.created_at desc;
+$$;
+-- /kick: take someone out of a server, any server (never its owner); an invite brings them back
+create or replace function public.staff_kick(p_server uuid, p_user uuid) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_app_admin() then raise exception 'Only the people who run Fluentdat can do that.'; end if;
+  if exists (select 1 from servers where id = p_server and owner = p_user) then raise exception 'Nobody can take a server''s owner out of it.'; end if;
+  delete from server_members where server_id = p_server and user_id = p_user;
+  return found;
+end $$;
+-- /givebux: Datbux for anyone, yourself too (1 to 1,000,000 at a time); their Bank shows it came from Fluentdat
+create or replace function public.staff_give_bux(p_user uuid, p_amount int) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare b bigint;
+begin
+  if not is_app_admin() then raise exception 'Only the people who run Fluentdat can hand out Datbux.'; end if;
+  if p_amount is null or p_amount < 1 or p_amount > 1000000 then raise exception 'Give between 1 and 1,000,000 Datbux at a time.'; end if;
+  if p_user is null or not exists (select 1 from profiles where id = p_user) then raise exception 'There''s nobody like that.'; end if;
+  perform wallet_open(p_user);
+  update wallets set balance = balance + p_amount, updated_at = now() where user_id = p_user returning balance into b;
+  insert into datbux_log (user_id, amount, kind, note, other) values (p_user, p_amount, 'staff', 'From the people who run Fluentdat', auth.uid());
+  return b;
+end $$;
+
 -- a profile for every new account: a unique @handle from their Discord/GitHub name or email, and their picture
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -2403,6 +2473,11 @@ revoke all on function public.bundle_cost(text, uuid) from public, anon, authent
 revoke all on function public.buy_bundle(text), public.shop_sales(timestamptz), public.bundle_pct(text, timestamptz) from public, anon;
 grant execute on function public.buy_bundle(text), public.shop_sales(timestamptz), public.bundle_pct(text, timestamptz) to authenticated;
 
+-- (TrixWotel's commands: anyone signed in may ask, and only the people who run Fluentdat get anything done)
+grant execute on function public.app_banned() to authenticated;
+revoke all on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) from public, anon;
+grant execute on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) to authenticated;
+
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
 grant usage on schema public to authenticated;
@@ -2424,6 +2499,10 @@ revoke insert, update, delete, truncate on public.wallets, public.datbux_log, pu
 revoke all on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards, public.shop_bundles from anon;
 -- (boosts: looked at by the server's people, started through boost_server, stopped by deleting your own)
 revoke insert, update on public.server_boosts from authenticated;
+-- (bans from all of Fluentdat: looked at, by the one banned and the people who run it; made only through app_ban)
+grant select on public.app_bans to authenticated;
+revoke insert, update, delete, truncate on public.app_bans from authenticated;
+revoke all on public.app_bans from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
@@ -2521,6 +2600,7 @@ do $$ begin
     begin alter publication supabase_realtime add table public.owned_items; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.trades; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.user_settings; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.app_bans; exception when duplicate_object then null; end;
   end if;
 end $$;
 
@@ -2565,4 +2645,27 @@ do $$ begin
     execute 'create policy "fluentdat: calls you are in (talk)" on realtime.messages for insert to authenticated with check (public.topic_ok(realtime.topic()))';
   end if;
 exception when insufficient_privilege then raise notice 'Fluentdat: couldn''t set up call channels (%)', sqlerrm;
+end $$;
+
+-- ===================== banned from Fluentdat =====================
+-- someone banned (app_bans) writes nothing to any table, even through the database's own functions, and sees nothing in
+-- any table but their ban. (Running setup.sql again puts this on tables that come later too.)
+create or replace function public.no_banned_writes() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and exists (select 1 from app_bans where user_id = auth.uid()) then
+    raise exception 'You''re banned from Fluentdat.';
+  end if;
+  return null;
+end $$;
+revoke all on function public.no_banned_writes() from public, anon, authenticated;
+do $$ declare t record; begin
+  for t in select c.relname, c.relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' loop
+    execute format('drop trigger if exists no_banned_writes on public.%I', t.relname);
+    execute format('create trigger no_banned_writes before insert or update or delete on public.%I for each statement execute function public.no_banned_writes()', t.relname);
+    if t.relrowsecurity and t.relname <> 'app_bans' then
+      execute format('drop policy if exists "nothing for people banned from fluentdat" on public.%I', t.relname);
+      execute format('create policy "nothing for people banned from fluentdat" on public.%I as restrictive for select to authenticated using ((select not public.app_banned()))', t.relname);
+    end if;
+  end loop;
 end $$;

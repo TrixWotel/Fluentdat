@@ -1745,9 +1745,9 @@ function tradeCard(t) {
 function buxLine(h) {
   const who = h.other ? person(h.other).name : '', [kind, item] = String(h.note || '').split(':');
   const bundle = kind === 'bundle' ? (Bux.bundles().find((b) => b.id === item) || BUNDLES.find((b) => b.id === item) || { name: item }) : null;
-  const what = { welcome: 'Welcome to Datbux', task: `Task: ${(TASK[h.note] || {}).title || h.note}`, buy: bundle ? `Bought the ${bundle.name} Bundle` : `Bought ${itemName(kind, item)}`, boost: `Boosted ${h.note || 'a server'}`, send: `Sent to ${who}`, receive: `From ${who}`, trade: `Trade with ${who}` }[h.kind] || h.kind;
+  const what = { welcome: 'Welcome to Datbux', task: `Task: ${(TASK[h.note] || {}).title || h.note}`, buy: bundle ? `Bought the ${bundle.name} Bundle` : `Bought ${itemName(kind, item)}`, boost: `Boosted ${h.note || 'a server'}`, send: `Sent to ${who}`, receive: `From ${who}`, trade: `Trade with ${who}`, staff: 'A gift from Fluentdat' }[h.kind] || h.kind;
   const said = (h.kind === 'send' || h.kind === 'receive') && h.note ? h.note : '';
-  return el('div', { className: 'dbx-log' }, el('span', { className: 'dbx-ld' }, icon(h.kind === 'buy' ? 'shop' : h.kind === 'task' ? 'check' : h.kind === 'trade' ? 'swap' : h.kind === 'welcome' ? 'gift' : h.kind === 'boost' ? 'gem' : 'send', 16)),
+  return el('div', { className: 'dbx-log' }, el('span', { className: 'dbx-ld' }, icon(h.kind === 'buy' ? 'shop' : h.kind === 'task' ? 'check' : h.kind === 'trade' ? 'swap' : h.kind === 'welcome' || h.kind === 'staff' ? 'gift' : h.kind === 'boost' ? 'gem' : 'send', 16)),
     el('div', { className: 'grow' }, el('b', {}, what), said ? el('small', {}, '“' + said + '”') : null), el('time', {}, when(h.at, true)),
     el('span', { className: 'dbx-amt2 ' + (h.amount >= 0 ? 'up' : 'down') }, (h.amount >= 0 ? '+' : '−') + fmtBux(Math.abs(h.amount))));
 }
@@ -1902,8 +1902,8 @@ function shopPage() {
   }
   return page;
 }
-// Collection (Direct Messages → Collection): what's yours from the Shop (bought, traded, or kept from before things had
-// prices) and from Quests, to put on or take off
+// Collection (Direct Messages → Collection): your badges, and what's yours from the Shop (bought, traded, or kept from
+// before things had prices) and from Quests, to put on or take off
 function collectionPage() {
   const you = asMember(), owned = buxReady() ? Bux.owned() : [], st = me.style || {};
   const HOW = { buy: 'Bought', trade: 'Traded', grant: 'Yours from before', quest: 'Quest reward' };
@@ -1932,13 +1932,27 @@ function collectionPage() {
   const goHome = (page) => { view = 'home'; dmId = null; homePage = page; renderAll(); };
   const sec = (title, sub, list, cls = '') => (list.length ? [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)] : []);
   const n = decos.length + fonts.length + effects.length + frames.length + plates.length;
+  // (your badges, newest first, with the day each came; click one for how you got it)
+  const badgeSub = el('p', { className: 'shp-sub' }, 'Loading your badges…'), badgeGrid = el('div', { className: 'shp-grid col-badges' });
+  const fillBadges = (stats) => {
+    if (!stats) return;
+    const log = (Store.extrasNow(myXid()) || {}).badgeLog || {};
+    const rows = badgesOf(stats, { all: true }).have.map((b) => ({ b, at: Date.parse(log[b.id] || '') || 0 })).sort((x, y) => y.at - x.at);
+    badgeSub.textContent = rows.length ? `${plural(rows.length, 'badge')} you’ve earned, newest first. Click one to see how you got it.` : 'No badges yet: they come as you chat, react, make friends and more.';
+    badgeGrid.replaceChildren(...rows.map(({ b, at }) => el('button', { className: 'shp-item col-badge', title: badgeTitle(b), onclick: () => badgesDialog(you, b.id) },
+      el('div', { className: 'col-badge-ic' }, badgeIcon(b.id, 44)), el('div', { className: 'shp-meta' }, el('b', {}, b.name), el('small', {}, [b.rarity ? b.rarity[0] : '', at ? dateLong(at) : ''].filter(Boolean).join(' · '))))));
+  };
+  fillBadges(statsNow(you));
+  statsOf(you).then(fillBadges, () => {});
+  noteBadges().then(() => fillBadges(statsNow(you)), () => {});
   return el('div', { className: 'shp-page col-page' },
     el('div', { className: 'shp-hero col-hero' }, el('div', {}, el('h1', {}, labelOf('dmNav', 'collectionNav')),
-      el('p', {}, n ? `${plural(n, 'thing')} of yours, from the Shop and from Quests. Put one on, take it off, or trade it with someone you know.` : 'Nothing here yet. What you buy in the Shop, and rewards from Quests, end up here.'),
+      el('p', {}, n ? `Your badges, and ${plural(n, 'thing')} of yours from the Shop and from Quests. Put one on, take it off, or trade it with someone you know.` : 'Your badges are here. What you buy in the Shop, and rewards from Quests, end up here too.'),
       el('div', { className: 'shp-hero-acts' }, el('button', { className: 'btn', onclick: () => goHome('shop') }, icon('shop', 16), labelOf('dmNav', 'shopNav')),
         el('button', { className: 'btn', onclick: () => goHome('datbux') }, icon('coin', 16), labelOf('dmNav', 'datbuxNav')),
         buxLive() && Store.canBux() ? el('button', { className: 'btn', onclick: () => tradeDialog() }, icon('swap', 16), 'Trade') : null)),
       el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
+    el('h2', { className: 'shp-h' }, 'Badges'), badgeSub, badgeGrid,
     ...sec('Avatar Decorations', 'Around your avatar everywhere.', decos),
     ...sec('Name Fonts', 'Your name, in its own font.', fonts, 'wide'),
     ...sec('Profile Effects', 'Over your profile card.', effects, 'wide'),
@@ -2790,6 +2804,7 @@ function roleIconEl(r, size = 16) {
   return s;
 }
 function renderAll() {
+  if (renderBanned()) return;
   indexEmoji(); ensureSelection(); renderTitle(); renderRail(); renderSide(); renderMe(); renderTop(); renderContent(); renderMembers(); renderBanner();
   const g = view === 'home' && dmId && Store.dmInfo ? Store.dmInfo(dmId) : null, groupOn = !!g && g.kind === 'group' && showMembers;
   const dmPanelOn = view === 'home' && !!dmId && prefs.dmPanel && !!Store.dmUser(dmId);
@@ -2802,6 +2817,18 @@ function renderAll() {
   for (const d of Store.dmList()) n += dmUnread(d.id);
   for (const sv of Store.servers()) n += serverUnread(sv.id).mentions;
   document.title = (n ? `(${n > 99 ? '99+' : n}) ` : '') + (CUSTOMIZE ? 'Fluentdat Customize' : 'Fluentdat');
+}
+// banned from Fluentdat (TrixWotel's /ban): only why, since when, and a way to sign out (the database shows them nothing else)
+function renderBanned() {
+  const ban = Store.kind === 'supabase' && Store.banned ? Store.banned() : null;
+  let box = $('#banned');
+  if (!ban) { if (box) box.remove(); return false; }
+  if (!box) { box = el('div', { id: 'banned', className: 'banned' }); document.body.append(box); }
+  box.replaceChildren(el('div', { className: 'banned-card' }, el('div', { className: 'banned-ic' }, icon('ban', 34)), el('h1', {}, 'You’re banned from Fluentdat'),
+    el('p', {}, ...(ban.reason ? ['Why: ', el('b', {}, ban.reason)] : ['The people who run Fluentdat banned this account.'])),
+    ban.at ? el('p', { className: 'banned-when' }, 'Since ' + dateLong(ban.at)) : null,
+    el('button', { className: 'btn', onclick: async () => { await Store.signOut(); renderAll(); signInDialog(() => renderAll(), 'Sign in to Fluentdat'); } }, 'Sign Out')));
+  return true;
 }
 function renderBanner() {
   const b = $('#banner'), st = Store.syncState(), acc = Store.account();
@@ -3039,6 +3066,7 @@ function profileMenu(u, x, y, { full = false } = {}) {
     !self && !u.bot && { label: ignored ? 'Unignore' : 'Ignore', icon: 'eyeOff', hint: ignored ? null : 'Tuck away their messages, no pings', action: () => setIgnored(u, !ignored) },
     live && !self && !u.bot && { label: blocked ? 'Unblock' : 'Block', icon: 'ban', danger: !blocked, action: () => (blocked ? unblockUser(u) : blockUser(u)) },
     live && !self && !u.bot && { label: 'Report User Profile', icon: 'flag', danger: true, action: () => reportFlow({ user: u }) },
+    staffOn() && !self && !u.bot && u.id && { label: 'Ban from Fluentdat', icon: 'shield', danger: true, action: () => appBanFlow(u) },
     '-',
     { label: 'Copy User Info', sub: () => [u.login && { label: 'Copy Username', action: () => copyText(u.login, 'Username copied.') },
       { label: 'Copy User ID', action: () => copyText(String(u.id || u.login || u.name), 'User ID copied.') }, u.login && live && !u.bot && { label: 'Copy Profile Link', action: () => copyText(profileLink(u), 'Profile link copied.') }].filter(Boolean) },
@@ -3577,7 +3605,25 @@ async function updateEmojiHits() {
     el('span', { className: 'mp-name' }, ':' + h.name + ':'), el('span', { className: 'mp-sub' }, h.custom ? (Store.server(h.custom.server) || {}).name || '' : ''))));
   pop.hidden = false;
 }
+// / at the start of a message in a server: (for the people who run Fluentdat) TrixWotel's commands, then Flubot's
+function commandQuery() {
+  const i = $('#input'), m = view === 'server' ? i.value.slice(0, i.selectionStart).match(/^\/([a-z]{0,12})$/i) : null;
+  return m ? m[1].toLowerCase() : null;
+}
+function updateCommandHits(q) {
+  hitKind = 'cmd'; emojiAsk++;
+  mentionHits = [...(staffOn() ? STAFF_CMDS.map(([c, sub]) => ({ cmd: c, sub, staff: true })) : []), ...FLUBOT_CMDS.map(([c, sub]) => ({ cmd: c, sub }))].filter((h) => h.cmd.slice(1).startsWith(q));
+  if (!mentionHits.length) return closeMentions();
+  mentionSel = Math.min(mentionSel, mentionHits.length - 1);
+  const firstStaff = mentionHits.findIndex((h) => h.staff), firstBot = mentionHits.findIndex((h) => !h.staff);
+  $('#mention-pop').replaceChildren(...mentionHits.flatMap((h, i) => [
+    ...(i === firstStaff ? [el('div', { className: 'mp-head' }, 'TrixWotel Commands · only you have these')] : []), ...(i === firstBot ? [el('div', { className: 'mp-head' }, 'Flubot')] : []),
+    el('button', { className: 'mp-row' + (i === mentionSel ? ' on' : ''), onmousedown: (e) => { e.preventDefault(); pickMention(i); }, onmousemove: () => { if (mentionSel !== i) { mentionSel = i; markHit(); } } },
+      el('span', { className: 'mp-at' }, icon(h.staff ? 'shield' : 'bot', 16)), el('span', { className: 'mp-name' }, h.cmd), el('span', { className: 'mp-sub' }, h.sub))]));
+  $('#mention-pop').hidden = false;
+}
 function updateMentions() {
+  const cq = commandQuery(); if (cq !== null) return updateCommandHits(cq);
   const pop = $('#mention-pop'), mq = Store.kind === 'supabase' ? mentionQuery() : null;
   if (!mq) return updateEmojiHits();
   hitKind = 'people'; emojiAsk++;
@@ -3595,7 +3641,8 @@ function updateMentions() {
 }
 function pickMention(i) {
   const p = mentionHits[i], inp = $('#input'); if (!p) return;
-  if (hitKind === 'emoji') {
+  if (hitKind === 'cmd') { inp.value = p.cmd.split(' ')[0] + ' '; inp.setSelectionRange(inp.value.length, inp.value.length); }
+  else if (hitKind === 'emoji') {
     const eq = emojiQuery(); if (!eq) return closeMentions();
     if (p.custom) pickedEmoji.set(p.custom.name, p.custom);
     noteUse(p.custom ? 'c:' + p.custom.id : p.emoji);
@@ -3661,7 +3708,7 @@ const botSay = (text) => view === 'home' ? Store.sendDM(dmId, { user: { name: 'F
 function runCommand(line) {
   const [cmd, ...rest] = line.split(' '); const arg = rest.join(' ');
   switch (cmd.toLowerCase()) {
-    case 'help': return botSay('Commands: `/me <action>`, `/shrug`, `/roll [n]`, `/flip`, `/nick <name>`, `/theme <name>`, `/clear`. Try `!ping` too.');
+    case 'help': if (staffOn()) toast('Your TrixWotel Commands (only you see them): type / for the list.'); return botSay('Commands: `/me <action>`, `/shrug`, `/roll [n]`, `/flip`, `/nick <name>`, `/theme <name>`, `/clear`. Try `!ping` too.');
     case 'me': return arg ? postMine({ text: arg, action: true }) : null;
     case 'shrug': return postMine({ text: (arg ? arg + ' ' : '') + '¯\\\\\\_(ツ)\\_/¯' });
     case 'roll': { const n = Math.max(2, parseInt(arg, 10) || 6); return botSay(`🎲 **${me.name}** rolled a **${1 + Math.floor(Math.random() * n)}** (1–${n}).`); }
@@ -3675,8 +3722,79 @@ function runCommand(line) {
       confirmBox({ title: 'Clear Channel', text: `Delete every message in #${(Store.channel(channelId) || {}).name}${Store.kind === 'supabase' ? ' for everyone' : ''}? This can’t be undone.`, ok: 'Clear', danger: true })
         .then((yes) => { if (yes) Store.clear(channelId); });
       return;
+    case 'ban': case 'unban': case 'bans': case 'kick': case 'givebux': if (staffOn()) return staffCommand(cmd.toLowerCase(), rest.filter(Boolean));
+    // falls through (they're TrixWotel's: nobody else has them)
     default: return botSay(`I don't know \`/${cmd}\`. Try \`/help\`.`);
   }
+}
+// TrixWotel's commands (for the people who run Fluentdat; the database checks): ban someone from all of Fluentdat, let them
+// back in, see who's banned, take someone out of this server, and Datbux for you or anyone. What they say is only for you
+// (a note, or a window), never a message in the channel
+const FLUBOT_CMDS = [['/me <action>', 'Say what you’re doing, in italics'], ['/shrug', 'Adds ¯\\_(ツ)_/¯'], ['/roll [n]', 'Rolls a die (6 sides, or n)'], ['/flip', 'Flips a coin'],
+  ['/nick <name>', 'Changes your display name'], ['/theme <name>', 'Switches your theme'], ['/clear', 'Clears this channel (admins)'], ['/help', 'Lists Flubot’s commands']];
+const STAFF_CMDS = [['/ban @user [why]', 'Ban them from all of Fluentdat'], ['/unban @user', 'Let them back into Fluentdat'], ['/bans', 'Who’s banned from Fluentdat'],
+  ['/kick @user', 'Take them out of this server'], ['/givebux <amount> [@user]', 'Datbux for you, or for them']];
+const staffOn = () => Store.kind === 'supabase' && Store.isAppAdmin() && !!Store.canStaff && Store.canStaff();
+async function staffCommand(cmd, words) {
+  if (cmd === 'bans') return appBansDialog();
+  if (cmd === 'givebux') {
+    const n = Number(String(words[0] || '').replace(/[,_]/g, ''));
+    if (!Number.isInteger(n) || n < 1 || n > 1e6) return toast('Say how many: /givebux 500 for you, or /givebux 500 @someone (1 to 1,000,000).');
+    const u = words[1] ? await whoIs(words[1]) : { id: Store.myId(), name: me.name };
+    if (!u) return toast(`There’s nobody called ${words[1]} on Fluentdat.`);
+    const bal = await attempt(() => Store.staffGiveBux(u.id, n));
+    if (bal !== null) { toast(u.id === Store.myId() ? `${fmtBux(n)} Datbux for you: you have ${fmtBux(bal)} now.` : `${u.name} got ${fmtBux(n)} Datbux.`); renderAll(); }
+    return;
+  }
+  if (!words[0]) return toast(`Say who: /${cmd} @someone`);
+  const u = await whoIs(words[0]);
+  if (!u) return toast(`There’s nobody called ${words[0]} on Fluentdat.`);
+  if (cmd === 'ban') return appBanFlow(u, words.slice(1).join(' '));
+  if (cmd === 'unban') {
+    const was = await attempt(() => Store.appUnban(u.id));
+    if (was !== null) toast(was ? `${u.name} can use Fluentdat again.` : `${u.name} wasn’t banned.`);
+    return;
+  }
+  const sv = Store.server(serverId), where = sv ? sv.name : 'this server';
+  if (!(await confirmBox({ title: `Take ${u.name} out of ${where}?`, text: 'They can come back only with a new invite (or from Discover, if the server is public).', ok: 'Take Out', danger: true }))) return;
+  const gone = await attempt(() => Store.staffKick(serverId, u.id));
+  if (gone !== null) { toast(gone ? `${u.name} is out of ${where}.` : `${u.name} isn’t in ${where}.`); renderAll(); }
+}
+// someone by @handle (or <@id>, or their name): the people here first, then anyone on Fluentdat
+async function whoIs(word) {
+  const w = String(word || '').trim(), id = (w.match(/^<@([0-9a-f-]{36})>$/) || [])[1];
+  if (id) return { ...person(id), id };
+  const h = w.replace(/^@/, '').toLowerCase(); if (!h) return null;
+  const here = mentionPeople();
+  const found = here.find((x) => String(x.login || '').toLowerCase() === h) || here.find((x) => String(x.name || '').toLowerCase() === h);
+  if (found) return found;
+  try { return await Store.findUser(h); } catch { return null; }
+}
+// Ban from Fluentdat (/ban, or a profile's ⋯): why, if you like, then they can't do anything on Fluentdat until /unban
+function appBanFlow(u, why = '') {
+  const reason = el('textarea', { maxLength: 200, placeholder: 'Optional: why (they see this)', value: why.slice(0, 200) });
+  const ban = el('button', { className: 'btn red', textContent: 'Ban' });
+  ban.onclick = async () => {
+    ban.disabled = true;
+    if ((await attempt(() => Store.appBan(u.id, reason.value.trim()))) === null) { ban.disabled = false; return; }
+    w.close(); toast(`${u.name} is banned from Fluentdat.`);
+  };
+  const w = modal({ title: `Ban ${u.name} from Fluentdat`, sub: `@${u.login || u.name} won’t be able to post, react, message, call, join or change anything, anywhere on Fluentdat, and sees only that they’re banned (and why), until you /unban them.`,
+    body: [el('div', { className: 'field' }, el('label', {}, 'Reason'), reason)], actions: [el('button', { className: 'btn', textContent: 'Cancel', onclick: () => w.close() }), ban] });
+}
+// who's banned from Fluentdat (/bans, and Invites & Reports), each with Unban
+function appBansDialog() {
+  const list = el('div', { className: 'sx-list' });
+  const m = modal({ title: 'Banned from Fluentdat', sub: 'Only the people who run Fluentdat see this.', body: [list], actions: [el('button', { className: 'btn primary', onclick: () => m.close() }, 'Done')] });
+  fillAppBans(list);
+}
+async function fillAppBans(list) {
+  list.replaceChildren(el('div', { className: 'it muted' }, 'Loading…'));
+  let bans; try { bans = await Store.appBans(); } catch (e) { return list.replaceChildren(el('div', { className: 'it' }, String((e && e.message) || e))); }
+  list.replaceChildren(...(bans.length ? bans.map((b) => el('div', { className: 'it' }, avatarEl(face(b), { size: 32 }),
+    el('div', { className: 'who2' }, el('div', { className: 'n' }, `${b.name} (@${b.login})`), el('div', { className: 'h' }, `${b.reason ? '“' + b.reason + '” · ' : ''}banned ${dateLong(b.ts)}${b.by ? ' by @' + b.by : ''}`)),
+    el('button', { className: 'btn small', onclick: async () => { if ((await attempt(() => Store.appUnban(b.id))) !== null) { toast(`${b.name} can use Fluentdat again.`); fillAppBans(list); } } }, 'Unban')))
+    : [el('div', { className: 'it muted' }, 'Nobody is banned.')]));
 }
 function botReplies(text) { const t = text.toLowerCase(); if (t === '!ping') return setTimeout(() => botSay('pong 🏓'), 250); if (t === '!help') return setTimeout(() => botSay('I auto-reply to `!ping`. Slash commands like `/roll` work too.'), 250); if (/\b(hi|hello|hey)\b/.test(t) && Math.random() < 0.34) return setTimeout(() => botSay(`👋 Hey ${me.name}!`), 400); }
 function dmBot(text) { const id = dmId; setTimeout(() => { if (dmId === id || true) Store.sendDM(id, { user: { name: 'Flubot', color: '#5b7fd6', bot: true }, text: /\?$/.test(text) ? 'Good question — once accounts are in, you can ask real teammates here too.' : 'Got it 👍' }); }, 500); }
@@ -4739,8 +4857,11 @@ input.addEventListener('input', () => { input.style.height = 'auto'; input.style
 input.addEventListener('keydown', (e) => {
   if (mentionHits.length && !$('#mention-pop').hidden) {         // (picking someone from the @ list, or an emoji from the : one)
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); mentionSel = (mentionSel + (e.key === 'ArrowDown' ? 1 : -1) + mentionHits.length) % mentionHits.length; return markHit(); }
-    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mentionSel); }
-    if (e.key === 'Escape') { e.preventDefault(); return closeMentions(); }
+    // (a whole command that takes nothing more, like /bans or /flip: Enter runs it)
+    const h = mentionHits[mentionSel], whole = e.key === 'Enter' && hitKind === 'cmd' && h && !h.cmd.includes(' ') && input.value.trim().toLowerCase() === h.cmd;
+    if ((e.key === 'Enter' || e.key === 'Tab') && !whole) { e.preventDefault(); return pickMention(mentionSel); }
+    if (whole) closeMentions();
+    else if (e.key === 'Escape') { e.preventDefault(); return closeMentions(); }
   }
   if ((e.metaKey || e.ctrlKey) && !e.altKey) {
     const k = e.key.toLowerCase();
@@ -5842,13 +5963,16 @@ function adminPane() {
       : [el('div', { className: 'it muted' }, 'Nothing has been reported.')]));
   }
   loadLinks(); loadReports();
+  const bans = el('div', { className: 'sx-list' });
+  if (Store.canStaff()) fillAppBans(bans);
   return [el('h2', {}, 'Invites & Reports'), el('p', { className: 'sub' }, 'Only the people who run Fluentdat see this page. A one-time link makes one account (a username and a password, no email), then stops working.'),
     el('h3', {}, 'Make a one-time link'),
     row2('For', 'A note for you, so you know whose link it is.', note),
     row2('Expires after', 'If nobody uses it by then, it stops working.', days),
     el('div', { className: 'row', style: 'justify-content:flex-start' }, make), out,
     el('h3', {}, 'Links you’ve made'), links,
-    el('h3', {}, 'Reports'), el('p', { className: 'hint' }, 'What people reported, and who reported it.'), reports];
+    el('h3', {}, 'Reports'), el('p', { className: 'hint' }, 'What people reported, and who reported it.'), reports,
+    ...(Store.canStaff() ? [el('h3', {}, 'Banned from Fluentdat'), el('p', { className: 'hint' }, 'Type / in any server for your TrixWotel Commands: /ban @someone, /unban, /bans, /kick and /givebux.'), bans] : [])];
 }
 // the people you've blocked (they can't reach you) and ignored (tucked away, in this browser), with a way back
 function peopleYouHid(redraw) {
