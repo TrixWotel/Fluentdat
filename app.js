@@ -398,16 +398,6 @@ async function customizeBadges(after) {
       el('button', { className: 'btn', onclick: () => m.close() }, 'Cancel'), el('button', { className: 'btn primary', onclick: save }, 'Save')] });
   draw();
 }
-// Game Collection and Wishlist (Discord's rows): a few of the games, and how many more; click one for the Board
-function gameRows(x, onBoard) {
-  const ws = widgetsOf(x), out = [];
-  for (const [t, title, tab] of [['likes', 'Game Collection', 'board'], ['want', 'Wishlist', 'wishlist']]) {
-    const w = ws.find((v) => v && v.t === t && Array.isArray(v.g) && v.g.length); if (!w) continue;
-    out.push(el('button', { className: 'p-gc', title: tab === 'board' ? 'See the Board' : 'See the Wishlist', onclick: (e) => { e.stopPropagation(); onBoard(tab); } }, el('b', {}, title),
-      el('span', { className: 'p-gc-ic' }, ...w.g.slice(0, 3).map((g) => gameTile(g)), w.g.length > 3 ? el('span', { className: 'p-gc-n' }, '+' + (w.g.length - 3)) : null)));
-  }
-  return out;
-}
 
 // other people's profiles are theirs to fill in, so only colours and pictures of the expected shape are drawn
 // (a stray web address would let a stranger see who looked at their profile)
@@ -2993,7 +2983,7 @@ function showProfile(user, anchor) {
       tool('more', 'More', (e) => openBeside(e.currentTarget, (r) => profileMenu(u, r.left, r.bottom + 4)))));
   }
   const nick = sv && u.id ? Store.nickIn(sv, u.id) : '';
-  const inner = el('div', { className: 'inner pc-inner' }, profileHead(u, { size: 74, onOpen: () => toFull(), self: mine, name: nameIn(u, sv),
+  const inner = el('div', { className: 'inner pc-inner' }, profileHead(u, { onOpen: () => toFull(), self: mine, name: nameIn(u, sv),
     note: nick ? u.name + ' · nickname in this server' : u.bot && u.via ? 'Run by @' + u.via + ' (Flubot speaks for whoever types the command)' : null }),
     ...profileParts(u, { onTab: (tab) => toFull(tab), closeFirst: () => closePop() }));
   const bio = inner.querySelector('.dmp-about');
@@ -3071,13 +3061,13 @@ async function unblockUser(u) { if ((await attempt(() => Store.unblock(u.id))) !
 // parts you chose (Customize → Elements → Profile cards) ----------
 // badges and tag; mutual friends and servers; member, boosting and friends since; about them; what they're playing;
 // their Game Collection and Wishlist; their connections; your note on them. onTab(tab) opens the full profile there.
-function profileParts(u, { full = false, onTab = () => {}, closeFirst = () => {} } = {}) {
+function profileParts(u, { full = false, only = null, onTab = () => {}, closeFirst = () => {} } = {}) {
   const live = Store.kind === 'supabase', self = isMe(u), xid = u.bot ? null : self ? myXid() : live && u.id ? u.id : null;
   const sec = (cls, ...kids) => el('section', { className: 'pc-sec ' + cls }, ...kids);
   const line = (ic, label, value) => el('div', { className: 'pc-line' }, icon(ic, 15), el('span', { className: 'pc-l' }, label), el('b', {}, value));
   const out = [], later = [];          // (parts filled in once their profile's extras are known)
   for (const id of ordered('profileCard')) {
-    if (!shown(id)) continue;
+    if (!shown(id) || (only && !only.includes(id))) continue;
     if (id === 'pBadges' && !u.bot) out.push(sec('pc-badges', badgeRow(u, { max: full ? 9 : 6 }), tagFor(u) ? el('span', { className: 'pc-tag' }, tagChipFor(u)) : null));
     else if (id === 'pMutual' && live && !self && !u.bot && u.id) {
       const ms = Store.mutualServerList(u.id), box = sec('pc-mutual');
@@ -3137,14 +3127,13 @@ function profileParts(u, { full = false, onTab = () => {}, closeFirst = () => {}
   }
   return out;
 }
-// the top of a profile card: their picture (with their status), their name, username and pronouns, and their bubble
+// the top of a profile card, as the DM profile has it: their picture (with their status) under the banner, and beside it
+// their name, username and pronouns, and their bubble
 function profileHead(u, { size = 72, onOpen = null, self = isMe(u), name = null, note = null } = {}) {
   const av = el(onOpen ? 'button' : 'div', { className: 'pc-av', title: onOpen ? 'View Full Profile' : '', ...(onOpen ? { onclick: onOpen } : {}) }, avatarEl(u, { size }));
   const nm = el(onOpen ? 'button' : 'div', { className: 'pc-name', ...(onOpen ? { onclick: onOpen, title: 'View Full Profile' } : {}) }, styledName(el('span', {}, name || u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null);
-  const head = el('div', { className: 'pc-id' }, av, el('div', { className: 'pc-names' }, nm, note ? el('div', { className: 'pc-pro' }, note) : null, u.login && !u.bot ? el('div', { className: 'pc-login' }, u.login) : null,
+  return el('div', { className: 'pc-id' }, av, el('div', { className: 'pc-names' }, nm, note ? el('div', { className: 'pc-pro' }, note) : null, u.login && !u.bot ? el('div', { className: 'pc-login' }, u.login) : null,
     u.pronouns ? el('div', { className: 'pc-pro' }, u.pronouns) : null, bubbleEl(u, { mine: self })));
-  head.style.setProperty('--pc-size', size + 'px');
-  return head;
 }
 // the profile beside a DM (as TrixWotel drew it): their banner, picture, name, username and pronouns, then the parts of
 // their profile, and View Full Profile and More (two buttons) at the bottom
@@ -3440,8 +3429,9 @@ function pickGames({ title = 'Add Games', max = 20, have = [] } = {}) {
   });
 }
 
-// your own account popout (click your avatar in the user panel), as on Discord: your card (your status bubble, badges
-// and games), then Edit Profile, your status, Badges and Quests, then Switch Accounts and Copy User ID
+// your own account popout (click your avatar in the user panel), as on Discord: your card (laid out as every profile card
+// is: your picture, name, status bubble, badges, About and games), then Edit Profile, your status, Badges and Quests, then
+// Switch Accounts and Copy User ID
 function showAccount(anchor) {
   closePop();
   const u = asMember(), live = Store.kind === 'supabase', st = me.status || 'online', ready = questsReady();
@@ -3460,15 +3450,11 @@ function showAccount(anchor) {
     row('users', 'Switch Accounts', chev(), (e) => { e.stopPropagation(); switchMenu(e.currentTarget); }),
     row('id', 'Copy User ID', null, () => { closePop(); copyText(String(live ? Store.myId() : me.id), 'User ID copied.'); }));
   const banner = el('div', { className: 'banner-c' }); setBanner(banner, me.banner, me.color);
-  const games = el('div', { className: 'p-gcs' });
+  const you = { ...u, login: live ? (Store.account() || {}).login || '' : '' };
   pop = el('div', { className: 'pop acct' }, banner,
-    el('div', { className: 'inner' }, el('div', { className: 'p-head' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: toFull }, avatarEl(u, { size: 74 })), bubbleEl(u, { mine: true })),
-      el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, styledName(el('span', {}, me.name), u), tagChipFor(u)),
-      el('div', { className: 'p-handle' }, el('span', { className: 'pr' }, [live ? (Store.account() || {}).login : '', me.pronouns].filter(Boolean).join(' • ') || (STATUSES.find((x) => x[0] === st) || [, 'Online'])[1]), badgeRow(u)),
-      me.about ? el('div', { className: 'ab p-bio' }, me.about) : null, games, card1, card2));
+    el('div', { className: 'inner pc-inner' }, profileHead(you, { onOpen: toFull, self: true }),
+      ...profileParts(you, { only: ['pBadges', 'pBio', 'pPlaying', 'pGames', 'pWish'], onTab: (tab) => { closePop(); fullProfile(u, tab); }, closeFirst: () => closePop() }), card1, card2));
   themeCard(pop, me.theme, me.color); withEffect(pop, me.effect); withFrame(pop, me.frame);
-  const fill = (x) => games.replaceChildren(...gameRows(x, (tab) => { closePop(); fullProfile(u, tab); }));
-  fill(Store.extrasNow(myXid())); Store.profileExtras(myXid()).then((x) => { if (games.isConnected) fill(x); }, () => {});
   document.body.append(pop); placePop(anchor);
 }
 // your status (Discord's): online, idle, Do Not Disturb or invisible, for a while or until you change it; and your bubble
@@ -5423,12 +5409,14 @@ function openProfileEditor() {
   bioIn.oninput = () => { d.about = bioIn.value; fit(); update(); };
   const xid = myXid(), now = () => Store.extrasNow(xid) || { connections: [], widgets: [], activity: [] };
   const saveX = async (patch) => { await attempt(() => Store.setProfileExtras(patch)); drawExtras(); };
-  const head = el('div', { className: 'pe-head' }), avBox = el('div', { className: 'pe-cav' }), badgesBox = el('div', { className: 'pe-badges', title: 'Customize your badges', onclick: () => customizeBadges(() => drawBadges()) });
+  const head = el('div', { className: 'pe-head' }), avBox = el('div', { className: 'pe-cav' }), bubbleBox = el('div', { className: 'pe-bub' });
+  const badgesBox = el('div', { className: 'pe-badges', title: 'Customize your badges', onclick: () => customizeBadges(() => drawBadges()) });
   const connBox = el('div', { className: 'pe-conns' });
-  const card = el('div', { className: 'pe-card' }, head, avBox,
-    el('div', { className: 'pe-cbody' }, nameView, nameIn,
-      el('div', { className: 'pe-handle' }, el('span', {}, (Store.account() || {}).login || (live ? '' : 'you')), el('span', { className: 'pe-dot' }, '•'), pronIn, tagSel),
-      badgesBox,
+  // (as every profile card is: your picture under the banner, with your name, username, pronouns and bubble beside it)
+  const card = el('div', { className: 'pe-card' }, head,
+    el('div', { className: 'pe-id' }, avBox, el('div', { className: 'pe-names' }, nameView, nameIn,
+      el('div', { className: 'pe-handle' }, el('span', {}, (Store.account() || {}).login || (live ? '' : 'you')), el('span', { className: 'pe-dot' }, '•'), pronIn, tagSel), bubbleBox)),
+    el('div', { className: 'pe-cbody' }, badgesBox,
       el('div', { className: 'pe-acts' }, el('span', { className: 'btn pe-fake' }, icon('message', 16), 'Message'),
         el('button', { className: 'btn fp-icon', title: 'Shop', onclick: () => toShop() }, icon('shop', 18)), el('span', { className: 'btn fp-icon pe-fake' }, icon('more', 18))),
       el('section', { className: 'pe-csec' }, el('h4', {}, 'Bio'), bioIn, count),
@@ -5467,7 +5455,7 @@ function openProfileEditor() {
     // (the card)
     const banner = el('div', { className: 'pe-banner' }); setBanner(banner, d.banner, d.color);
     head.replaceChildren(banner);
-    avBox.replaceChildren(avatarEl(u, { size: 92 }), bubbleEl(u, { mine: true }));
+    avBox.replaceChildren(avatarEl(u, { size: 92 })); bubbleBox.replaceChildren(...[bubbleEl(u, { mine: true })].filter(Boolean));
     nameView.replaceChildren(styledName(el('span', {}, d.name || 'You'), u), el('span', { className: 'pe-pen' }, icon('edit', 14)));
     count.textContent = `${d.about.length}/300`;
     for (const n of [...card.querySelectorAll(':scope > .pfx, :scope > .pframe')]) n.remove();
@@ -5501,11 +5489,12 @@ function openProfileEditor() {
   update(); drawExtras(); drawBadges(); setTimeout(fit, 0);
   Store.profileExtras(xid).then(() => { if (w.scrim.isConnected) { drawExtras(); drawBadges(); } }, () => {});
 }
-// a small profile card to try a look on (Discord's previews): banner, picture, name, a few words and a button
+// a small profile card to try a look on (Discord's previews), laid out as every profile card is: banner, picture with the
+// name beside it, a few words and a button
 function mockCard(u, { effect = u.effect, frame = u.frame } = {}) {
-  const c = el('div', { className: 'mock-card' }, el('div', { className: 'mock-b' }), el('div', { className: 'mock-av' }, avatarEl(u, { size: 64 })),
-    el('div', { className: 'mock-body' }, el('b', { className: 'mock-n' }, styledName(el('span', {}, u.name), u)), el('small', {}, u.login || 'you'),
-      el('p', {}, u.about || 'A few words about you go here.'), el('span', { className: 'mock-btn' }, 'Example Button')));
+  const c = el('div', { className: 'mock-card' }, el('div', { className: 'mock-b' }),
+    el('div', { className: 'mock-id' }, el('div', { className: 'mock-av' }, avatarEl(u, { size: 64 })), el('div', { className: 'mock-names' }, el('b', { className: 'mock-n' }, styledName(el('span', {}, u.name), u)), el('small', {}, u.login || 'you'))),
+    el('div', { className: 'mock-body' }, el('p', {}, u.about || 'A few words about you go here.'), el('span', { className: 'mock-btn' }, 'Example Button')));
   setBanner(c.firstChild, u.banner, u.color); themeCard(c, u.theme); withEffect(c, effect); withFrame(c, frame);
   return c;
 }
