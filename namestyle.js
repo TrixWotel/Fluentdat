@@ -16,6 +16,13 @@ export const FONTS = [
   ['type', 'Typewriter', ['special-elite', 'Special Elite'], 1],
   ['marker', 'Marker', ['permanent-marker', 'Permanent Marker'], 1],
   ['elegant', 'Elegant', ['playfair-display', 'Playfair Display'], 1.04],
+  ['lobster', 'Lobster', ['lobster', 'Lobster'], 1.05], ['bangers', 'Bangers', ['bangers', 'Bangers'], 1.08], ['righteous', 'Righteous', ['righteous', 'Righteous'], 1],
+  ['audiowide', 'Audiowide', ['audiowide', 'Audiowide'], 0.9], ['monoton', 'Monoton', ['monoton', 'Monoton'], 0.92], ['cinzel', 'Cinzel', ['cinzel', 'Cinzel'], 0.95],
+  ['caveat', 'Caveat', ['caveat', 'Caveat'], 1.22], ['satisfy', 'Satisfy', ['satisfy', 'Satisfy'], 1.15], ['shadows', 'Shadows', ['shadows-into-light', 'Shadows Into Light'], 1.15],
+  ['luckiest', 'Luckiest', ['luckiest-guy', 'Luckiest Guy'], 0.95], ['blackops', 'Black Ops', ['black-ops-one', 'Black Ops One'], 0.95], ['silkscreen', 'Silkscreen', ['silkscreen', 'Silkscreen'], 0.82],
+  ['terminal', 'Terminal', ['vt323', 'VT323'], 1.22], ['vibes', 'Great Vibes', ['great-vibes', 'Great Vibes'], 1.25], ['fatface', 'Fat Face', ['abril-fatface', 'Abril Fatface'], 1],
+  ['bebas', 'Bebas', ['bebas-neue', 'Bebas Neue'], 1.12], ['glitchy', 'Glitchy', ['rubik-glitch', 'Rubik Glitch'], 0.95], ['indie', 'Indie Flower', ['indie-flower', 'Indie Flower'], 1.1],
+  ['rampart', 'Rampart', ['rampart-one', 'Rampart One'], 1], ['cherry', 'Cherry Bomb', ['cherry-bomb-one', 'Cherry Bomb One'], 1],
 ];
 export const EFFECTS = [['solid', 'Solid'], ['gradient', 'Gradient'], ['neon', 'Neon'], ['toon', 'Toon'], ['pop', 'Pop'], ['gummy', 'Gummy'], ['prism', 'Prism'], ['glow', 'Glow']];
 export const NAME_COLORS = ['#ffffff', '#57f287', '#3498db', '#b845f5', '#e91e63', '#ed4245', '#f1c40f', '#ff8c42'];

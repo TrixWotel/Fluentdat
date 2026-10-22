@@ -12,6 +12,8 @@ const uuid = () => crypto.randomUUID();
 const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || ''));
 const byTime = (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at);
 const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompare(b.name);
+// (a boost counts while it's paid for; on an older setup.sql there's no paying, so always)
+const boostOn = (b) => !b.paid_until || Date.parse(b.paid_until) > Date.now();
 
 let structure7 = null;
 const tradeListeners = new Set();
@@ -157,7 +159,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 10;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 11;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -704,7 +706,7 @@ export const SupabaseStore = {
   members: (sv) => cache.members.filter((m) => m.server_id === sv).map((m) => {
     const rs = rolesOf(sv, m.user_id);
     return { ...toUser(cache.profiles[m.user_id]), id: m.user_id, role: m.role, me: m.user_id === myId(), roles: rs.map((r) => r.id), nick: m.nick || '',
-      booster: cache.boosts.some((b) => b.server_id === sv && b.user_id === m.user_id),
+      booster: cache.boosts.some((b) => b.server_id === sv && b.user_id === m.user_id && boostOn(b)),
       roleColor: (rs.find((r) => r.color) || {}).color || '', group: rs.find((r) => r.hoist) ? toRole(rs.find((r) => r.hoist)) : null,
       roleIcon: rs.find((r) => r.icon) ? toRole(rs.find((r) => r.icon)) : null };
   }),
@@ -1037,14 +1039,33 @@ export const SupabaseStore = {
     }
     return out;
   },
-  // ---- boosts (free here): who boosts a server, its level, and boosting it yourself ----
-  boosts: (sv) => cache.boosts.filter((b) => b.server_id === sv).map((b) => b.user_id),
+  // ---- boosts (25 Datbux a day, paid ahead; free on an older setup.sql): who boosts a server, its level, and yours ----
+  canPaidBoosts: () => (cache.version || 0) >= 11,
+  canPlates: () => (cache.version || 0) >= 11,                 // (nameplates from the Shop, and everything in it for Datbux)
+  boosts: (sv) => cache.boosts.filter((b) => b.server_id === sv && boostOn(b)).map((b) => b.user_id),
   boostLevel(sv) { const n = SupabaseStore.boosts(sv).length; return n >= 14 ? 3 : n >= 7 ? 2 : n >= 2 ? 1 : 0; },
-  async boost(sv, on) {
-    if (on) must(await sb.from('server_boosts').insert({ server_id: sv, user_id: myId() }));
-    else must(await sb.from('server_boosts').delete().eq('server_id', sv).eq('user_id', myId()));
+  // yours: { since, paidUntil, auto, on } (on: paid for now), or null
+  myBoost(sv) {
+    const b = cache.boosts.find((x) => x.server_id === sv && x.user_id === myId());
+    return b ? { since: Date.parse(b.created_at) || 0, paidUntil: b.paid_until ? Date.parse(b.paid_until) : 0, auto: b.auto !== false, on: boostOn(b) } : null;
+  },
+  async boostFor(sv, days = 1) {
+    if (SupabaseStore.canPaidBoosts()) must(await sb.rpc('boost_server', { p_server: sv, p_days: days }));
+    else must(await sb.from('server_boosts').insert({ server_id: sv, user_id: myId() }));
     await loadAll();
   },
+  async stopBoost(sv) { must(await sb.from('server_boosts').delete().eq('server_id', sv).eq('user_id', myId())); await loadAll(); },
+  async setBoostAuto(sv, auto) { must(await sb.rpc('set_boost_auto', { p_server: sv, p_auto: !!auto })); await loadAll(); },
+  // another day for your boosts that have less than a day left (while your Datbux last): how many
+  async renewBoosts() {
+    if (!SupabaseStore.canPaidBoosts() || !cache.boosts.some((b) => b.user_id === myId() && boostOn(b) && b.auto !== false && Date.parse(b.paid_until) - Date.now() < 864e5)) return 0;
+    const n = Number(must(await sb.rpc('renew_boosts'))) || 0;
+    if (n) await loadAll();
+    return n;
+  },
+  async boost(sv, on) { return on ? SupabaseStore.boostFor(sv, 1) : SupabaseStore.stopBoost(sv); },
+  // a Quest's reward, once you've finished the Quest: what it was
+  async claimQuestReward(quest) { if (!SupabaseStore.canPaidBoosts()) return null; const r = must(await sb.rpc('claim_quest_reward', { p_quest: quest })); await loadAll(); return r; },
   // ---- your name in a server, and whether its people can start DMs with you ----
   nickIn: (sv, uid) => (cache.members.find((m) => m.server_id === sv && m.user_id === uid) || {}).nick || '',
   async setNick(sv, uid, nick) { must(await sb.rpc('set_nick', { p_server: sv, p_user: uid, p_nick: String(nick || '') })); await loadAll(); },

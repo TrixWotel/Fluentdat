@@ -2253,3 +2253,93 @@ button.pc-name:hover { text-decoration: underline; }
 .crop-frame { position: absolute; pointer-events: none; border-radius: 8px; box-shadow: 0 0 0 999px #000000a6, inset 0 0 0 2px #ffffffd9; }
 .crop-frame.round { border-radius: 50%; }
 .crop-row { display: flex; align-items: center; gap: 10px; color: var(--muted); padding: 0 6px; } .crop-zoom { flex: 1; }
+/* ---------- the Shop's newer decorations: how they move ---------- */
+.deco .d-twirl { transform-box: fill-box; transform-origin: center; animation: d-spin 9s linear infinite; }
+.deco .d-ear-r { transform-origin: 92px 40px; animation: d-ear 4s ease-in-out 1.3s infinite; }
+.deco .d-wag { transform-origin: 106px 110px; animation: d-wag 2.4s ease-in-out infinite; } @keyframes d-wag { 50% { transform: rotate(-10deg); } }
+.deco .d-flap-l { transform-origin: 20px 62px; animation: d-flap 2.6s ease-in-out infinite; } .deco .d-flap-r { transform-origin: 110px 62px; animation: d-flap-r 2.6s ease-in-out infinite; }
+@keyframes d-flap { 50% { transform: rotate(-9deg); } } @keyframes d-flap-r { 50% { transform: rotate(9deg); } }
+.deco .d-note { animation: d-note 3s ease-in-out infinite; } @keyframes d-note { 0% { transform: translateY(4px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateY(-10px); opacity: 0; } }
+.deco .d-flash { animation: d-flash 2.4s steps(1) infinite; } @keyframes d-flash { 0%, 100% { opacity: 1; } 8% { opacity: .2; } 12% { opacity: 1; } 16% { opacity: .4; } }
+.deco .d-hue { animation: d-hue 6s steps(6) infinite; } @keyframes d-hue { to { filter: hue-rotate(360deg); } }
+.deco .d-glint { animation: d-glint 3.4s ease-in-out infinite; } @keyframes d-glint { 0%, 70%, 100% { opacity: .15; } 80% { opacity: 1; } }
+/* ---------- the Shop's newer profile effects ---------- */
+@keyframes pfx-wander { to { translate: var(--drift) calc(var(--drift) * -1); } }
+@keyframes pfx-flap { to { transform: scaleX(.25); } }
+@keyframes pfx-comet { 0% { opacity: 0; translate: 0 0; } 4% { opacity: 1; } 18% { opacity: 0; translate: 620px 220px; } 100% { opacity: 0; translate: 620px 220px; } }
+@keyframes pfx-aurora { to { translate: 14% 12%; opacity: .2; } }
+@keyframes pfx-flash { 0%, 88%, 93%, 100% { opacity: 0; } 89%, 91% { opacity: .38; } 90%, 92% { opacity: .08; } }
+@keyframes pfx-grow { from { scale: .5; opacity: .7; } to { scale: 1.7; opacity: 0; } }
+@keyframes pfx-flip { 50% { scale: .12 1; } }
+@keyframes pfx-wobble { to { rotate: 12deg; } }
+@keyframes pfx-slide { to { translate: -50% 0; } }
+@keyframes pfx-burn { from { translate: 0 0; scale: 1; opacity: .9; } to { translate: var(--drift) -80px; scale: .2; opacity: 0; } }
+.pfx-rain > i { width: 1.5px; height: calc(15px * var(--s)); background: linear-gradient(transparent, #a5d8ffd0); rotate: 12deg; animation: pfx-fall calc(var(--dur) / 4) linear var(--delay) infinite; }
+.pfx-fireflies > i { top: var(--y); width: calc(4px * var(--s)); height: calc(4px * var(--s)); border-radius: 50%; background: #e9ff8a; box-shadow: 0 0 8px 3px #d4ff4d88;
+  animation: pfx-wander var(--dur) ease-in-out var(--delay) infinite alternate, pfx-tw calc(var(--dur) / 3) ease-in-out var(--delay) infinite; }
+.pfx-leaves > i { width: calc(13px * var(--s)); height: calc(8px * var(--s)); border-radius: 0 80% 0 80%; background: linear-gradient(135deg, #ffb347, #e8590c);
+  animation: pfx-fall var(--dur) linear var(--delay) infinite, pfx-twirl calc(var(--dur) / 2) linear var(--delay) infinite; }
+.pfx-butterflies > i { width: calc(16px * var(--s)); height: calc(11px * var(--s)); animation: pfx-rise calc(var(--dur) * 1.2) ease-in-out var(--delay) infinite, pfx-wobble 1.6s ease-in-out infinite alternate; }
+.pfx-butterflies > i::before, .pfx-butterflies > i::after { content: ''; position: absolute; top: 0; width: 50%; height: 100%; background: var(--c); border-radius: 60% 60% 40% 40%; animation: pfx-flap .28s ease-in-out infinite alternate; }
+.pfx-butterflies > i::before { left: 0; transform-origin: right; } .pfx-butterflies > i::after { right: 0; transform-origin: left; }
+.pfx-music > i { font-family: Arial, sans-serif; font-size: calc(17px * var(--s)); line-height: 1; color: var(--c); text-shadow: 0 0 6px #0007; animation: pfx-rise var(--dur) ease-in var(--delay) infinite, pfx-wobble 2.2s ease-in-out infinite alternate; }
+.pfx-music > i::before { content: '\266A'; } .pfx-music > i:nth-child(2n)::before { content: '\266B'; }
+.pfx-comets > i { top: var(--y); left: -30%; width: calc(64px * var(--s)); height: 2px; border-radius: 2px; background: linear-gradient(90deg, transparent, #fff); rotate: 20deg; opacity: 0; animation: pfx-comet calc(var(--dur) * .9) ease-in var(--delay) infinite; }
+.pfx-code > i { font: 700 calc(12px * var(--s)) / 1 ui-monospace, Menlo, monospace; color: #39ff6a; text-shadow: 0 0 6px #39ff6a; animation: pfx-fall calc(var(--dur) / 1.6) linear var(--delay) infinite; }
+.pfx-code > i::before { content: '1'; } .pfx-code > i:nth-child(3n)::before { content: '0'; } .pfx-code > i:nth-child(7n)::before { content: '\03BB'; }
+.pfx-balloons > i { width: calc(16px * var(--s)); height: calc(20px * var(--s)); border-radius: 50% 50% 46% 46%; background: radial-gradient(circle at 35% 30%, #ffffff90 0 12%, transparent 30%), var(--c);
+  animation: pfx-rise calc(var(--dur) * 1.3) ease-in var(--delay) infinite, pfx-wobble 2.6s ease-in-out infinite alternate; }
+.pfx-balloons > i::after { content: ''; position: absolute; left: 50%; top: 100%; width: 1px; height: 14px; background: #ffffffa0; }
+.pfx-aurora > i { top: calc(var(--y) * .45); left: -20%; width: 140%; height: 42%; background: linear-gradient(90deg, transparent, var(--c), transparent); filter: blur(18px); opacity: .55;
+  animation: pfx-aurora var(--dur) ease-in-out var(--delay) infinite alternate; }
+.pfx-lightning > i { top: 0; left: 0; width: 100%; height: 100%; background: #fff; opacity: 0; animation: pfx-flash calc(var(--dur) * .9) linear var(--delay) infinite; }
+.pfx-galaxy > i { top: var(--y); width: calc(2.6px * var(--s)); height: calc(2.6px * var(--s)); border-radius: 50%; background: var(--c); box-shadow: 0 0 5px var(--c); animation: pfx-tw calc(var(--dur) / 2) ease-in-out var(--delay) infinite; }
+.pfx-smoke > i { width: calc(42px * var(--s)); height: calc(42px * var(--s)); border-radius: 50%; background: radial-gradient(circle, #ffffff40, transparent 70%); filter: blur(4px);
+  animation: pfx-rise calc(var(--dur) * 1.4) ease-out var(--delay) infinite, pfx-grow calc(var(--dur) * 1.4) ease-out var(--delay) infinite; }
+.pfx-coins > i { width: calc(12px * var(--s)); height: calc(12px * var(--s)); border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff3bf, #fcc419 45%, #e67700); box-shadow: inset 0 0 0 1.5px #f59f00;
+  animation: pfx-fall var(--dur) linear var(--delay) infinite, pfx-flip .9s linear var(--delay) infinite; }
+.pfx-ghosts > i { width: calc(18px * var(--s)); height: calc(22px * var(--s)); border-radius: 50% 50% 30% 30%;
+  background: radial-gradient(circle at 35% 40%, #222 0 9%, transparent 11%), radial-gradient(circle at 65% 40%, #222 0 9%, transparent 11%), radial-gradient(ellipse at 50% 64%, #222 0 7%, transparent 9%), #ffffffd9;
+  animation: pfx-rise calc(var(--dur) * 1.2) ease-in-out var(--delay) infinite, pfx-wobble 2s ease-in-out infinite alternate; }
+.pfx-clovers > i { width: calc(14px * var(--s)); height: calc(14px * var(--s));
+  background: radial-gradient(circle at 50% 26%, #40c057 0 23%, transparent 25%), radial-gradient(circle at 26% 50%, #40c057 0 23%, transparent 25%), radial-gradient(circle at 74% 50%, #40c057 0 23%, transparent 25%), radial-gradient(circle at 50% 74%, #2f9e44 0 23%, transparent 25%);
+  animation: pfx-fall var(--dur) linear var(--delay) infinite, pfx-twirl calc(var(--dur) / 2) linear var(--delay) infinite; }
+.pfx-diamonds > i { top: var(--y); width: calc(12px * var(--s)); height: calc(16px * var(--s)); clip-path: polygon(50% 0, 100% 35%, 50% 100%, 0 35%); background: linear-gradient(135deg, #e7f5ff, #74c0fc 50%, #4dabf7);
+  filter: drop-shadow(0 0 4px #a5d8ff); animation: pfx-tw calc(var(--dur) / 2) ease-in-out var(--delay) infinite; }
+.pfx-waves > i { top: auto; bottom: -2px; left: 0; width: 200%; height: 24%; opacity: .55; animation: pfx-slide calc(var(--dur) * .9) linear var(--delay) infinite;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='30'%3E%3Cpath d='M0 15Q30 0 60 15T120 15V30H0Z' fill='%234dabf7'/%3E%3C/svg%3E") repeat-x 0 100% / 120px 100%; }
+.pfx-waves > i:nth-child(2) { height: 18%; opacity: .4; animation-duration: calc(var(--dur) * 1.4); animation-direction: reverse; }
+.pfx-waves > i:nth-child(3) { height: 12%; opacity: .65; animation-duration: calc(var(--dur) * .6); }
+.pfx-flames > i { top: auto; bottom: -12px; width: calc(22px * var(--s)); height: calc(30px * var(--s)); border-radius: 50% 50% 35% 35%; background: radial-gradient(circle at 50% 70%, #ffd43b, #ff6b00 55%, transparent 72%); filter: blur(2px);
+  animation: pfx-burn calc(var(--dur) / 4) ease-out var(--delay) infinite; }
+.pfx-bokeh > i { top: var(--y); width: calc(28px * var(--s)); height: calc(28px * var(--s)); border-radius: 50%; background: radial-gradient(circle, var(--c), transparent 70%); opacity: 0; mix-blend-mode: screen;
+  animation: pfx-tw var(--dur) ease-in-out var(--delay) infinite; }
+.pfx-paws > i { top: var(--y); width: calc(16px * var(--s)); height: calc(16px * var(--s)); rotate: calc(var(--spin) / 8); opacity: 0;
+  background: radial-gradient(ellipse at 50% 72%, #ffffffd0 0 26%, transparent 28%), radial-gradient(circle at 20% 38%, #ffffffd0 0 11%, transparent 13%), radial-gradient(circle at 40% 18%, #ffffffd0 0 11%, transparent 13%),
+    radial-gradient(circle at 62% 18%, #ffffffd0 0 11%, transparent 13%), radial-gradient(circle at 82% 38%, #ffffffd0 0 11%, transparent 13%);
+  animation: pfx-tw var(--dur) ease-in-out var(--delay) infinite; }
+/* ---------- the Shop's newer frames: how they move ---------- */
+.pframe .pf-buzz { animation: pf-buzz 3.2s steps(1) infinite; } @keyframes pf-buzz { 0%, 100% { opacity: 1; } 47% { opacity: .35; } 49% { opacity: 1; } 51% { opacity: .5; } 53% { opacity: 1; } }
+.pframe .pf-steps { animation: d-hue 5s steps(5) infinite; }
+.pframe .pf-spin { animation: d-spin 14s linear infinite; }
+.pframe .pf-bob { transform-box: fill-box; animation: pf-bob 2.6s ease-in-out infinite; } @keyframes pf-bob { 50% { transform: translateY(-3px); } }
+.pframe .pf-flap { transform-box: fill-box; transform-origin: center; animation: pf-flap .5s ease-in-out infinite alternate; } @keyframes pf-flap { to { transform: scaleY(.55); } }
+.pframe .pf-sway { transform-box: fill-box; transform-origin: 50% 0; animation: pf-sway 3s ease-in-out infinite; } @keyframes pf-sway { 50% { transform: rotate(6deg); } }
+/* Round I: everything in the Shop for Datbux (and a Quest's reward too), nameplates from the Shop, boosts by the day */
+.shp-cost { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.link-btn.shp-quest { display: inline-flex; align-items: center; gap: 3px; font-size: .74rem; color: var(--muted); } .link-btn.shp-quest:hover { color: var(--text); }
+.dbx-plate { width: 44px; height: 22px; border-radius: 6px; background-size: cover; box-shadow: inset 0 0 0 1px #ffffff1f; }
+.sf-shop { margin-bottom: 16px; } .sf-left h5 { margin: 0 0 8px; color: var(--bright); }
+.sf-plates { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 236px; overflow-y: auto; padding: 2px; }
+.sf-np { position: relative; height: 40px; border: 0; border-radius: 8px; cursor: pointer; background-size: cover; box-shadow: inset 0 0 0 1px #ffffff1f; }
+.sf-np:hover { box-shadow: inset 0 0 0 2px #ffffff66; } .sf-np.on { box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px var(--accent); }
+.sf-np .lk-price { bottom: 3px; right: 3px; }
+.bst-you { display: grid; gap: 10px; margin-top: 18px; padding: 14px 16px; border-radius: 12px; background: var(--rail); box-shadow: inset 0 0 0 1px var(--edge-soft); }
+.bst-you.on { box-shadow: inset 0 0 0 1px #ff73fa66; background: linear-gradient(135deg, #ff73fa14, #5865f214), var(--rail); }
+.bst-you h4 { margin: 0; color: var(--bright); } .bst-you p { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.5; }
+.bst-you .row2 { padding: 4px 0; border-bottom: 0; }
+.bst-pay { display: flex; flex-wrap: wrap; gap: 8px; } .bst-pay .btn { display: inline-flex; align-items: center; gap: 6px; }
+.bst-bal { display: inline-flex; align-items: center; gap: 4px; color: #e0a31f; font-weight: 700; }
+.dbx-boosts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.dbx-boost { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; background: var(--side); box-shadow: inset 0 0 0 1px var(--edge-soft); }
+.dbx-boost b { display: block; color: var(--bright); } .dbx-boost small { color: var(--muted); }

@@ -2,6 +2,7 @@
 // about servers or messages; app.js puts them together. (Windows replace the browser's prompt() and confirm():
 // apps built on Electron, like the Fluent browser, don't have prompt(), so anything that used it did nothing there.)
 import { animOn } from './anim.js';
+import { plateBg } from './plates.js';
 
 export const $ = (s) => document.querySelector(s);
 export const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k)); return n; };
@@ -252,6 +253,7 @@ export function paint(v) {
   if (/^#[0-9a-f]{6}$/i.test(v)) return v;
   if (/^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(v)) { const [a, b] = v.split(','); return `linear-gradient(135deg, ${a}, ${b})`; }
   if (PICTURE.test(v)) return `center / cover no-repeat url("${v}")`;
+  if (/^np:[a-z0-9-]{1,24}$/.test(v)) return plateBg(v.slice(3));          // (a nameplate from the Shop)
   return '';
 }
 

@@ -318,13 +318,16 @@ create table if not exists public.pins (
   pinned_at timestamptz not null default now(),
   primary key (place, message_id)
 );
--- who boosts a server (free here): 2 boosts make level 1, 7 level 2, 14 level 3, and each level holds more emoji and stickers
+-- who boosts a server (25 Datbux a day, paid ahead: a boost counts while it's paid for): 2 boosts make level 1, 7 level
+-- 2, 14 level 3, and each level holds more emoji and stickers
 create table if not exists public.server_boosts (
   server_id uuid not null references public.servers (id) on delete cascade,
   user_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
   created_at timestamptz not null default now(),
   primary key (server_id, user_id)
 );
+alter table public.server_boosts add column if not exists paid_until timestamptz not null default (now() + interval '1 day');
+alter table public.server_boosts add column if not exists auto boolean not null default true;      -- (another day is paid as the last one runs out)
 -- who's interested in an event
 create table if not exists public.event_interest (
   event_id uuid not null references public.server_events (id) on delete cascade,
@@ -354,7 +357,7 @@ create table if not exists public.datbux_log (
   id bigserial primary key,
   user_id uuid not null references public.profiles (id) on delete cascade,
   amount bigint not null,
-  kind text not null check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade')),
+  kind text not null check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade', 'boost')),
   note text not null default '' check (char_length(note) <= 160),
   other uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now()
@@ -369,18 +372,32 @@ create table if not exists public.task_claims (
 );
 -- what the Shop sells for Datbux, and the price (set here, so nobody can pay less); what isn't listed is free
 create table if not exists public.shop_items (
-  kind text not null check (kind in ('deco', 'font', 'effect', 'frame')),
+  kind text not null check (kind in ('deco', 'font', 'effect', 'frame', 'plate')),
   item text not null check (item ~ '^[a-z0-9-]{1,24}$'),
   price int not null check (price between 0 and 1000000),
   primary key (kind, item)
 );
 create table if not exists public.owned_items (
   user_id uuid not null references public.profiles (id) on delete cascade,
-  kind text not null check (kind in ('deco', 'font', 'effect', 'frame')),
+  kind text not null check (kind in ('deco', 'font', 'effect', 'frame', 'plate')),
   item text not null check (item ~ '^[a-z0-9-]{1,24}$'),
-  how text not null default 'buy' check (how in ('buy', 'trade', 'grant')),
+  how text not null default 'buy' check (how in ('buy', 'trade', 'grant', 'quest')),
   got_at timestamptz not null default now(),
   primary key (user_id, kind, item)
+);
+alter table public.datbux_log drop constraint if exists datbux_log_kind_check;
+alter table public.datbux_log add constraint datbux_log_kind_check check (kind in ('welcome', 'task', 'buy', 'send', 'receive', 'trade', 'boost'));
+alter table public.shop_items drop constraint if exists shop_items_kind_check;
+alter table public.shop_items add constraint shop_items_kind_check check (kind in ('deco', 'font', 'effect', 'frame', 'plate'));
+alter table public.owned_items drop constraint if exists owned_items_kind_check;
+alter table public.owned_items add constraint owned_items_kind_check check (kind in ('deco', 'font', 'effect', 'frame', 'plate'));
+alter table public.owned_items drop constraint if exists owned_items_how_check;
+alter table public.owned_items add constraint owned_items_how_check check (how in ('buy', 'trade', 'grant', 'quest'));
+-- what each Quest gives you once it's done (the Quests themselves are counted in your browser)
+create table if not exists public.quest_rewards (
+  quest text primary key check (quest ~ '^[a-z0-9-]{1,24}$'),
+  kind text not null check (kind in ('deco', 'font', 'effect', 'frame', 'plate')),
+  item text not null check (item ~ '^[a-z0-9-]{1,24}$')
 );
 -- a trade between two people: Datbux and things from the Shop each way; the other person accepts or declines it
 create table if not exists public.trades (
@@ -485,12 +502,12 @@ do $$ begin
     and char_length(description) <= 300 and char_length(category) <= 30);
 exception when duplicate_object then null; end $$;
 -- colours are colours and pictures are pictures (a web address here would let its owner see who looked at a profile)
--- (a banner or nameplate: a picture, one of the ten gradients, or any colour or two)
+-- (a banner or nameplate: a picture, one of the ten gradients, or any colour or two; a nameplate can be one from the Shop)
 alter table public.profiles drop constraint if exists profiles_shapes;
 alter table public.profiles add constraint profiles_shapes check (color ~ '^#[0-9a-fA-F]{6}$'
   and (avatar = '' or avatar ~ '^data:image/(png|jpeg|webp|gif);base64,' or avatar ~ '^https://(cdn\.discordapp\.com|avatars\.githubusercontent\.com)/')
   and (banner = '' or banner ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or banner ~ '^data:image/(png|jpeg|webp|gif);base64,')
-  and (plate = '' or plate ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or plate ~ '^data:image/(png|jpeg|webp|gif);base64,'));
+  and (plate = '' or plate ~ '^(g:[0-9]|#[0-9a-fA-F]{6}(,#[0-9a-fA-F]{6})?)$' or plate ~ '^np:[a-z0-9-]{1,24}$' or plate ~ '^data:image/(png|jpeg|webp|gif);base64,'));
 alter table public.profiles drop constraint if exists profiles_style;
 alter table public.profiles add constraint profiles_style check ((theme1 = '' or theme1 ~ '^#[0-9a-fA-F]{6}$') and (theme2 = '' or theme2 ~ '^#[0-9a-fA-F]{6}$')
   and name_font ~ '^[a-z0-9]{0,16}$' and name_effect ~ '^[a-z]{0,16}$'
@@ -807,8 +824,7 @@ create policy "unpin" on public.pins for delete to authenticated using (pin_ok(p
 alter table public.server_boosts enable row level security;
 drop policy if exists "members see the boosts" on public.server_boosts;
 create policy "members see the boosts" on public.server_boosts for select to authenticated using (is_member(server_id));
-drop policy if exists "boost" on public.server_boosts;
-create policy "boost" on public.server_boosts for insert to authenticated with check (user_id = auth.uid() and is_member(server_id));
+drop policy if exists "boost" on public.server_boosts;                -- (boosting costs Datbux: boost_server)
 drop policy if exists "stop boosting" on public.server_boosts;
 create policy "stop boosting" on public.server_boosts for delete to authenticated using (user_id = auth.uid());
 -- Datbux: you see your own wallet, history, tasks and trades, what the Shop costs, and what people you know have; only the
@@ -828,6 +844,9 @@ create policy "the Shop's prices" on public.shop_items for select to authenticat
 alter table public.owned_items enable row level security;
 drop policy if exists "what people you know have" on public.owned_items;
 create policy "what people you know have" on public.owned_items for select to authenticated using (knows(user_id));
+alter table public.quest_rewards enable row level security;
+drop policy if exists "what Quests give" on public.quest_rewards;
+create policy "what Quests give" on public.quest_rewards for select to authenticated using (true);
 alter table public.trades enable row level security;
 drop policy if exists "your trades" on public.trades;
 create policy "your trades" on public.trades for select to authenticated using (from_user = auth.uid() or to_user = auth.uid());
@@ -1468,7 +1487,7 @@ create trigger thread_wakes after insert on public.messages for each row execute
 -- a server's boost level: 2 boosts make level 1, 7 level 2, 14 level 3 (as on Discord)
 create or replace function public.boost_level(p_server uuid) returns int
 language sql stable security definer set search_path = public as $$
-  select case when n >= 14 then 3 when n >= 7 then 2 when n >= 2 then 1 else 0 end from (select count(*) n from server_boosts where server_id = p_server) x;
+  select case when n >= 14 then 3 when n >= 7 then 2 when n >= 2 then 1 else 0 end from (select count(*) n from server_boosts where server_id = p_server and paid_until > now()) x;
 $$;
 -- start a thread in a text channel (from one of its messages, or on its own): whoever may post there may
 create or replace function public.create_thread(p_parent uuid, p_message uuid, p_name text) returns uuid
@@ -1552,8 +1571,8 @@ begin
   if not found then raise exception 'You aren''t in that server.'; end if;
 end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
--- that follow your account, and a server's rules)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 10 $$;
+-- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 11 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -1666,7 +1685,7 @@ end $$;
 create or replace function public.trade_items_ok(p jsonb) returns boolean
 language sql immutable set search_path = public as $$
   select coalesce(jsonb_typeof(p) = 'array' and jsonb_array_length(p) <= 10
-    and not exists (select 1 from jsonb_array_elements(p) x where jsonb_typeof(x) <> 'object' or coalesce(x->>'k', '') not in ('deco', 'font', 'effect', 'frame')
+    and not exists (select 1 from jsonb_array_elements(p) x where jsonb_typeof(x) <> 'object' or coalesce(x->>'k', '') not in ('deco', 'font', 'effect', 'frame', 'plate')
       or coalesce(x->>'i', '') !~ '^[a-z0-9-]{1,24}$' or exists (select 1 from jsonb_object_keys(x) k where k not in ('k', 'i')))
     and (select count(*) = count(distinct (x->>'k') || ':' || (x->>'i')) from jsonb_array_elements(p) x), false);
 $$;
@@ -1714,7 +1733,8 @@ begin
   if p_kind = 'deco' then update profiles set decoration = '' where id = p_from and decoration = p_item;
   elsif p_kind = 'font' then update profiles set name_font = '' where id = p_from and name_font = p_item;
   elsif p_kind = 'effect' then update profiles set effect = '' where id = p_from and effect = p_item;
-  elsif p_kind = 'frame' then update profiles set frame = '' where id = p_from and frame = p_item; end if;
+  elsif p_kind = 'frame' then update profiles set frame = '' where id = p_from and frame = p_item;
+  elsif p_kind = 'plate' then update profiles set plate = '' where id = p_from and plate = 'np:' || p_item; end if;
 end $$;
 -- the other person's answer: accepting checks both sides still have it all, then swaps everything at once
 create or replace function public.answer_trade(p_trade uuid, p_accept boolean) returns text
@@ -1751,6 +1771,85 @@ begin
   update trades set status = 'cancelled', decided_at = now() where id = p_trade and from_user = auth.uid() and status = 'open';
   if not found then raise exception 'There''s no trade of yours waiting like that.'; end if;
 end $$;
+-- ===================== boosting, for Datbux =====================
+-- a boost costs 25 Datbux a day, paid ahead: a day, or up to 30 at once (and never more than 90 days ahead). A boost that
+-- ran out starts again from today.
+create or replace function public.boost_price() returns int language sql immutable as $$ select 25 $$;
+create or replace function public.boost_server(p_server uuid, p_days int default 1) returns timestamptz
+language plpgsql security definer set search_path = public as $$
+declare cost int; bal bigint; was timestamptz; until timestamptz;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  if p_server is null or not is_member(p_server) then raise exception 'Join the server to boost it.'; end if;
+  if p_days is null or p_days < 1 or p_days > 30 then raise exception 'Boost for 1 to 30 days at a time.'; end if;
+  select paid_until into was from server_boosts where server_id = p_server and user_id = auth.uid() for update;
+  until := greatest(coalesce(was, now()), now()) + make_interval(days => p_days);
+  if until > now() + interval '90 days' then raise exception 'You can pay up to 90 days ahead.'; end if;
+  cost := boost_price() * p_days;
+  perform wallet_open(auth.uid());
+  select balance into bal from wallets where user_id = auth.uid() for update;
+  if bal < cost then raise exception 'That costs % Datbux, and you have %.', cost, bal; end if;
+  update wallets set balance = balance - cost, spent = spent + cost, updated_at = now() where user_id = auth.uid();
+  insert into datbux_log (user_id, amount, kind, note) values (auth.uid(), -cost, 'boost', left(coalesce((select name from servers where id = p_server), ''), 160));
+  insert into server_boosts (server_id, user_id, created_at, paid_until, auto) values (p_server, auth.uid(), now(), until, true)
+    on conflict (server_id, user_id) do update set paid_until = until, auto = true,
+      created_at = case when server_boosts.paid_until > now() then server_boosts.created_at else now() end;
+  return until;
+end $$;
+-- keep paying for a boost, or let it run out (stopping one now is deleting it)
+create or replace function public.set_boost_auto(p_server uuid, p_auto boolean) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update server_boosts set auto = coalesce(p_auto, true) where server_id = p_server and user_id = auth.uid();
+  if not found then raise exception 'You aren''t boosting that server.'; end if;
+end $$;
+-- another day for each of someone's boosts that has less than a day left, while their Datbux last (one that ran out
+-- stays off until they boost again)
+create or replace function public.renew_boosts_for(p_user uuid) returns int
+language plpgsql security definer set search_path = public as $$
+declare b record; n int := 0; bal bigint; price int := boost_price();
+begin
+  if not exists (select 1 from server_boosts where user_id = p_user and auto and paid_until > now() and paid_until < now() + interval '1 day') then return 0; end if;
+  perform wallet_open(p_user);
+  for b in select server_id from server_boosts where user_id = p_user and auto and paid_until > now() and paid_until < now() + interval '1 day' order by paid_until loop
+    select balance into bal from wallets where user_id = p_user for update;
+    exit when bal < price;
+    update wallets set balance = balance - price, spent = spent + price, updated_at = now() where user_id = p_user;
+    insert into datbux_log (user_id, amount, kind, note) values (p_user, -price, 'boost', left(coalesce((select name from servers where id = b.server_id), ''), 160));
+    update server_boosts set paid_until = paid_until + interval '1 day' where server_id = b.server_id and user_id = p_user;
+    n := n + 1;
+  end loop;
+  return n;
+end $$;
+-- yours (Fluentdat asks while it's open)
+create or replace function public.renew_boosts() returns int
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  return renew_boosts_for(auth.uid());
+end $$;
+-- everyone's (every hour, where Supabase's pg_cron is turned on)
+create or replace function public.renew_all_boosts() returns int
+language plpgsql security definer set search_path = public as $$
+declare u uuid; n int := 0;
+begin
+  for u in select distinct user_id from server_boosts where auto and paid_until > now() and paid_until < now() + interval '1 day' loop
+    n := n + renew_boosts_for(u);
+  end loop;
+  return n;
+end $$;
+-- a Quest's reward, once you've finished the Quest (the ones you finished are on your profile)
+create or replace function public.claim_quest_reward(p_quest text) returns text
+language plpgsql security definer set search_path = public as $$
+declare r quest_rewards%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  select * into r from quest_rewards where quest = p_quest;
+  if not found then raise exception 'There''s no such Quest.'; end if;
+  if not exists (select 1 from profile_extras where id = auth.uid() and quests ? p_quest) then raise exception 'Finish that Quest first.'; end if;
+  insert into owned_items (user_id, kind, item, how) values (auth.uid(), r.kind, r.item, 'quest') on conflict do nothing;
+  return r.item;
+end $$;
 -- you can wear something from the Shop that's free, or that you have
 create or replace function public.shop_ok(p_kind text, p_item text, p_user uuid) returns boolean
 language sql stable security definer set search_path = public as $$
@@ -1764,6 +1863,12 @@ begin
   if new.name_font is distinct from old.name_font and not shop_ok('font', new.name_font, new.id) then raise exception 'Get that font in the Shop first.'; end if;
   if new.effect is distinct from old.effect and not shop_ok('effect', new.effect, new.id) then raise exception 'Get that effect in the Shop first.'; end if;
   if new.frame is distinct from old.frame and not shop_ok('frame', new.frame, new.id) then raise exception 'Get that frame in the Shop first.'; end if;
+  if new.plate is distinct from old.plate and new.plate like 'np:%' and not exists (select 1 from shop_items where kind = 'plate' and item = substr(new.plate, 4)) then
+    raise exception 'That isn''t a nameplate from the Shop.';
+  end if;
+  if new.plate is distinct from old.plate and not shop_ok('plate', case when new.plate like 'np:%' then substr(new.plate, 4) else '' end, new.id) then
+    raise exception 'Get that nameplate in the Shop first.';
+  end if;
   return new;
 end $$;
 drop trigger if exists guard_shop on public.profiles;
@@ -1809,7 +1914,7 @@ begin
     'threads', (select count(*) from channels where kind = 'thread' and created_by = p_user),
     'friends', (select count(*) from friends f where f.owner = p_user and exists (select 1 from friends g where g.owner = f.friend and g.friend = p_user)),
     'members', coalesce((select max(n) from (select count(*) n from servers s join server_members m on m.server_id = s.id where s.owner = p_user group by s.id) t), 0),
-    'boost_since', (select min(created_at) from server_boosts where user_id = p_user),
+    'boost_since', (select min(created_at) from server_boosts where user_id = p_user and paid_until > now()),
     'events', (select count(*) from server_events where created_by = p_user),
     'quests', coalesce(jsonb_array_length(x.quests), 0),
     'connections', coalesce(jsonb_array_length(x.connections), 0),
@@ -2214,6 +2319,10 @@ revoke all on function public.task_progress(), public.claim_task(text), public.b
 grant execute on function public.task_progress(), public.claim_task(text), public.buy_item(text, text), public.send_datbux(uuid, int, text),
   public.offer_trade(uuid, int, jsonb, int, jsonb, text), public.answer_trade(uuid, boolean), public.cancel_trade(uuid) to authenticated;
 revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid, uuid, text), public.verify_connection(uuid, jsonb) from public, anon, authenticated;
+-- (boosting and Quest rewards: yours to ask for; renewing everyone's is the database's own job)
+revoke all on function public.renew_boosts_for(uuid), public.renew_all_boosts() from public, anon, authenticated;
+revoke all on function public.boost_server(uuid, int), public.set_boost_auto(uuid, boolean), public.renew_boosts(), public.claim_quest_reward(text) from public, anon;
+grant execute on function public.boost_server(uuid, int), public.set_boost_auto(uuid, boolean), public.renew_boosts(), public.claim_quest_reward(text), public.boost_price() to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -2231,23 +2340,64 @@ revoke all on public.profiles, public.servers, public.server_members, public.cat
 grant select, insert, update, delete on public.user_settings to authenticated;
 revoke all on public.user_settings from anon;
 -- (Datbux: looked at only; changed only by its functions)
-grant select on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades to authenticated;
-revoke insert, update, delete, truncate on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades from authenticated;
-revoke all on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades from anon;
+grant select on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards to authenticated;
+revoke insert, update, delete, truncate on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards from authenticated;
+revoke all on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards from anon;
+-- (boosts: looked at by the server's people, started through boost_server, stopped by deleting your own)
+revoke insert, update on public.server_boosts from authenticated;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
 
--- the Shop's prices in Datbux: decorations and name fonts (a few free; a Quest's reward is free once you've done it)
+-- the Shop's prices in Datbux: everything in it (decorations, name fonts, effects, frames, nameplates); a Quest's reward is
+-- yours once you've done the Quest
 insert into public.shop_items (kind, item, price) values
-  ('deco', 'halo', 150), ('deco', 'flame', 300), ('deco', 'catears', 200), ('deco', 'leaves', 200), ('deco', 'gears', 250), ('deco', 'glitch', 300), ('deco', 'hearts', 250),
-  ('deco', 'sparkle', 0), ('deco', 'rainbow', 0), ('deco', 'neon', 0), ('deco', 'orbit', 0), ('deco', 'crown', 0),
+  ('deco', 'halo', 150), ('deco', 'flame', 300), ('deco', 'catears', 200), ('deco', 'leaves', 200), ('deco', 'gears', 250), ('deco', 'glitch', 300),
+  ('deco', 'hearts', 250), ('deco', 'sparkle', 200), ('deco', 'rainbow', 250), ('deco', 'neon', 250), ('deco', 'orbit', 250), ('deco', 'crown', 300),
+  ('deco', 'bubbles', 150), ('deco', 'starring', 200), ('deco', 'snowflakes', 200), ('deco', 'devil', 250), ('deco', 'angel', 300), ('deco', 'bunny', 200),
+  ('deco', 'headphones', 250), ('deco', 'flowers', 250), ('deco', 'bolts', 300), ('deco', 'notes', 200), ('deco', 'pixel', 150), ('deco', 'foxears', 200),
+  ('deco', 'clouds', 150), ('deco', 'aurora', 350), ('deco', 'sakura', 250), ('deco', 'witch', 300), ('deco', 'bow', 200), ('deco', 'shades', 250),
+  ('deco', 'moon', 300), ('deco', 'crystals', 350),
   ('font', 'tempo', 100), ('font', 'sakura', 100), ('font', 'jelly', 150), ('font', 'modern', 150), ('font', 'medieval', 200), ('font', 'pixel', 200),
-  ('font', 'vampyre', 250), ('font', 'chunky', 150), ('font', 'comic', 0), ('font', 'script', 200), ('font', 'type', 0), ('font', 'marker', 150), ('font', 'elegant', 250)
+  ('font', 'vampyre', 250), ('font', 'chunky', 150), ('font', 'comic', 80), ('font', 'script', 200), ('font', 'type', 80), ('font', 'marker', 150),
+  ('font', 'elegant', 250), ('font', 'lobster', 150), ('font', 'bangers', 150), ('font', 'righteous', 120), ('font', 'audiowide', 150), ('font', 'monoton', 250),
+  ('font', 'cinzel', 200), ('font', 'caveat', 120), ('font', 'satisfy', 150), ('font', 'shadows', 120), ('font', 'luckiest', 150), ('font', 'blackops', 200),
+  ('font', 'silkscreen', 150), ('font', 'terminal', 120), ('font', 'vibes', 250), ('font', 'fatface', 200), ('font', 'bebas', 120), ('font', 'glitchy', 250),
+  ('font', 'indie', 100), ('font', 'rampart', 200), ('font', 'cherry', 200),
+  ('effect', 'snow', 120), ('effect', 'sparkles', 150), ('effect', 'bubbles', 120), ('effect', 'petals', 150), ('effect', 'embers', 180), ('effect', 'pixels', 160),
+  ('effect', 'hearts', 200), ('effect', 'confetti', 200), ('effect', 'stars', 200), ('effect', 'rain', 120), ('effect', 'fireflies', 180), ('effect', 'leaves', 150),
+  ('effect', 'butterflies', 220), ('effect', 'music', 180), ('effect', 'comets', 250), ('effect', 'code', 200), ('effect', 'balloons', 180), ('effect', 'aurora', 300),
+  ('effect', 'lightning', 250), ('effect', 'galaxy', 220), ('effect', 'smoke', 150), ('effect', 'coins', 250), ('effect', 'ghosts', 200), ('effect', 'clovers', 150),
+  ('effect', 'diamonds', 300), ('effect', 'waves', 220), ('effect', 'flames', 250), ('effect', 'bokeh', 180), ('effect', 'paws', 150),
+  ('frame', 'moonlit', 250), ('frame', 'stardust', 250), ('frame', 'eyes', 200), ('frame', 'goo', 200), ('frame', 'candles', 300), ('frame', 'eclipse', 300),
+  ('frame', 'autumn', 250), ('frame', 'roses', 250), ('frame', 'wings', 300), ('frame', 'thorns', 200), ('frame', 'kitty', 250), ('frame', 'bunny', 250),
+  ('frame', 'ocean', 250), ('frame', 'blossom', 300), ('frame', 'neonsign', 300), ('frame', 'pixelhearts', 200), ('frame', 'planets', 300), ('frame', 'pines', 250),
+  ('frame', 'candy', 250), ('frame', 'circuit', 250), ('frame', 'skies', 200), ('frame', 'inferno', 350), ('frame', 'frost', 300), ('frame', 'garden', 250),
+  ('frame', 'melody', 250), ('frame', 'royal', 400), ('frame', 'bats', 300), ('frame', 'synth', 300), ('frame', 'paws', 200), ('frame', 'lanterns', 300),
+  ('frame', 'shrooms', 250), ('frame', 'overrainbow', 300),
+  ('plate', 'sunset', 100), ('plate', 'ocean', 120), ('plate', 'galaxy', 150), ('plate', 'sakura', 120), ('plate', 'forest', 120), ('plate', 'lava', 150),
+  ('plate', 'circuit', 150), ('plate', 'candy', 80), ('plate', 'pixel', 100), ('plate', 'aurora', 200), ('plate', 'stars', 150), ('plate', 'clouds', 100),
+  ('plate', 'neon', 180), ('plate', 'gold', 250), ('plate', 'frost', 120), ('plate', 'autumn', 120), ('plate', 'code', 150), ('plate', 'checkers', 80),
+  ('plate', 'waves', 100), ('plate', 'polka', 60), ('plate', 'zigzag', 60), ('plate', 'hearts', 100), ('plate', 'bubbles', 100), ('plate', 'flames', 150),
+  ('plate', 'rainbow', 120), ('plate', 'marble', 150), ('plate', 'camo', 80), ('plate', 'honey', 100), ('plate', 'music', 100), ('plate', 'paws', 80)
 on conflict (kind, item) do update set price = excluded.price;
 -- (what people wore before there was anything to pay with stays theirs)
 insert into public.owned_items (user_id, kind, item, how) select id, 'deco', decoration, 'grant' from public.profiles where decoration ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
 insert into public.owned_items (user_id, kind, item, how) select id, 'font', name_font, 'grant' from public.profiles where name_font ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
+insert into public.owned_items (user_id, kind, item, how) select id, 'effect', effect, 'grant' from public.profiles where effect ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
+insert into public.owned_items (user_id, kind, item, how) select id, 'frame', frame, 'grant' from public.profiles where frame ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
+insert into public.owned_items (user_id, kind, item, how) select id, 'plate', substr(plate, 4), 'grant' from public.profiles where plate ~ '^np:[a-z0-9-]{1,24}$' on conflict do nothing;
+-- the Quests' rewards, and the ones people already finished
+insert into public.quest_rewards (quest, kind, item) values ('first-steps', 'deco', 'sparkle'), ('chatterbox', 'deco', 'rainbow'), ('reactor', 'effect', 'hearts'),
+  ('connected', 'deco', 'neon'), ('show-and-tell', 'deco', 'orbit'), ('party-up', 'effect', 'confetti'), ('game-on', 'effect', 'stars'), ('planner', 'deco', 'crown')
+on conflict (quest) do update set kind = excluded.kind, item = excluded.item;
+insert into public.owned_items (user_id, kind, item, how) select x.id, q.kind, q.item, 'quest' from public.profile_extras x join public.quest_rewards q on x.quests ? q.quest on conflict do nothing;
+-- (where Supabase's pg_cron is turned on: everyone's boosts are kept paid every hour, with Fluentdat open or not)
+do $$ begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    begin perform cron.schedule('fluentdat-boosts', '7 * * * *', 'select public.renew_all_boosts()'); exception when others then null; end;
+  end if;
+end $$;
 
 -- ===================== live updates =====================
 do $$ begin

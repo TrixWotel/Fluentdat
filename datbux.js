@@ -17,12 +17,36 @@ export const TASKS = [
 ].map(([id, every, reward, counts, goal, title, how]) => ({ id, every, reward, counts, goal, title, how }));
 export const TASK = Object.fromEntries(TASKS.map((t) => [t.id, t]));
 export const EVERY = { day: 'Daily', week: 'Weekly', month: 'Monthly', year: 'Yearly' };
-// what the Shop asks (Datbux), as in setup.sql; what isn't here is free
+// what the Shop asks (Datbux), as in setup.sql: everything has a price (a Quest's reward is yours once you've done it)
 export const PRICES = {
-  'deco:halo': 150, 'deco:flame': 300, 'deco:catears': 200, 'deco:leaves': 200, 'deco:gears': 250, 'deco:glitch': 300, 'deco:hearts': 250,
-  'deco:sparkle': 0, 'deco:rainbow': 0, 'deco:neon': 0, 'deco:orbit': 0, 'deco:crown': 0,
-  'font:tempo': 100, 'font:sakura': 100, 'font:jelly': 150, 'font:modern': 150, 'font:medieval': 200, 'font:pixel': 200, 'font:vampyre': 250,
-  'font:chunky': 150, 'font:comic': 0, 'font:script': 200, 'font:type': 0, 'font:marker': 150, 'font:elegant': 250,
+  'deco:halo': 150, 'deco:flame': 300, 'deco:catears': 200, 'deco:leaves': 200, 'deco:gears': 250, 'deco:glitch': 300,
+  'deco:hearts': 250, 'deco:sparkle': 200, 'deco:rainbow': 250, 'deco:neon': 250, 'deco:orbit': 250, 'deco:crown': 300,
+  'deco:bubbles': 150, 'deco:starring': 200, 'deco:snowflakes': 200, 'deco:devil': 250, 'deco:angel': 300, 'deco:bunny': 200,
+  'deco:headphones': 250, 'deco:flowers': 250, 'deco:bolts': 300, 'deco:notes': 200, 'deco:pixel': 150, 'deco:foxears': 200,
+  'deco:clouds': 150, 'deco:aurora': 350, 'deco:sakura': 250, 'deco:witch': 300, 'deco:bow': 200, 'deco:shades': 250,
+  'deco:moon': 300, 'deco:crystals': 350,
+  'font:tempo': 100, 'font:sakura': 100, 'font:jelly': 150, 'font:modern': 150, 'font:medieval': 200, 'font:pixel': 200,
+  'font:vampyre': 250, 'font:chunky': 150, 'font:comic': 80, 'font:script': 200, 'font:type': 80, 'font:marker': 150,
+  'font:elegant': 250, 'font:lobster': 150, 'font:bangers': 150, 'font:righteous': 120, 'font:audiowide': 150, 'font:monoton': 250,
+  'font:cinzel': 200, 'font:caveat': 120, 'font:satisfy': 150, 'font:shadows': 120, 'font:luckiest': 150, 'font:blackops': 200,
+  'font:silkscreen': 150, 'font:terminal': 120, 'font:vibes': 250, 'font:fatface': 200, 'font:bebas': 120, 'font:glitchy': 250,
+  'font:indie': 100, 'font:rampart': 200, 'font:cherry': 200,
+  'effect:snow': 120, 'effect:sparkles': 150, 'effect:bubbles': 120, 'effect:petals': 150, 'effect:embers': 180, 'effect:pixels': 160,
+  'effect:hearts': 200, 'effect:confetti': 200, 'effect:stars': 200, 'effect:rain': 120, 'effect:fireflies': 180, 'effect:leaves': 150,
+  'effect:butterflies': 220, 'effect:music': 180, 'effect:comets': 250, 'effect:code': 200, 'effect:balloons': 180, 'effect:aurora': 300,
+  'effect:lightning': 250, 'effect:galaxy': 220, 'effect:smoke': 150, 'effect:coins': 250, 'effect:ghosts': 200, 'effect:clovers': 150,
+  'effect:diamonds': 300, 'effect:waves': 220, 'effect:flames': 250, 'effect:bokeh': 180, 'effect:paws': 150,
+  'frame:moonlit': 250, 'frame:stardust': 250, 'frame:eyes': 200, 'frame:goo': 200, 'frame:candles': 300, 'frame:eclipse': 300,
+  'frame:autumn': 250, 'frame:roses': 250, 'frame:wings': 300, 'frame:thorns': 200, 'frame:kitty': 250, 'frame:bunny': 250,
+  'frame:ocean': 250, 'frame:blossom': 300, 'frame:neonsign': 300, 'frame:pixelhearts': 200, 'frame:planets': 300, 'frame:pines': 250,
+  'frame:candy': 250, 'frame:circuit': 250, 'frame:skies': 200, 'frame:inferno': 350, 'frame:frost': 300, 'frame:garden': 250,
+  'frame:melody': 250, 'frame:royal': 400, 'frame:bats': 300, 'frame:synth': 300, 'frame:paws': 200, 'frame:lanterns': 300,
+  'frame:shrooms': 250, 'frame:overrainbow': 300,
+  'plate:sunset': 100, 'plate:ocean': 120, 'plate:galaxy': 150, 'plate:sakura': 120, 'plate:forest': 120, 'plate:lava': 150,
+  'plate:circuit': 150, 'plate:candy': 80, 'plate:pixel': 100, 'plate:aurora': 200, 'plate:stars': 150, 'plate:clouds': 100,
+  'plate:neon': 180, 'plate:gold': 250, 'plate:frost': 120, 'plate:autumn': 120, 'plate:code': 150, 'plate:checkers': 80,
+  'plate:waves': 100, 'plate:polka': 60, 'plate:zigzag': 60, 'plate:hearts': 100, 'plate:bubbles': 100, 'plate:flames': 150,
+  'plate:rainbow': 120, 'plate:marble': 150, 'plate:camo': 80, 'plate:honey': 100, 'plate:music': 100, 'plate:paws': 80,
 };
 export const WELCOME = 200;
 export const fmtBux = (n) => Math.floor(Number(n) || 0).toLocaleString('en-US');

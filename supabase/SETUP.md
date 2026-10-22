@@ -94,6 +94,13 @@ insert into public.app_admins (user_id) select id from public.profiles where han
 
 Password sign-in uses Supabase's **Email** provider, which is on from the start: leave **Authentication → Sign In / Providers → Email** turned on.
 
+## 10. Boosts that renew while nobody's on (optional)
+
+A boost gets its next day while the person boosting has Fluentdat open (in its last day). To renew boosts even when nobody has Fluentdat open:
+
+1. In Supabase open **Database → Extensions**, search for **pg_cron** and turn it on.
+2. Run `setup.sql` again (step 2). From then on the database renews boosts every hour, while each person's Datbux last.
+
 ## What the rules allow
 
 The database checks these itself, so they hold even if someone changes the app:
@@ -121,10 +128,10 @@ The database checks these itself, so they hold even if someone changes the app:
 21. A category can have its own permissions, like Discord's: for @everyone, for a role, or for one member, each allowed or denied (viewing its channels, sending, attaching, reacting, pinging @everyone, deleting others' messages, managing its channels or its permissions, making invites, joining its voice channels). A denial for @everyone gives way to a role that's allowed, and a member's own setting beats both. Owners and admins can always do everything. Making a category private (@everyone may not view it) hides its channels, their messages, files, unread counts and calls from everyone else. Whoever may manage a category's permissions can only allow or deny what they may do themselves.
 22. A profile's Connections, Board widgets and recent games are seen by whoever can see the profile, and changed only by its owner. A connection is marked verified only when it's an account you sign in with (the database checks, and nobody can ask it about anyone else's). Game covers and logos are only ever the name of a picture on Wikipedia or Wikimedia Commons, a Steam number, or a small picture of your own, never a web address. What you say you're playing is timed by the database.
 23. A server's events are seen by its members and made by its admins (and by its members, when the server allows it in Server Settings → Server Sidebar); whoever made one, or an admin, can change or cancel it, and everyone says for themselves whether they're interested. The Server Guide, the list of game servers and which sidebar extras show are set by the server's admins, and only take words, channel numbers and game servers' addresses, never web addresses.
-24. Avatar decorations, name fonts, profile effects and frames from the Shop are names from Fluentdat's own lists. Decorations and name fonts cost Datbux (the database keeps their prices), and only someone who has one can wear it; effects, frames and nameplates are free. What you already wore before there were prices stays yours. Quests are counted in your browser and the ones you finish are kept on your profile.
+24. Avatar decorations, name fonts, profile effects, frames and nameplates from the Shop are names from Fluentdat's own lists. Everything in the Shop costs Datbux (the database keeps the prices), and only someone who has a thing can wear it. What you already wore before there were prices stays yours. Quests are counted in your browser and the ones you finish are kept on your profile; a finished Quest's reward is yours without paying (the database checks the Quest is there). A nameplate you make yourself (a plain colour, two colours or your own picture) is free.
 25. Anyone who may send in a text channel can start a thread there, from a message (one thread a message) or on its own. A thread follows its channel's category permissions, so whoever can't see the channel can't see its threads, their messages or their files. Whoever started a thread, or whoever may manage the channel, renames, archives or deletes it, and a new message brings an archived thread back.
 26. Whoever may delete others' messages in a channel (owners and admins always can) pins and unpins messages there. In a DM or a group, everyone in it can. A conversation holds up to 50 pinned messages, and everyone who can read it sees them.
-27. Server Boosts are free. Each member can boost a server once and stop any time, and leaving the server stops it. Everyone in the server sees who boosts it. Two, seven and fourteen boosts make levels 1, 2 and 3, which hold more emoji (100, 150, 250) and stickers (45, 60, 90).
+27. Server Boosts cost 25 Datbux a day, paid ahead: 1 to 30 days at a time, up to 90 days ahead, and only the database takes the Datbux. A boost renews itself a day at a time while your Datbux last (you can turn that off), and one you stop ends at once, without the paid days back. Each member has one boost per server, and leaving the server stops it. Everyone in the server sees who boosts it. Two, seven and fourteen boosts make levels 1, 2 and 3, which hold more emoji (100, 150, 250) and stickers (45, 60, 90). A boost that ran out doesn't count.
 28. You choose your own nickname in each server (up to 32 characters). Admins can change members' nicknames, and the owner anyone's.
 29. In each server you choose whether its people can start a DM with you (Privacy Settings). Friends always can, and DMs you already have stay.
 30. Search only finds messages you can read: in servers you're in, without private categories you can't see or their threads, and in your own DMs and groups.
@@ -148,3 +155,5 @@ The database checks these itself, so they hold even if someone changes the app:
 7. **“Invite Invalid” cards, or no Emoji and Stickers pages in Server Settings**: run `setup.sql` again (step 2).
 8. **A username and password won't log in** although they're right: check that the Email provider is on (step 9).
 9. **Customize says your settings follow your account “once supabase/setup.sql is run again”**, or a server's Rules can't be written: run `setup.sql` again (step 2).
+10. **Boosting is still free, or the Shop has no nameplates**: run `setup.sql` again (step 2).
+11. **Boosts run out while nobody's on**: turn on pg_cron (step 10).
