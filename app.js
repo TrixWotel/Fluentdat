@@ -295,7 +295,7 @@ const badgeTitle = (b) => `${b.kind ? b.kind.name + ': ' : ''}${b.name} (${b.rar
 function badgeRow(u, { max = 6 } = {}) {
   const row = el('div', { className: 'p-badges' }); row.hidden = true;
   const fill = (stats) => {
-    const list = stats ? badgesOf(stats, badgePrefs(u)).shown : [];
+    const list = stats && !stats.hidden ? badgesOf(stats, badgePrefs(u)).shown : [];
     row.replaceChildren(...list.slice(0, max).map((b) => el('button', { className: 'p-badge', title: badgeTitle(b), onclick: (e) => { e.stopPropagation(); badgesDialog(u, b.id); } }, badgeIcon(b.id, 22))),
       ...(list.length > max ? [el('button', { className: 'p-badge more', title: 'See all the badges', onclick: (e) => { e.stopPropagation(); badgesDialog(u); } }, '+' + (list.length - max))] : []));
     row.hidden = !list.length;
@@ -314,6 +314,7 @@ async function badgesDialog(u, focus = null) {
   let stats = statsNow(u), cur = focus, filter = 'all';
   const draw = () => {
     if (!stats) { left.replaceChildren(el('h2', {}, title), el('p', { className: 'bg-sub' }, Store.kind === 'supabase' && !Store.canFrame() ? 'Badges need the newest supabase/setup.sql.' : 'Loading…')); right.replaceChildren(); return; }
+    if (stats.hidden) { left.replaceChildren(el('h2', {}, title), el('p', { className: 'bg-sub' }, `${u.name} keeps their badges private.`)); right.replaceChildren(); return; }
     const bp = badgePrefs(u), res = badgesOf(stats, { ...bp, all: mine }), list = mine ? res.have : res.shown;
     const known = new Map([...res.have, ...(mine ? res.todo : [])].map((b) => [b.id, b])), open = (id) => (mine || list.some((b) => b.id === id));
     if (!cur || !known.has(cur) || !open(cur)) cur = (list[0] || res.todo[0] || {}).id || null;
@@ -3089,6 +3090,8 @@ async function unblockUser(u) { if ((await attempt(() => Store.unblock(u.id))) !
 // parts you chose (Customize → Elements → Profile cards) ----------
 // badges and tag; mutual friends and servers; member, boosting and friends since; about them; what they're playing;
 // their Game Collection and Wishlist; their connections; your note on them. onTab(tab) opens the full profile there.
+// a part of someone's profile they keep from you (their choice, in Privacy & Safety; the database keeps to it too)
+const keeps = (u, part) => !!u && !isMe(u) && (Array.isArray(u.hides) ? u.hides : ((u.id && Store.person && Store.person(u.id)) || {}).hides || []).includes(part);
 function profileParts(u, { full = false, only = null, onTab = () => {}, closeFirst = () => {} } = {}) {
   const live = Store.kind === 'supabase', self = isMe(u), xid = u.bot ? null : self ? myXid() : live && u.id ? u.id : null;
   const sec = (cls, ...kids) => el('section', { className: 'pc-sec ' + cls }, ...kids);
@@ -3104,7 +3107,7 @@ function profileParts(u, { full = false, only = null, onTab = () => {}, closeFir
       const friendsRow = el('div', { className: 'pc-slot' });
       box.append(friendsRow);
       if (ms.length) box.append(row('Mutual Servers', ms.slice(0, 3).map((sv) => serverFace(sv, 20)), ms.length, 'servers'));
-      Store.mutualFriends(u.id).then((fr) => { if (fr.length && friendsRow.isConnected) friendsRow.replaceWith(row('Mutual Friends', fr.slice(0, 3).map((f) => avatarEl(face(f), { size: 20 })), fr.length, 'friends')); }, () => {});
+      if (!keeps(u, 'friends')) Store.mutualFriends(u.id).then((fr) => { if (fr.length && friendsRow.isConnected) friendsRow.replaceWith(row('Mutual Friends', fr.slice(0, 3).map((f) => avatarEl(face(f), { size: 20 })), fr.length, 'friends')); }, () => {});
       out.push(box);
     }
     else if (id === 'pSince' && !u.bot) {
@@ -3182,6 +3185,7 @@ function dmPanel(u) {
 // (in the order and with the ones you chose in Customize)
 let fullOpen = null;
 const TAB_OF = { tWidget: 'board', tWish: 'wishlist', tCollection: 'collection', tFriends: 'friends', tServers: 'servers', tActivity: 'activity' };
+const TAB_PARTS = { board: ['fav', 'games', 'wishlist'], wishlist: ['wishlist'], collection: ['collection'], friends: ['friends'], activity: ['activity'] };   // (a tab goes when they keep all of it from you)
 function fullProfile(user, tab = null) {
   closePop(); if (fullOpen) fullOpen.close();
   const self = isMe(user), live = Store.kind === 'supabase';
@@ -3211,7 +3215,7 @@ function fullProfile(user, tab = null) {
   const ms = live && !self ? Store.mutualServerList(u.id) : [];
   let friends = null, theirs = null;
   const tabs = () => ordered('profileTabs').filter(shown).map((id) => [TAB_OF[id], labelOf('profileTabs', id)]).filter(([id]) =>
-    (id === 'board' || id === 'activity' || id === 'wishlist') ? !!xid : id === 'collection' ? !u.bot && (self || live) : !self && live && !u.bot)
+    ((id === 'board' || id === 'activity' || id === 'wishlist') ? !!xid : id === 'collection' ? !u.bot && (self || live) : !self && live && !u.bot) && !(TAB_PARTS[id] && TAB_PARTS[id].every((part) => keeps(u, part))))
     .map(([id, label]) => [id, label, id === 'friends' ? (friends ? friends.length : null) : id === 'servers' ? ms.length : null]);
   if (!tabs().some(([id]) => id === tab)) tab = (tabs()[0] || [])[0] || null;
   const tabsEl = el('nav', { className: 'fp-tabs', role: 'tablist' }), list = el('div', { className: 'fp-list' });
@@ -3234,7 +3238,7 @@ function fullProfile(user, tab = null) {
       things = things.map((o) => ({ ...o, at: o.at || at[o.kind + ':' + o.item] || 0 }));
     }
     const stats = statsNow(u), log = (extras && extras.badgeLog) || {};
-    const badges = stats ? (self ? badgesOf(stats, { all: true }).have : badgesOf(stats, badgePrefs(u)).shown) : [];
+    const badges = stats && !stats.hidden ? (self ? badgesOf(stats, { all: true }).have : badgesOf(stats, badgePrefs(u)).shown) : [];
     const rows = [...(colShow === 'badges' ? [] : things.map((o) => ({ at: o.at || 0, o }))), ...(colShow === 'shop' ? [] : badges.map((b) => ({ at: Date.parse(log[b.id] || '') || 0, b })))]
       .sort((x, y) => (y.at || 0) - (x.at || 0));
     const chips = el('div', { className: 'fd-chips fp-log-chips' }, ...[['all', 'Everything'], ['shop', 'From the Shop'], ['badges', 'Badges']].map(([v, l]) =>
@@ -6135,8 +6139,28 @@ function notificationsPane(redraw) {
     Store.kind === 'supabase' ? el('div', { className: 'note-box', style: 'margin-top:14px' }, 'Each server, channel and DM can be muted, or set to tell you about everything, only @mentions, or nothing: right-click it.') : null];
 }
 
+// who sees each part of your profile (signed in: the database keeps to it); your name, @username, picture, decorations,
+// banner and About are always for everyone
+const PRIVACY_PARTS = [['friends', 'Mutual Friends', 'Who you’re friends with, on your profile'], ['collection', 'Collection', 'What you got from the Shop, and when you got your badges'],
+  ['wishlist', 'Wishlist', 'The games you want to play'], ['games', 'Game Collection', 'The games you like'], ['fav', 'Favorite Game', 'On your Board'],
+  ['activity', 'Activity', 'The games you’ve played lately'], ['playing', 'What You’re Playing', 'Playing … under your name'], ['connections', 'Connections', 'Your accounts elsewhere'],
+  ['since', 'Member Since', 'When you joined Fluentdat (and the badges that would tell)'], ['boosting', 'Boosting Since', 'When you started boosting (and that badge)'], ['badges', 'Badges', 'The badges on your profile']];
+const WHO_SEES = [['everyone', 'Everyone'], ['friends', 'Friends'], ['me', 'Only Me']], WHO_SAID = { everyone: 'everyone sees it', friends: 'only your friends see it', me: 'only you see it' };
+function profilePrivacy() {
+  if (Store.kind !== 'supabase') return [];
+  if (!Store.canPrivacy()) return [el('h3', {}, 'Your profile'), el('div', { className: 'note-box' }, 'Choosing who sees each part of your profile needs the newest supabase/setup.sql: run it again in Supabase.')];
+  const cur = (Store.myProfile() || {}).privacy || {};
+  const set = (part, label, v) => {
+    const next = { ...((Store.myProfile() || {}).privacy || {}) };
+    if (v === 'everyone') delete next[part]; else next[part] = v;
+    Store.setProfile({ privacy: next }); toast(`${label}: ${WHO_SAID[v]}.`);
+  };
+  return [el('h3', {}, 'Your profile'), el('p', { className: 'hint' }, 'Who sees each part of your profile. Everyone always sees your name, @username, picture, decorations, banner and About.'),
+    ...PRIVACY_PARTS.map(([part, label, hint]) => row2(label, hint, sel(cur[part] || 'everyone', WHO_SEES, (v) => set(part, label, v))))];
+}
 function privacyPane(redraw) {
-  return [el('h2', {}, 'Privacy & Safety'), el('p', { className: 'sub' }, 'What Fluentdat stores, and who can reach you.'),
+  return [el('h2', {}, 'Privacy & Safety'), el('p', { className: 'sub' }, 'What Fluentdat stores, who sees your profile, and who can reach you.'),
+    ...profilePrivacy(),
     ...peopleYouHid(redraw),
     el('h3', {}, 'Direct messages'),
     Store.kind === 'supabase'

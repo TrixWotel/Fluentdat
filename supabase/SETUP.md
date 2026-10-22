@@ -126,6 +126,7 @@ The database checks these itself, so they hold even if someone changes the app:
 9. Profiles and servers only take real colours and pictures, never links to other websites, so nobody can track who looks at their profile.
 10. A friend request is seen by the person you sent it to (who can accept or ignore it) and nobody else. You're friends once both of you have added each other.
 11. Group DMs hold up to 10 people. You can only add your friends, the owner can remove people, and the last one out deletes the group.
+12. Each person chooses who sees each part of their profile (**User Settings → Privacy & Safety → Your profile**): mutual friends, Collection, Wishlist, Game Collection, Favorite Game, Activity, what they're playing, connections, member since, boosting since and badges, for everyone, their friends, or only them. The database only hands out what you may see. Names, @usernames, pictures, decorations, banners and About are always everyone's.
 12. Attachments and voice messages (up to 10 MB each) can only be fetched by the people in that DM, group or server, and only uploaded by their sender.
 13. A call's private channel can only be joined by the people in that DM or group, or the members of that voice channel's server.
 14. What you've read and what you've muted is yours alone.

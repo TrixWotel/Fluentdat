@@ -72,6 +72,7 @@ function toUser(p) {
     tag: p.tag && p.tag_server ? { text: p.tag, badge: p.tag_badge || '', color: p.tag_color || '', server: p.tag_server } : null,
     playing: p.playing && typeof p.playing === 'object' && p.playing.n ? p.playing : null,
     decoration: p.decoration || '', effect: p.effect || '', frame: p.frame || '',
+    hides: Array.isArray(p.hides) ? p.hides : [], privacy: p.privacy && typeof p.privacy === 'object' && !Array.isArray(p.privacy) ? p.privacy : {},
     // (a status bubble shows until its time is up)
     bubble: p.bubble && !(p.bubble_until && Date.parse(p.bubble_until) <= Date.now()) ? p.bubble : '', bubbleUntil: p.bubble && p.bubble_until ? Date.parse(p.bubble_until) || 0 : 0 };
 }
@@ -140,11 +141,11 @@ const toEmoji = (r) => ({ id: r.id, server: r.server_id, name: r.name, animated:
 const toSticker = (r) => ({ id: r.id, server: r.server_id, name: r.name, emoji: r.emoji || '', description: r.description || '', animated: !!r.animated, path: r.path, url: expressionUrl(r.path), by: r.created_by });
 
 // ---------- loading ----------
-const PROFILE_COLS = 'id,handle,name,color,avatar,pronouns,about,status,plate,created_at,updated_at';
+const PROFILE_COLS = 'id,handle,name,color,avatar,pronouns,about,status,plate,updated_at';      // (when they joined, and what they're playing, come from profile_more: see moreOf)
 const PROFILE_STYLE = ',theme1,theme2,name_font,name_effect,name_color1,name_color2,tag_server,tag,tag_badge,tag_color';
 // (newest first: an older database lacks the later columns, and Fluentdat carries on with what it has)
-const PROFILE_SETS = [PROFILE_COLS + PROFILE_STYLE + ',playing,decoration,effect,frame,bubble,bubble_until', PROFILE_COLS + PROFILE_STYLE + ',playing,decoration,effect',
-  PROFILE_COLS + PROFILE_STYLE + ',playing', PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS];
+const PROFILE_SETS = [PROFILE_COLS + PROFILE_STYLE + ',decoration,effect,frame,bubble,bubble_until', PROFILE_COLS + PROFILE_STYLE + ',decoration,effect',
+  PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS + PROFILE_STYLE, PROFILE_COLS];
 let profileSet = 0;
 async function profilesQ(q) {
   for (;;) {
@@ -155,12 +156,19 @@ async function profilesQ(q) {
     }
   }
 }
+// when people joined, what they're playing, and the parts of their profile they keep from you: the database decides what
+// you may see (from setup.sql 16; an older one has no say, and lets everyone read when anyone joined)
+async function moreOf(ver, ids) {
+  if (ver >= 16) return (await soft(sb.rpc('profile_more', ids ? { p_ids: ids } : {}).then(must), [])).map((m) => ({ id: m.id, created_at: m.since || null, playing: m.playing || null, hides: m.hides || [] }));
+  const q = sb.from('profiles').select('id,created_at,playing');
+  return (await soft((ids ? q.eq('id', ids[0]) : q).then(must), [])).map((m) => ({ id: m.id, created_at: m.created_at || null, playing: m.playing || null, hides: [] }));
+}
 // (each reload is numbered: one that finishes after a newer one started leaves its older results unused)
 let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 15;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 16;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -176,7 +184,7 @@ async function loadOnce() {
     const q = (t, cols = '*') => sb.from(t).select(cols).then(must);
     const [profiles, mine, servers, members, categories, channels, dms, friends, roles, memberRoles, dmMembers, reads, unread, emoji, stickers, blocks, admin, perms, events, interest, boosts, version] = await Promise.all([
       profilesQ(q),
-      sb.from('profiles').select('*').eq('id', myId()).then(must),
+      sb.from('profiles').select('banner,stickers,privacy').eq('id', myId()).then(must).catch(() => sb.from('profiles').select('banner,stickers').eq('id', myId()).then(must)),
       q('servers'), q('server_members'), q('categories'), q('channels'), q('dms'), q('friends'), q('roles'), q('member_roles'),
       soft(q('dm_members'), []), soft(q('reads'), []), soft(sb.rpc('unread').then(must), null),
       soft(q('server_emoji'), []), soft(q('server_stickers'), []), soft(q('blocks'), []), soft(sb.rpc('is_app_admin').then(must), false),
@@ -185,6 +193,11 @@ async function loadOnce() {
     if (seq !== loadSeq) return newestLoad;
     // (Datbux: your wallet, what you have, the Shop's prices, your trades; the version is known once they are)
     const ver = Number(version) || 0;
+    // (when each person joined, what they're playing, and which parts of their profile they keep from you)
+    const more = await moreOf(ver, null);
+    if (seq !== loadSeq) return newestLoad;
+    const byId = new Map(more.map((m) => [m.id, m]));
+    for (const p of profiles) Object.assign(p, byId.get(p.id) || { created_at: null, playing: null, hides: [] });
     if (ver >= 9) {
       const [wal, owned, shop, trades, bundles, sales] = await Promise.all([soft(sb.from('wallets').select('*').eq('user_id', myId()).then(must), []),
         soft(sb.from('owned_items').select('kind,item,how,got_at').eq('user_id', myId()).then(must), []), soft(q('shop_items'), []),
@@ -216,7 +229,8 @@ async function loadOnce() {
     cache.version = ver;
     if (cache.version < SETUP_VERSION) state.needsSetup = true;
     cache.profiles = Object.fromEntries(profiles.map((p) => [p.id, p]));
-    cache.me = mine[0] || null;
+    const self = profiles.find((x) => x.id === myId());
+    cache.me = self ? { ...self, ...(mine[0] || {}) } : null;
     if (cache.me) {
       for (const [k, op] of meOps) { if (op.until && Date.now() > op.until) meOps.delete(k); else cache.me[k] = op.v; }
       cache.profiles[cache.me.id] = cache.me;
@@ -265,8 +279,8 @@ async function loadMessages(a) {
 function meet(id) {
   if (!id || cache.profiles[id] || asking.has(id)) return;
   asking.add(id);
-  sb.from('profiles').select('*').eq('id', id).then(must)
-    .then((rows) => { if (rows[0]) { cache.profiles[id] = rows[0]; emit(); } }, () => {})
+  sb.from('profiles').select(PROFILE_SETS[profileSet]).eq('id', id).then(must)
+    .then(async (rows) => { if (!rows[0]) return; const m = (await moreOf(cache.version || 0, [id]).catch(() => []))[0]; cache.profiles[id] = { ...rows[0], ...(m || {}) }; emit(); }, () => {})
     .then(() => asking.delete(id));
 }
 
@@ -983,7 +997,11 @@ export const SupabaseStore = {
   // the whole profile (with the banner, which isn't loaded for everyone up front)
   async profileFull(id) {
     if (id === myId()) return cache.me ? { ...toUser(cache.me), banner: cache.me.banner || '' } : null;
-    if (!cache.full[id]) { const rows = must(await sb.from('profiles').select('*').eq('id', id)); if (!rows[0]) return null; cache.full[id] = rows[0]; }
+    if (!cache.full[id]) {
+      const rows = must(await sb.from('profiles').select(PROFILE_SETS[profileSet] + ',banner,stickers').eq('id', id)); if (!rows[0]) return null;
+      const m = cache.profiles[id] || (await moreOf(cache.version || 0, [id]).catch(() => []))[0] || {};
+      cache.full[id] = { created_at: m.created_at || null, playing: m.playing || null, hides: m.hides || [], ...rows[0] };
+    }
     return { ...toUser(cache.full[id]), banner: cache.full[id].banner || '' };
   },
   mutualServers: (uid) => cache.servers.filter((sv) => cache.members.some((m) => m.server_id === sv.id && m.user_id === uid)).length,
@@ -1155,6 +1173,7 @@ export const SupabaseStore = {
   // ---- a profile's extras, fetched when someone opens it: Connections, the Board's widgets, the games played lately ----
   async profileExtras(id) {
     if (!isUuid(id)) return toExtras(null);
+    if (id !== myId() && (cache.version || 0) >= 16) return (cache.extras[id] = toExtras(await soft(sb.rpc('profile_extras_of', { p_user: id }).then(must), null)));
     const rows = await soft(sb.from('profile_extras').select('*').eq('id', id).then(must), []);
     return (cache.extras[id] = toExtras(rows[0]));
   },
@@ -1180,6 +1199,7 @@ export const SupabaseStore = {
   canDecorate: () => profileSet <= 1,
   canFrame: () => profileSet === 0,             // (frames, status bubbles and badges: the newest setup.sql)
   canWikiGames: () => (cache.version || 0) >= 8,   // (games' pictures from Wikipedia)
+  canPrivacy: () => (cache.version || 0) >= 16,     // (who sees what of your profile)
   // what someone's badges are made of: the database counts (for people you know), kept for a minute
   async badgeStats(uid) {
     const id = uid || myId(), had = statsKept.get(id);
@@ -1279,7 +1299,7 @@ export const SupabaseStore = {
   setProfile(patch) {
     if (!cache.me) return;
     const keys = ['name', 'color', 'avatar', 'pronouns', 'about', 'status', 'stickers', 'banner', 'plate', ...(styled ? ['theme1', 'theme2', 'name_font', 'name_effect', 'name_color1', 'name_color2'] : []),
-      ...(profileSet <= 1 ? ['decoration', 'effect'] : []), ...(profileSet === 0 ? ['frame', 'bubble', 'bubble_until'] : [])];
+      ...(profileSet <= 1 ? ['decoration', 'effect'] : []), ...(profileSet === 0 ? ['frame', 'bubble', 'bubble_until'] : []), ...((cache.version || 0) >= 16 ? ['privacy'] : [])];
     const row = {}; for (const k of keys) if (k in patch) row[k] = patch[k] == null || patch[k] === '' ? (k === 'stickers' ? [] : k === 'bubble_until' ? null : '') : patch[k];
     Object.assign(cache.me, row);
     const ops = Object.keys(row).map((k) => { const op = { v: row[k], until: 0 }; meOps.set(k, op); return [k, op]; });

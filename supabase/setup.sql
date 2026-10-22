@@ -464,6 +464,16 @@ alter table public.profile_extras add column if not exists quests jsonb not null
 alter table public.profiles add column if not exists frame text not null default '';
 alter table public.profiles add column if not exists bubble text not null default '';
 alter table public.profiles add column if not exists bubble_until timestamptz;
+-- who may see each part of your profile: { part: 'everyone' | 'friends' | 'me' } (a part not named: everyone). Your name,
+-- @handle, picture, decorations, banner and About are always for everyone
+alter table public.profiles add column if not exists privacy jsonb not null default '{}'::jsonb;
+create or replace function public.privacy_ok(p jsonb) returns boolean language sql immutable as $$
+  select jsonb_typeof(p) = 'object' and not exists (select 1 from jsonb_each(p) e
+    where e.key not in ('friends', 'collection', 'wishlist', 'games', 'fav', 'activity', 'playing', 'connections', 'since', 'boosting', 'badges')
+       or jsonb_typeof(e.value) <> 'string' or (e.value #>> '{}') not in ('everyone', 'friends', 'me'));
+$$;
+alter table public.profiles drop constraint if exists profiles_privacy_ok;
+alter table public.profiles add constraint profiles_privacy_ok check (public.privacy_ok(privacy));
 -- your badges: which you show first and which you hide; and your Game Time (the hours you said you were playing, timed
 -- by the database and only ever added to by it)
 alter table public.profile_extras add column if not exists badges jsonb not null default '{}'::jsonb;
@@ -674,6 +684,13 @@ begin
   return false;
 end $$;
 
+-- may you see this part of their profile? (what they chose: everyone, their friends, or only them; your own, always)
+create or replace function public.shown_to_me(p_owner uuid, p_part text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select p_owner = auth.uid() or coalesce((select case coalesce(privacy ->> p_part, 'everyone') when 'everyone' then true when 'friends' then is_friend(p_owner) else false end
+    from profiles where id = p_owner), false);
+$$;
+
 -- one of the people who run Fluentdat?
 create or replace function public.is_app_admin() returns boolean
 language sql stable security definer set search_path = public as $$
@@ -870,7 +887,7 @@ drop policy if exists "the Shop's prices" on public.shop_items;
 create policy "the Shop's prices" on public.shop_items for select to authenticated using (true);
 alter table public.owned_items enable row level security;
 drop policy if exists "what people you know have" on public.owned_items;
-create policy "what people you know have" on public.owned_items for select to authenticated using (knows(user_id));
+create policy "what people you know have" on public.owned_items for select to authenticated using (knows(user_id) and shown_to_me(user_id, 'collection'));
 alter table public.quest_rewards enable row level security;
 drop policy if exists "what Quests give" on public.quest_rewards;
 create policy "what Quests give" on public.quest_rewards for select to authenticated using (true);
@@ -896,8 +913,8 @@ create policy "remove your threads" on public.channels for delete to authenticat
 
 -- a profile's Connections, widgets and activity: seen by whoever can see the profile, kept by its owner
 alter table public.profile_extras enable row level security;
+-- (someone else's come through profile_extras_of, without the parts they keep from you)
 drop policy if exists "see the extras of people you know" on public.profile_extras;
-create policy "see the extras of people you know" on public.profile_extras for select to authenticated using (knows(id));
 drop policy if exists "keep your own extras" on public.profile_extras;
 create policy "keep your own extras" on public.profile_extras for all to authenticated using (id = auth.uid()) with check (id = auth.uid());
 
@@ -1615,8 +1632,9 @@ begin
 end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates;
--- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 15 $$;
+-- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it;
+-- 16: who sees what of your profile)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 16 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -1971,13 +1989,13 @@ create trigger guard_shop before update on public.profiles for each row execute 
 -- Quests, connections, games on their Board, Game Time, and whether they help run Fluentdat
 create or replace function public.badge_stats(p_user uuid) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
-declare x profile_extras%rowtype; pr profiles%rowtype; wal wallets%rowtype;
+declare x profile_extras%rowtype; pr profiles%rowtype; wal wallets%rowtype; res jsonb;
 begin
   if auth.uid() is null or p_user is null or not knows(p_user) then raise exception 'You can only see the badges of people you know.'; end if;
   select * into x from profile_extras where id = p_user;
   select * into pr from profiles where id = p_user;
   select * into wal from wallets where user_id = p_user;
-  return jsonb_build_object(
+  res := jsonb_build_object(
     'servers', (select count(*) from server_members where user_id = p_user), 'owns', (select count(*) from servers where owner = p_user),
     'files', (select count(*) from messages where author = p_user and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0)
       + (select count(*) from dm_messages where author = p_user and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0),
@@ -2014,6 +2032,16 @@ begin
     'games', coalesce((select sum(jsonb_array_length(w->'g')) from jsonb_array_elements(x.widgets) w where w->>'t' = 'likes'), 0),
     'play_seconds', coalesce(x.play_seconds, 0),
     'staff', exists (select 1 from app_admins where user_id = p_user));
+  -- (only what they let you see: badges kept from you tell nothing but, if you may see it, since when they've boosted;
+  -- and a part they keep from you isn't counted into the badges you do see)
+  if not shown_to_me(p_user, 'badges') then res := jsonb_build_object('hidden', true, 'boost_since', res -> 'boost_since'); end if;
+  if not shown_to_me(p_user, 'boosting') then res := res - 'boost_since'; end if;
+  if not shown_to_me(p_user, 'since') then res := res - 'since'; end if;
+  if not shown_to_me(p_user, 'collection') then res := res - 'owned'; end if;
+  if not shown_to_me(p_user, 'wishlist') then res := res - 'want'; end if;
+  if not shown_to_me(p_user, 'games') then res := res - 'games'; end if;
+  if not shown_to_me(p_user, 'connections') then res := res - 'connections'; end if;
+  return res;
 end $$;
 -- a new server: you own it, with a Text Channels category and #general
 create or replace function public.create_server(p_name text, p_icon text default '')
@@ -2226,6 +2254,33 @@ language sql stable security definer set search_path = public as $$
   order by b.created_at desc;
 $$;
 
+-- ===================== who sees what of a profile =====================
+-- when they joined and what they're playing (read only through here: see the grants), and which parts of their profile
+-- they keep from you, for everyone you know (or just the ones asked for)
+create or replace function public.profile_more(p_ids uuid[] default null)
+returns table (id uuid, since timestamptz, playing jsonb, hides text[])
+language sql stable security definer set search_path = public as $$
+  select p.id, case when 'since' = any(h.hides) then null else p.created_at end, case when 'playing' = any(h.hides) then null else p.playing end, h.hides
+  from profiles p
+  cross join lateral (select array(select e.key from jsonb_each_text(p.privacy) e
+    where p.id <> auth.uid() and (e.value = 'me' or (e.value = 'friends' and not is_friend(p.id))))) h(hides)
+  where auth.uid() is not null and (p_ids is null or p.id = any(p_ids)) and knows(p.id);
+$$;
+-- someone's extras (connections, Board, Activity, badge choices and log), without the parts they keep from you
+create or replace function public.profile_extras_of(p_user uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('id', e.id, 'updated_at', e.updated_at,
+    'connections', case when shown_to_me(e.id, 'connections') then e.connections else '[]'::jsonb end,
+    'widgets', coalesce((select jsonb_agg(w order by o) from jsonb_array_elements(e.widgets) with ordinality x(w, o)
+      where shown_to_me(e.id, case w ->> 't' when 'want' then 'wishlist' when 'likes' then 'games' else 'fav' end)), '[]'::jsonb),
+    'activity', case when shown_to_me(e.id, 'activity') then e.activity else '[]'::jsonb end,
+    'quests', case when shown_to_me(e.id, 'badges') then e.quests else '[]'::jsonb end,
+    'badges', case when shown_to_me(e.id, 'badges') then e.badges else '{}'::jsonb end,
+    'badge_log', case when shown_to_me(e.id, 'badges') and shown_to_me(e.id, 'collection') then e.badge_log else '{}'::jsonb end,
+    'play_seconds', case when shown_to_me(e.id, 'badges') then e.play_seconds else 0 end)
+  from profile_extras e where e.id = p_user and auth.uid() is not null and knows(p_user);
+$$;
+
 -- ===================== TrixWotel's commands (for the people who run Fluentdat) =====================
 -- /ban: ban someone from all of Fluentdat (never yourself, nor anyone else who runs it)
 create or replace function public.app_ban(p_user uuid, p_reason text default '')
@@ -2412,7 +2467,7 @@ create or replace function public.mutual_friends(p_other uuid)
 returns table (id uuid, handle text, name text, color text, avatar text)
 language sql stable security definer set search_path = public as $$
   select p.id, p.handle, p.name, p.color, p.avatar from profiles p
-  where auth.uid() is not null and p.id <> auth.uid() and p.id <> p_other
+  where auth.uid() is not null and p.id <> auth.uid() and p.id <> p_other and shown_to_me(p_other, 'friends')
     and exists (select 1 from friends where owner = auth.uid() and friend = p.id) and exists (select 1 from friends where owner = p.id and friend = auth.uid())
     and exists (select 1 from friends where owner = p_other and friend = p.id) and exists (select 1 from friends where owner = p.id and friend = p_other)
   order by p.name
@@ -2475,6 +2530,9 @@ grant execute on function public.buy_bundle(text), public.shop_sales(timestamptz
 
 -- (TrixWotel's commands: anyone signed in may ask, and only the people who run Fluentdat get anything done)
 grant execute on function public.app_banned() to authenticated;
+grant execute on function public.privacy_ok(jsonb), public.shown_to_me(uuid, text) to authenticated;
+revoke all on function public.profile_more(uuid[]), public.profile_extras_of(uuid) from public, anon;
+grant execute on function public.profile_more(uuid[]), public.profile_extras_of(uuid) to authenticated;
 revoke all on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) from public, anon;
 grant execute on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) to authenticated;
 
@@ -2499,6 +2557,14 @@ revoke insert, update, delete, truncate on public.wallets, public.datbux_log, pu
 revoke all on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards, public.shop_bundles from anon;
 -- (boosts: looked at by the server's people, started through boost_server, stopped by deleting your own)
 revoke insert, update on public.server_boosts from authenticated;
+-- (profiles: every column but when someone joined and what they're playing, which come through profile_more, where each
+-- person decides who sees them)
+do $$ declare cols text; begin
+  select string_agg(quote_ident(attname), ', ' order by attnum) into cols from pg_attribute
+    where attrelid = 'public.profiles'::regclass and attnum > 0 and not attisdropped and attname not in ('created_at', 'playing');
+  revoke select on public.profiles from authenticated;
+  execute format('grant select (%s) on public.profiles to authenticated', cols);
+end $$;
 -- (bans from all of Fluentdat: looked at, by the one banned and the people who run it; made only through app_ban)
 grant select on public.app_bans to authenticated;
 revoke insert, update, delete, truncate on public.app_bans from authenticated;
