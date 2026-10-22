@@ -23,6 +23,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Voice messages, pictures and files (dragged in, pasted or picked, sent when you press Enter)
 * Replies, @mentions, Discord's formatting (bold, italics, spoilers, code, quotes, headings, lists) and link previews for invites, GitHub and YouTube
 * Unread counts, pings, muting and notification settings for every server, channel and DM, and desktop notifications
+* Pictures you move and scale in their frame before using them: your avatar, banner and nameplate, server and group icons, server banners and role icons
 * A layout you can rearrange (rounded panels or flat ones; the member list and DM profile flush beside the chat, as a card in it, or as a column of their own), themes you can edit, stickers you make, and profiles with banners and nameplates
 * An emoji and sticker picker, and servers' own emoji and stickers (GIFs too), with :name: suggestions as you type
 * Full profiles with mutual friends and servers, notes, blocking, ignoring and reports

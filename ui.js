@@ -161,6 +161,82 @@ export async function shrink(file, maxW, maxH, maxChars = 380000) {
   throw new Error('That picture is too big, even made smaller.');
 }
 
+// ---------- a picture, moved and scaled before it's used (avatars, banners, nameplates, icons) ----------
+// Drag it to move it; the slider, the wheel or two fingers scale it. What's in the frame (w × h; round shows the circle
+// an avatar is seen in) is what you get, made small enough to keep. Resolves to a data URL, or null if you cancel.
+export async function cropPicture(file, { w, h, round = false, title = 'Move and Scale', ok = 'Apply', maxChars = 380000 } = {}) {
+  const img = await readImage(file), iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  // the frame on screen: as big as fits, the shape of what comes out
+  const room = Math.max(240, Math.min(innerWidth - 80, 520));
+  let FW = Math.min(room, w === h ? 300 : 480), FH = (FW * h) / w;
+  if (FH > 300) { FH = 300; FW = (FH * w) / h; }
+  const pad = 34, cover = Math.max(FW / iw, FH / ih), minS = Math.min(cover, Math.min(FW / iw, FH / ih)), maxS = cover * 6;
+  let s = cover, x = (FW - iw * s) / 2, y = (FH - ih * s) / 2;
+  const pic = el('img', { src: img.src, alt: '', draggable: false, className: 'crop-img' });
+  Object.assign(pic.style, { width: iw + 'px', height: ih + 'px' });
+  const frame = el('div', { className: 'crop-frame' + (round ? ' round' : '') });
+  Object.assign(frame.style, { left: pad + 'px', top: pad + 'px', width: FW + 'px', height: FH + 'px' });
+  const stage = el('div', { className: 'crop-stage', tabIndex: 0, title: 'Drag to move it' }, pic, frame);
+  Object.assign(stage.style, { width: FW + pad * 2 + 'px', height: FH + pad * 2 + 'px' });
+  const zoom = el('input', { type: 'range', min: 0, max: 1000, step: 1, className: 'crop-zoom', title: 'Scale' });
+  const span = Math.log(maxS / minS) || 1, toV = (v) => Math.round((1000 * Math.log(v / minS)) / span), toS = (v) => minS * Math.exp((v / 1000) * span);
+  // (it can't leave the frame empty on a side it's bigger than, nor go outside it on a side it's smaller than)
+  const keep = () => {
+    const dw = iw * s, dh = ih * s;
+    x = dw >= FW ? Math.min(0, Math.max(FW - dw, x)) : Math.max(0, Math.min(FW - dw, x));
+    y = dh >= FH ? Math.min(0, Math.max(FH - dh, y)) : Math.max(0, Math.min(FH - dh, y));
+  };
+  const show = () => { keep(); pic.style.transform = `translate(${pad + x}px, ${pad + y}px) scale(${s})`; zoom.value = String(toV(s)); };
+  const scaleAt = (ns, px = FW / 2, py = FH / 2) => { ns = Math.max(minS, Math.min(maxS, ns)); x = px - ((px - x) * ns) / s; y = py - ((py - y) * ns) / s; s = ns; show(); };
+  const reset = () => { s = cover; x = (FW - iw * s) / 2; y = (FH - ih * s) / 2; show(); };
+  zoom.oninput = () => scaleAt(toS(+zoom.value));
+  // one finger (or the mouse) moves it, two scale it
+  const pts = new Map(); let last = null, pinch = null;
+  const inFrame = (cx, cy) => { const r = stage.getBoundingClientRect(); return [cx - r.left - pad, cy - r.top - pad]; };
+  stage.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); stage.focus(); try { stage.setPointerCapture(e.pointerId); } catch {}
+    pts.set(e.pointerId, [e.clientX, e.clientY]); last = [e.clientX, e.clientY]; stage.classList.add('moving');
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, s }; }
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size >= 2 && pinch) { const [a, b] = [...pts.values()]; scaleAt((pinch.s * Math.hypot(a[0] - b[0], a[1] - b[1])) / pinch.d, ...inFrame((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)); return; }
+    x += e.clientX - last[0]; y += e.clientY - last[1]; last = [e.clientX, e.clientY]; show();
+  });
+  const lift = (e) => { pts.delete(e.pointerId); pinch = null; if (pts.size) last = [...pts.values()][0]; else stage.classList.remove('moving'); };
+  stage.addEventListener('pointerup', lift); stage.addEventListener('pointercancel', lift);
+  stage.addEventListener('wheel', (e) => { e.preventDefault(); scaleAt(s * Math.exp(-e.deltaY * 0.0015), ...inFrame(e.clientX, e.clientY)); }, { passive: false });
+  stage.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 40 : 10, moves = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+    if (moves[e.key]) { e.preventDefault(); x += moves[e.key][0]; y += moves[e.key][1]; show(); }
+    else if (e.key === '+' || e.key === '=') { e.preventDefault(); scaleAt(s * 1.1); } else if (e.key === '-') { e.preventDefault(); scaleAt(s / 1.1); }
+  });
+  // what's in the frame, at w × h (smaller or plainer until it's small enough to keep)
+  const render = () => {
+    let q = 0.9, cw = w, ch = h;
+    for (let tries = 0; tries < 10; tries++) {
+      const c = Object.assign(document.createElement('canvas'), { width: Math.max(1, Math.round(cw)), height: Math.max(1, Math.round(ch)) });
+      const k = c.width / FW, ctx = c.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, x * k, y * k, iw * s * k, ih * s * k);
+      let out = c.toDataURL('image/webp', q);
+      if (!out.startsWith('data:image/webp')) out = c.toDataURL('image/jpeg', q);
+      if (out.length <= maxChars) return out;
+      if (q > 0.5) q -= 0.15; else { cw *= 0.8; ch *= 0.8; }
+    }
+    throw new Error('That picture is too big, even made smaller.');
+  };
+  return new Promise((done) => {
+    const apply = () => { let out = null; try { out = render(); } catch (e) { toast(String((e && e.message) || e)); return; } m.close(out); };
+    const m = modal({ title, sub: 'Drag the picture to move it. Scale it with the slider, the wheel or two fingers.', cls: 'crop-dlg', onClose: (v) => done(v || null),
+      body: [stage, el('div', { className: 'crop-row' }, icon('image', 14), zoom, icon('image', 22))],
+      actions: [el('button', { className: 'btn ghost', onclick: reset }, 'Reset'), el('span', { style: 'flex:1' }),
+        el('button', { className: 'btn', onclick: () => m.close(null) }, 'Cancel'), el('button', { className: 'btn primary crop-ok', onclick: apply }, ok)] });
+    show(); setTimeout(() => stage.focus(), 0);
+  });
+}
+
 // ---------- banners and nameplates: one of these gradients (g:0 … g:9), or a picture ----------
 export const GRADS = [
   'linear-gradient(135deg,#7a3b41,#c17278)', 'linear-gradient(135deg,#8c1d5c,#e05aa8)', 'linear-gradient(135deg,#7d1418,#e04a4a)',

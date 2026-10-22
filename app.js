@@ -3,7 +3,7 @@
 // customise, stickers you can make, and your own CSS themes you can edit. UI icons are inline SVG (not OS emoji).
 // Signed out it all stays in this browser; sign in (Discord, GitHub or email, via Supabase) and it's shared and live.
 import { Store, ready } from './backend.js';
-import { $, el, ICON, BRAND, brand, svgHTML, icon, readImage, scaled, pickFile, pickFiles, shrink, toast, attempt, copyText, modal, ask, confirmBox, menu, closeMenu, GRADS, paint } from './ui.js';
+import { $, el, ICON, BRAND, brand, svgHTML, icon, readImage, scaled, pickFile, pickFiles, shrink, cropPicture, toast, attempt, copyText, modal, ask, confirmBox, menu, closeMenu, GRADS, paint } from './ui.js';
 import { render as richText, links as linksIn, plain as plainText, jumbo } from './format.js';
 import { embed } from './embeds.js';
 import { joinCall, mediaTrouble } from './calls.js';
@@ -34,9 +34,9 @@ const DEFAULT_PREFS = {
   membersDefault: true, membersStyle: 'panel', memberOffline: true, memberStatusText: false, decorations: 'on', effects: 'on',
   // the window's frame: a title bar on top, rounded panels, your controls at the foot of the server rail, the server's banner
   // under its name, and category names with a line under them (Customize → Layout)
-  titlebar: 'on', titleAlign: 'center', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'line', layoutV: 2,
+  titlebar: 'on', titleAlign: 'center', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'line', layoutV: 3,
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
-  railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 136, statusH: 30, titleH: 32, panelR: 14, panelGap: 6,
+  railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 88, statusH: 30, titleH: 32, panelR: 14, panelGap: 6,
   avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20,
   // where things sit: the columns left to right, the sidebar and main area top to bottom, and the status bar
   cols: ['rail', 'side', 'main', 'members'], sideOrder: ['head', 'body', 'panel'], mainOrder: ['top', 'content', 'composer'], statusPos: 'top',
@@ -296,6 +296,8 @@ function gameRows(x, onBoard) {
 const safeColor = (c, fallback = '#5b7fd6') => (/^#[0-9a-f]{6}$/i.test(c || '') ? c : fallback);
 const safeImg = (u) => (typeof u === 'string' && (/^data:image\/(png|jpeg|webp|gif);base64,/.test(u)
   || /^https:\/\/(cdn\.discordapp\.com|avatars\.githubusercontent\.com|[a-z0-9-]+\.supabase\.co)\//.test(u)) ? u : '');
+// pick a picture, then move and scale it in its frame (ui.js cropPicture): the data URL, or null if you didn't
+const pickPicture = (opts) => new Promise((done) => pickFile(async (f) => { try { done(await cropPicture(f, opts)); } catch (e) { toast(String((e && e.message) || e)); done(null); } }));
 // is this person you?
 function isMe(u) {
   if (!u) return false;
@@ -789,7 +791,8 @@ function renderSide() {
     id === 'invite' ? (shown('invite') && inviting ? el('button', { className: 'sh-btn', title: 'Invite People', onclick: (e) => { e.stopPropagation(); inviteFriends(serverId); } }, icon('personAdd', 18)) : null)
       : shown('serverMenu') ? el('span', { className: 'drop' }, icon('chevD', 18)) : null));
   head.replaceChildren(row, ...(bg && under ? [el('div', { className: 'side-banner' })] : []));
-  head.onclick = () => serverMenu(row);
+  if (bg && under) { head.classList.remove('btn-like'); row.classList.add('btn-like'); row.onclick = () => serverMenu(row); }
+  else head.onclick = () => serverMenu(row);
   body.replaceChildren();
   body.oncontextmenu = (e) => { if (e.target.closest('.chan, .cat, .vmem')) return; e.preventDefault(); sideCtx(e.clientX, e.clientY); };
   const cats = Store.categories(serverId), chans = Store.channels(serverId);
@@ -3812,7 +3815,7 @@ async function renameGroup(d) {
   if (n) { Store.updateGroup(d.id, { name: n }); renderAll(); }
 }
 function changeGroupIcon(d) {
-  pickFile(async (f) => { try { Store.updateGroup(d.id, { icon: await shrink(f, 256, 256, 150000) }); renderAll(); } catch (e) { toast(String((e && e.message) || e)); } });
+  pickPicture({ w: 256, h: 256, round: true, title: 'Group Icon', ok: 'Use It', maxChars: 150000 }).then((icon) => { if (icon) { Store.updateGroup(d.id, { icon }); renderAll(); } });
 }
 async function leaveGroup(d) {
   if (!(await confirmBox({ title: `Leave ‘${dmName(d)}’`, text: 'Are you sure you want to leave this group? You won’t be able to rejoin unless you are re-invited.', ok: 'Leave Group', danger: true }))) return;
@@ -3895,8 +3898,8 @@ function addServerFlow() {
       el('button', { className: 'btn ghost wide', onclick: () => { m.close(); view = 'discover'; renderAll(); } }, icon('compass', 16), 'Browse public servers'))]);
   const customize = (t) => {
     let img = '';
-    const up = el('button', { className: 'up-circle', title: 'Upload an icon', onclick: () => pickFile(async (f) => {
-      try { img = await shrink(f, 256, 256, 150000); up.replaceChildren(el('img', { src: img, alt: '' })); } catch (e) { toast(String(e.message || e)); }
+    const up = el('button', { className: 'up-circle', title: 'Upload an icon', onclick: () => pickPicture({ w: 256, h: 256, round: true, title: 'Server Icon', ok: 'Use It', maxChars: 150000 }).then((d) => {
+      if (d) { img = d; up.replaceChildren(el('img', { src: img, alt: '' })); }
     }) }, icon('cam', 24), el('span', {}, 'Upload'));
     const name = el('input', { type: 'text', value: `${me.name}’s server`, maxLength: 60 });
     const create = el('button', { className: 'btn primary', textContent: 'Create' });
@@ -4555,7 +4558,9 @@ function loadPrefs(from = null) {
   p.sideW = was(saved.sideW, { narrow: 190, medium: 240, wide: 300 }, 240);
   if (typeof saved.membersW !== 'number') p.membersW = { narrow: 180, medium: 232, wide: 300 }[saved.memberW] || 232;
   if (typeof saved.avatarPx !== 'number') p.avatarPx = { s: 28, m: 36, l: 44 }[saved.avatarSize] || 36;
-  p.bannerH = was(saved.bannerH, { s: 96, m: 136, l: 180 }, 136);
+  p.bannerH = was(saved.bannerH, { s: 96, m: 136, l: 180 }, DEFAULT_PREFS.bannerH);
+  // (the banner under a server's name got shorter, from 136 to 88: unless you'd made it another height yourself)
+  if ((saved.layoutV || 1) < 3) { if (p.bannerH === 136) p.bannerH = DEFAULT_PREFS.bannerH; p.layoutV = 3; }
   if (typeof saved.icTop !== 'number' && saved.btnSize) p.icTop = p.icComposer = p.icPanel = { s: 16, m: 20, l: 25 }[saved.btnSize] || 20;
   for (const k of ['callBtns', 'composerSticker', 'composerSend', 'railSize', 'memberW', 'avatarSize', 'btnSize']) delete p[k];
   // (channels got Discord's settings cog on hover; the old × to delete one is now in it, and in the right-click menu)
@@ -4907,7 +4912,7 @@ function welcomeSetup() {
   let avatar = me.avatar || '', color = me.color;
   const pv = el('div', { className: 'ws-av' });
   const draw = () => pv.replaceChildren(avatarEl({ name: me.name, color, avatar, me: true }, { size: 96 }));
-  const up = el('button', { className: 'btn', onclick: () => pickFile(async (f) => { try { avatar = await shrink(f, 256, 256, 150000); draw(); } catch (e) { toast(String(e.message || e)); } }) }, icon('image', 16), 'Upload a Picture');
+  const up = el('button', { className: 'btn', onclick: () => pickPicture({ w: 256, h: 256, round: true, title: 'Your Picture', ok: 'Use It', maxChars: 150000 }).then((d) => { if (d) { avatar = d; draw(); } }) }, icon('image', 16), 'Upload a Picture');
   const swatches = el('div', { className: 'swatches' }, ...COLORS.map((c) => { const b = el('button', { className: c === color ? 'on' : '', title: c }); b.style.background = c; b.onclick = () => { color = c; [...swatches.children].forEach((x) => x.classList.toggle('on', x === b)); draw(); }; return b; }));
   const pron = el('input', { type: 'text', maxLength: 24, placeholder: 'she/her, they/them…', value: me.pronouns || '' });
   const about = el('textarea', { maxLength: 300, placeholder: 'A little about you', className: 'area', value: me.about || '' });
@@ -4982,8 +4987,8 @@ function picturePicker(value, onPick, { w = 960, h = 540, label = 'Upload a pict
   const draw = (v) => { grid.replaceChildren(colorTile(v),
     el('button', { className: 'grad none' + (!v ? ' on' : ''), title: 'None', onclick: () => { draw(''); onPick(''); } }, icon('ban', 18)),
     ...FLAT.map(([c, name]) => { const b = el('button', { className: 'grad flat' + (String(v).toLowerCase() === c ? ' on' : ''), title: name, onclick: () => { draw(c); onPick(c); } }); b.style.background = c; return b; }),
-    el('button', { className: 'grad up' + (v && v.startsWith('data:') ? ' on' : ''), title: label, onclick: () => pickFile(async (f) => {
-      try { const d = await shrink(f, w, h, w > 600 ? 380000 : 190000); draw(d); onPick(d); } catch (e) { toast(String(e.message || e)); }
+    el('button', { className: 'grad up' + (v && v.startsWith('data:') ? ' on' : ''), title: label, onclick: () => pickPicture({ w, h, title: label.replace(/^Upload an? /, (m) => '').replace(/^./, (c) => c.toUpperCase()), ok: 'Use It', maxChars: w > 600 ? 380000 : 190000 }).then((d) => {
+      if (d) { draw(d); onPick(d); }
     }) }, v && v.startsWith('data:') ? el('img', { src: safeImg(v), alt: '' }) : icon('image', 18))); const f = fadeRow(v); if (f) grid.append(f); };
   draw(value || '');
   return grid;
@@ -5016,7 +5021,7 @@ function openProfileEditor() {
   const plateT = tile('wide', 'Change Nameplate', () => surfaceDialog('plate', d.plate, (v) => { d.plate = v; update(); }, asUser));
   const avT = tile('sq', 'Change Avatar', (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    menu([{ label: 'Upload a Picture', icon: 'image', action: () => pickFile(async (f) => { try { d.avatar = await shrink(f, 256, 256, 150000); update(); } catch (er) { toast(String(er.message || er)); } }) },
+    menu([{ label: 'Upload a Picture', icon: 'image', action: () => pickPicture({ w: 256, h: 256, round: true, title: 'Your Picture', ok: 'Use It', maxChars: 150000 }).then((p) => { if (p) { d.avatar = p; update(); } }) },
       d.avatar && { label: 'Remove Picture', icon: 'trash', action: () => { d.avatar = ''; update(); } },
       { label: 'Colour Behind Your Initials', icon: 'palette', action: () => openColor({ anchor: avT, value: d.color, title: 'Avatar colour', onInput: (c) => { d.color = c; update(); }, onDone: (c) => { d.color = c; update(); } }) }], r.left, r.bottom + 6);
   });
@@ -5934,11 +5939,11 @@ function svProfile(sv, redraw) {
       el('h3', {}, 'Name'), name,
       el('h3', {}, 'Icon'), el('p', { className: 'hint' }, 'A square picture works best.'),
       el('div', { className: 'btn-row' },
-        el('button', { className: 'btn primary', onclick: () => pickFile(async (f) => { try { img = await shrink(f, 256, 256, 150000); iconKey = ''; draw(); } catch (e) { toast(String(e.message || e)); } }) }, 'Change Server Icon'),
+        el('button', { className: 'btn primary', onclick: () => pickPicture({ w: 256, h: 256, round: true, title: 'Server Icon', ok: 'Use It', maxChars: 150000 }).then((d) => { if (d) { img = d; iconKey = ''; draw(); } }) }, 'Change Server Icon'),
         el('button', { className: 'btn ghost', onclick: () => { img = ''; iconKey = 'bot'; draw(); } }, 'Use the robot'),
         el('button', { className: 'btn ghost danger', onclick: () => { img = ''; iconKey = ''; draw(); } }, 'Remove Icon')),
       el('h3', {}, 'Banner'), el('p', { className: 'hint' }, 'The picture at the top of the channel list. (Anyone can hide banners for themselves in Layout.)'),
-      picturePicker(banner, (v) => { banner = v; draw(); }, { w: 960, h: 540, label: 'Upload a banner' }),
+      picturePicker(banner, (v) => { banner = v; draw(); }, { w: 960, h: 360, label: 'Upload a banner' }),
       el('h3', {}, 'Description'), desc,
       el('div', { className: 'row', style: 'justify-content:flex-start;margin-top:18px' }, el('button', { className: 'btn primary', onclick: save }, 'Save Changes'))),
     el('div', { className: 'pv-col' }, el('div', { className: 'pv-card' }, pvBanner, el('div', { className: 'pv-body' }, pvIcon, pvName,
@@ -5989,7 +5994,7 @@ function svRoles(sv, redraw, state) {
   const iconOk = Store.kind === 'supabase' && Store.canBux();
   const pickEmoji = (e) => { e.stopPropagation(); openPicker({ tab: 'emoji', emojiOnly: true, anchor: e.currentTarget, still: motionOff(),
     servers: [], emojiOf: () => [], stickersOf: () => [], own: [], builtin: [], safeImg, canManage: () => false, manage: () => {}, onEmoji: (t, keep, custom) => { if (!custom) setIcon(t); }, onSticker: () => {} }); };
-  const upload = () => pickFile(async (f) => { const url = await attempt(() => shrink(f, 64, 64, 38000)); if (url) setIcon(url); });
+  const upload = () => pickPicture({ w: 64, h: 64, title: 'Role Icon', ok: 'Use It', maxChars: 38000 }).then((url) => { if (url) setIcon(url); });
   const iconRow = el('div', { className: 'role-icon-row' }, el('div', { className: 'role-icon-pv' }, roleIconEl(r, 34) || icon('image', 22)),
     el('div', { className: 'grow' }, el('b', {}, r.icon ? 'Role icon' : 'No icon yet'), el('small', {}, 'Shown beside the names of people with this role in chat, and on the role’s group in the member list.')),
     el('button', { className: 'btn', onclick: pickEmoji }, icon('smile', 16), 'Emoji'), el('button', { className: 'btn', onclick: upload }, icon('image', 16), 'Upload'),

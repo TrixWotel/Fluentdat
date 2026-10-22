@@ -2240,3 +2240,16 @@ button.pc-name:hover { text-decoration: underline; }
 .mp.m-panel.in-rail { position: relative; background: transparent; padding: 3px 0 5px; flex-direction: column; flex: none; }
 .m-panel.in-rail .m-bar { flex: none; width: 100%; }
 .m-panel.in-rail .mchip[data-chip="me"] i { width: var(--chip); height: var(--chip); border-radius: 50%; background: var(--accent); display: block; }
+/* the banner under a server's name is just a picture: only the name (and its arrow) opens the server menu */
+.side-head.banner-under .sh-row.btn-like { cursor: pointer; } .side-head.banner-under .sh-row.btn-like:hover { background: var(--hover); }
+.side-head.banner-under .side-banner { cursor: default; }
+/* a picture, moved and scaled in its frame before it's used */
+.dialog.crop-dlg { width: auto; max-width: calc(100vw - 32px); }
+.crop-stage { position: relative; overflow: hidden; margin: 4px auto 14px; border-radius: 12px; cursor: grab; touch-action: none; user-select: none; outline: none;
+  background: #111 repeating-conic-gradient(#ffffff12 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+.crop-stage.moving { cursor: grabbing; }
+.crop-stage:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.crop-img { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.crop-frame { position: absolute; pointer-events: none; border-radius: 8px; box-shadow: 0 0 0 999px #000000a6, inset 0 0 0 2px #ffffffd9; }
+.crop-frame.round { border-radius: 50%; }
+.crop-row { display: flex; align-items: center; gap: 10px; color: var(--muted); padding: 0 6px; } .crop-zoom { flex: 1; }
