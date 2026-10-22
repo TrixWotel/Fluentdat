@@ -38,7 +38,7 @@ const DEFAULT_PREFS = {
   titlebar: 'on', titleAlign: 'center', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'dim', layoutV: 4,
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
   railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 88, statusH: 30, titleH: 32, panelR: 14, panelGap: 6,
-  avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20, topGap: 8, railGap: 12,
+  avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20, topGap: 8, railGap: 12, reactH: 22,
   // where things sit: the columns left to right, the sidebar and main area top to bottom, and the status bar
   cols: ['rail', 'side', 'main', 'members'], sideOrder: ['head', 'body', 'panel'], mainOrder: ['top', 'content', 'composer'], statusPos: 'top',
   radius: 'soft', uiFont: 'system',
@@ -58,6 +58,8 @@ const DEFAULT_PREFS = {
   connLook: 'png',
   // Shop nameplates move all the time, or only while the pointer is on them
   plateMove: 'always',
+  // profile cards' buttons and text: in the profile's own colours ('theirs'), or in your theme's ('mine')
+  cardTheme: 'theirs',
 };
 const LAYOUT_PRESETS = {
   Default: {},
@@ -70,7 +72,7 @@ const LAYOUT_PRESETS = {
 };
 // every size you can set in Layout: [what it is, smallest, largest] in pixels
 const SIZES = {
-  railW: ['Server rail width', 48, 120], railGap: ['Space between servers', 2, 28], sideW: ['Sidebar width', 160, 420], membersW: ['Member list width', 160, 420],
+  railW: ['Server rail width', 48, 120], railGap: ['Space between servers', 2, 28], reactH: ['Reactions', 16, 36], sideW: ['Sidebar width', 160, 420], membersW: ['Member list width', 160, 420],
   topH: ['Top bar height', 36, 90], composerH: ['Message box height', 40, 160], panelH: ['User panel height', 40, 100],
   bannerH: ['Server banner height', 60, 260], statusH: ['Status bar height', 20, 56], titleH: ['Title bar height', 22, 56], panelR: ['Panel corners', 0, 28], panelGap: ['Space between panels', 0, 16],
   avatarPx: ['Message avatars', 20, 64],
@@ -1409,7 +1411,7 @@ function syncReacts(node, m, list, animate) {
       b.onmouseenter = () => reactTip(b); b.onmouseleave = hideTip;
     }
     b._r = r;
-    b.classList.toggle('me', !!r.me);
+    b.classList.toggle('mine', !!r.me);
     const now = String(r.count);
     if (b.dataset.n !== now) {
       const was = b.dataset.n; b.dataset.n = now; b.querySelector('.rn').textContent = now;
@@ -2288,7 +2290,9 @@ const tagChipFor = (u) => { const t = tagFor(u); return t ? tagChip(t, (e) => sh
 const hexOk = (c) => (/^#[0-9a-f]{6}$/i.test(c || '') ? c : '');
 const lum = (hex) => { const n = parseInt(hex.slice(1), 16); return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255; };
 // a profile's own colours: its card fades from the first to the second, as on Discord
-function themeCard(node, theme) {
+// (with a colour: a profile card, whose buttons take that colour when it has no theme of its own)
+function themeCard(node, theme, color) {
+  if (color !== undefined) { const c = safeColor(color, '#5865f2'); node.classList.add('pcard'); node.style.setProperty('--pc-accent', c); node.style.setProperty('--pc-ink', lum(c) > 0.6 ? '#111' : '#fff'); }
   const t1 = theme ? hexOk(theme[0]) : '', t2 = theme ? hexOk(theme[1]) : '';
   node.classList.toggle('themed', !!(t1 || t2));
   if (!(t1 || t2)) { node.style.removeProperty('--t1'); node.style.removeProperty('--t2'); node.classList.remove('themed-light'); return node; }
@@ -3028,7 +3032,7 @@ function showProfile(user, anchor) {
   }
   pop = el('div', { className: 'pop prof' }, banner, inner);
   pop.dataset.uid = String(user.id || user.name); pop.dataset.src = src;
-  themeCard(pop, u.theme); withEffect(pop, u.effect); withFrame(pop, u.frame);
+  themeCard(pop, u.theme, u.color); withEffect(pop, u.effect); withFrame(pop, u.frame);
   document.body.append(pop); placePop(anchor);
   if (bio && bio.scrollHeight > bio.clientHeight + 2) bio.after(el('button', { className: 'link-btn p-fullbio', onclick: () => toFull() }, 'View Full Bio'));
   if (anchor.classList && anchor.classList.contains('mem')) anchor.classList.add('open');
@@ -3164,7 +3168,7 @@ function dmPanel(u) {
   if (!u.banner && u.id) Store.profileFull(u.id).then((p) => { if (p && p.banner && banner.isConnected) setBanner(banner, p.banner, u.color); }, () => {});
   const more = el('button', { className: 'dmp-more', title: 'More', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); profileMenu(u, r.right - 220, r.top - 8); } }, icon('more', 18));
   return withFrame(withEffect(themeCard(el('div', { className: 'dmp' }, el('div', { className: 'dmp-scroll' }, banner, profileHead(u, { onOpen: () => fullProfile(u) }), ...body),
-    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'), more)), u.theme), u.effect), u.frame);
+    el('div', { className: 'dmp-foot' }, el('button', { className: 'dmp-full', onclick: () => fullProfile(u) }, 'View Full Profile'), more)), u.theme, u.color), u.effect), u.frame);
 }
 
 // the whole profile, floating over Fluentdat (as TrixWotel drew it): their card on the left (message them, befriend them,
@@ -3194,7 +3198,7 @@ function fullProfile(user, tab = null) {
   let extras = (xid && Store.extrasNow(xid)) || null, fetched = !xid;
   const parts = profileParts(u, { full: true, onTab: (t) => { if (tabs().some(([id]) => id === t) && tab !== t) { tab = t; draw(); } }, closeFirst: () => w.close() });
   const card = el('div', { className: 'fp-card2' }, banner, profileHead(u, { size: 96, self }), acts, ...parts);
-  themeCard(card, u.theme); withEffect(card, u.effect);
+  themeCard(card, u.theme, u.color); withEffect(card, u.effect);
   const leftBox = withFrame(el('div', { className: 'fp-lwrap' }, card), u.frame);          // (the frame stays put while the card scrolls)
   // the right side: tabs
   const right = el('div', { className: 'fp-right' });
@@ -3445,7 +3449,7 @@ function showAccount(anchor) {
       el('button', { className: 'pn', title: 'View Full Profile', onclick: toFull }, styledName(el('span', {}, me.name), u), tagChipFor(u)),
       el('div', { className: 'p-handle' }, el('span', { className: 'pr' }, [live ? (Store.account() || {}).login : '', me.pronouns].filter(Boolean).join(' • ') || (STATUSES.find((x) => x[0] === st) || [, 'Online'])[1]), badgeRow(u)),
       me.about ? el('div', { className: 'ab p-bio' }, me.about) : null, games, card1, card2));
-  themeCard(pop, me.theme); withEffect(pop, me.effect); withFrame(pop, me.frame);
+  themeCard(pop, me.theme, me.color); withEffect(pop, me.effect); withFrame(pop, me.frame);
   const fill = (x) => games.replaceChildren(...gameRows(x, (tab) => { closePop(); fullProfile(u, tab); }));
   fill(Store.extrasNow(myXid())); Store.profileExtras(myXid()).then((x) => { if (games.isConnected) fill(x); }, () => {});
   document.body.append(pop); placePop(anchor);
@@ -4928,8 +4932,9 @@ function applyPrefs() {
   S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
   S('namehover', prefs.nameHover === 'underline' ? 'underline' : 'off');
   setTileLook(prefs.connLook);
-  V('--top-gap', prefs.topGap); V('--rail-gap', prefs.railGap);
+  V('--top-gap', prefs.topGap); V('--rail-gap', prefs.railGap); V('--react-h', prefs.reactH);
   S('platemove', prefs.plateMove === 'hover' ? 'hover' : 'always');
+  S('cardtheme', prefs.cardTheme === 'mine' ? 'mine' : 'theirs');
   V('--rail-w', prefs.railW); V('--side-w', prefs.sideW); V('--members-w', prefs.membersW); V('--top-h', prefs.topH);
   V('--composer-h', prefs.composerH); V('--panel-h', prefs.panelH); V('--banner-h', prefs.bannerH); V('--status-h', prefs.statusH);
   V('--title-h', prefs.titleH); V('--panel-r', prefs.panelR); V('--panel-gap', prefs.panelGap);
@@ -5450,7 +5455,7 @@ function openProfileEditor() {
     count.textContent = `${d.about.length}/300`;
     for (const n of [...card.querySelectorAll(':scope > .pfx, :scope > .pframe')]) n.remove();
     card.classList.remove('framed');
-    themeCard(card, u.theme); withEffect(card, d.effect); withFrame(card, d.frame);
+    themeCard(card, u.theme, d.color || u.color); withEffect(card, d.effect); withFrame(card, d.frame);
     bar.classList.toggle('on', dirty());
   }
   async function save() {
@@ -5553,7 +5558,7 @@ function surfaceDialog(kind, current, onApply, who) {
     drawShop();
     const u = { ...who(), [kind]: cur };
     if (kind === 'plate') {
-      const rows = [0, 1, 2, 3, 4].map((i) => i === 2 ? plateOn(el('div', { className: 'mem sf-row me' }, avatarEl(u, { size: 32 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, u.name), u)))), cur)
+      const rows = [0, 1, 2, 3, 4].map((i) => i === 2 ? plateOn(el('div', { className: 'mem sf-row mine' }, avatarEl(u, { size: 32 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, styledName(el('span', { className: 'nmt' }, u.name), u)))), cur)
         : el('div', { className: 'sf-row ghost' }, el('i', { className: 'sf-dot' }), el('i', { className: 'sf-line' })));
       pv.replaceChildren(el('div', { className: 'sf-list' }, ...rows));
     } else pv.replaceChildren(mockCard(u));
@@ -6901,7 +6906,7 @@ function layoutStudio(redraw) {
     });
   }
   const partForSize = (key) => ({ railW: 'rail', railGap: 'rail', sideW: 'side', membersW: 'members', topH: 'top', composerH: 'composer', panelH: 'panel', bannerH: 'head',
-    statusH: 'status', avatarPx: 'content', memberAv: 'members', chanH: 'body', icTop: 'top', topGap: 'top', icComposer: 'composer', icPanel: 'panel', fontSize: 'content' })[key] || studio.sel;
+    statusH: 'status', avatarPx: 'content', reactH: 'content', memberAv: 'members', chanH: 'body', icTop: 'top', topGap: 'top', icComposer: 'composer', icPanel: 'panel', fontSize: 'content' })[key] || studio.sel;
   function makeGhost(node, ev) {
     const r = node.getBoundingClientRect(), g = node.cloneNode(true);
     g.classList.add('m-ghost');
@@ -7053,7 +7058,7 @@ function layoutStudio(redraw) {
       pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']], 'Long lines can stop at a comfortable width.'));
     if (id === 'top') out.push(flag('topbar', 'Show the top bar', 'The channel name and its buttons.'), size('topH'), size('icTop'), size('topGap'),
       pickRow('btnLabels', 'Labels', [['off', 'Icons only'], ['on', 'Icons and words']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('top'));
-    if (id === 'content') out.push(flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), pickRow('avatarShape', 'Avatar shape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']]),
+    if (id === 'content') out.push(flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), size('reactH'), pickRow('avatarShape', 'Avatar shape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']]),
       size('fontSize', 'Everything in the app scales with it.'), pickRow('density', 'Spacing', [['cozy', 'Cozy'], ['compact', 'Compact']]),
       pickRow('timestamps', 'Timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']]), flag('group', 'Group messages', 'One heading for several messages in a row.'),
       pickRow('dividers', 'Date dividers', onoff), pickRow('hover', 'Highlight on hover', onoff), pickRow('nameHover', 'Names on hover', [['off', 'No line'], ['underline', 'A line under them']]), pickRow('startHeaders', 'Conversation start', onoff, '“Welcome to #channel”.'),
@@ -7179,7 +7184,7 @@ function czPane(id, redraw) {
   if (id === 'messages') return [...head('Messages', 'How the chat looks.'),
     row2('Spacing', 'Cozy gives each message room. Compact fits more on screen.', pick('density', [['cozy', 'Cozy'], ['compact', 'Compact']])),
     size('fontSize', 'Everything in the app scales with it.'),
-    flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), row2('Avatar shape', '', pick('avatarShape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']])),
+    flag('avatars', 'Avatars', 'Pictures beside messages.'), size('avatarPx'), size('reactH'), row2('Avatar shape', '', pick('avatarShape', [['round', 'Circle'], ['squircle', 'Squircle'], ['square', 'Rounded square']])),
     row2('Timestamps', '', pick('timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']])),
     flag('group', 'Group messages', 'One heading for several messages in a row from the same person.'),
     row2('Date dividers', 'A line with the date between days.', pick('dividers', [['on', 'Shown'], ['off', 'Hidden']])),
@@ -7195,6 +7200,7 @@ function czPane(id, redraw) {
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => set('decorations', on ? 'on' : 'off'))),
     row2('Profile effects and frames', 'Snow, sparkles, frames and more on profile cards.', sw(prefs.effects !== 'off', (on) => set('effects', on ? 'on' : 'off'))),
     flag('plates', 'Nameplates', 'Pictures behind names in member lists and DMs.'),
+    row2('Profile cards’ buttons and text', 'In the colours of the profile you’re looking at (its theme, or its colour), or in your own theme’s.', pick('cardTheme', [['theirs', 'The profile’s colours'], ['mine', 'Your theme']])),
     row2('Moving nameplates', 'Nameplates from the Shop drift, glow and shimmer behind names.', pick('plateMove', [['always', 'All the time'], ['hover', 'When you point at them']])),
     row2('Connection icons', 'How the accounts people added look on their profiles.', pick('connLook', [['png', 'The services’ own logos'], ['theme', 'Tiles in your theme’s colours'], ['white', 'White tiles']])),
     flag('dmPanel', 'Profile beside DMs', 'Their card, beside your conversation with them.'),

@@ -1308,7 +1308,7 @@ img.emoji { width: 1.375em; height: 1.375em; object-fit: contain; vertical-align
   color: var(--text); font-size: .9rem; font-weight: 600; transition: background-color .15s, box-shadow .15s, transform .12s; }
 .react:hover { box-shadow: inset 0 0 0 1px var(--edge); background: var(--hover); }
 .react:active { transform: scale(.94); }
-.react.me { background: color-mix(in srgb, #5865f2 18%, var(--side)); box-shadow: inset 0 0 0 1px #5865f2; color: #c9cdfb; }
+.react.mine { background: color-mix(in srgb, #5865f2 18%, var(--side)); box-shadow: inset 0 0 0 1px #5865f2; color: #c9cdfb; }
 .react .re { font-size: 1.05rem; line-height: 1; display: inline-block; } .react img.re { width: 18px; height: 18px; object-fit: contain; }
 .react .re.gone { font-size: .75rem; font-style: italic; color: var(--muted); }
 .react .rn { min-width: 8px; font-variant-numeric: tabular-nums; }
@@ -2016,7 +2016,7 @@ button.p-bubble.mine:hover { background: var(--hover); color: var(--text); }
 .sf-list { display: grid; gap: 4px; padding: 10px 8px; border-radius: 12px; background: var(--side); box-shadow: inset 0 0 0 1px var(--edge-soft); width: 100%; }
 .sf-row { height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border-radius: 8px; }
 .sf-row.ghost .sf-dot { width: 32px; height: 32px; border-radius: 50%; background: var(--input); flex: none; } .sf-row.ghost .sf-line { width: 55%; height: 10px; border-radius: 5px; background: var(--input); }
-.sf-row.me { pointer-events: none; } .sf-pv { display: grid; place-items: center; }
+.sf-row.mine { pointer-events: none; } .sf-pv { display: grid; place-items: center; }
 .dialog.th-dlg { width: min(720px, calc(100vw - 32px)); max-width: none; }
 .th { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 20px; align-items: start; }
 .th-sw { display: flex; gap: 18px; margin-bottom: 16px; } .th-sw label { display: grid; justify-items: center; gap: 6px; font-size: .8rem; color: var(--muted); cursor: pointer; }
@@ -2421,3 +2421,26 @@ button.pc-name:hover { text-decoration: underline; }
 .msg.pinged::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #f0b232; pointer-events: none; }
 :root[data-radius] .msg.pinged, .msg.pinged { border-radius: 0; }
 .bdl-sale { padding: 1px 7px; border-radius: 10px; background: color-mix(in srgb, #f0b232 18%, transparent); color: #f0b232; font-size: .72rem; font-weight: 800; }
+/* Round N: a call's icon the size of the text, reactions sized by Customize → Messages → Reactions, the full profile's
+   card that scrolls instead of squashing its buttons onto its badges, its frame around the rounded card itself, and
+   profile cards in the profile's own colours (its theme, else its colour) unless you'd rather they took your theme's */
+.sys-ic svg.ic { width: 16px; height: 16px; }
+.reacts { margin-top: 3px; gap: 4px; }
+.react { height: var(--react-h, 22px); padding: 0 calc(var(--react-h, 22px) * .32); gap: 4px; border-radius: calc(var(--react-h, 22px) * .32); font-size: calc(var(--react-h, 22px) * .55); }
+.react .re { font-size: calc(var(--react-h, 22px) * .64); } .react img.re { width: calc(var(--react-h, 22px) * .7); height: calc(var(--react-h, 22px) * .7); }
+.react-add { width: calc(var(--react-h, 22px) + 8px); height: var(--react-h, 22px); border-radius: calc(var(--react-h, 22px) * .32); }
+.react-add svg.ic { width: calc(var(--react-h, 22px) * .68); height: calc(var(--react-h, 22px) * .68); }
+.fp-card2 > * { flex-shrink: 0; }
+.fp-lwrap.framed > .pframe { inset: 12px; border-radius: 16px; }
+:root:not([data-cardtheme="mine"]) .pcard:not(.themed) { --accent: var(--pc-accent); --accent-text: var(--pc-ink); }
+:root:not([data-cardtheme="mine"]) .themed {
+  --text: #f2f3f5; --bright: #fff; --muted: rgba(255, 255, 255, .72); --edge: rgba(255, 255, 255, .26); --edge-soft: rgba(255, 255, 255, .14);
+  --input: rgba(0, 0, 0, .28); --hover: rgba(255, 255, 255, .14); --side: rgba(0, 0, 0, .22);
+  --accent: color-mix(in srgb, var(--t2) 28%, #fff); --accent-text: color-mix(in srgb, var(--t1) 80%, #000);
+}
+:root:not([data-cardtheme="mine"]) .themed.themed-light {
+  --text: #1d1d22; --bright: #000; --muted: rgba(0, 0, 0, .62); --edge: rgba(0, 0, 0, .24); --edge-soft: rgba(0, 0, 0, .13);
+  --input: rgba(255, 255, 255, .55); --hover: rgba(0, 0, 0, .08); --side: rgba(255, 255, 255, .42);
+  --accent: color-mix(in srgb, var(--t1) 25%, #000); --accent-text: color-mix(in srgb, var(--t2) 25%, #fff);
+}
+:root:not([data-cardtheme="mine"]) .themed .btn { color: var(--text); } :root:not([data-cardtheme="mine"]) .themed .btn.primary { color: var(--accent-text); }
