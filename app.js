@@ -2992,29 +2992,11 @@ function showProfile(user, anchor) {
       st === 'friend' ? tool('userCheck', 'Friends', (e) => { const r = e.currentTarget.getBoundingClientRect(); menu([{ label: 'Remove Friend', danger: true, action: () => unfriend(u) }], r.left, r.bottom + 4); }) : null,
       tool('more', 'More', (e) => openBeside(e.currentTarget, (r) => profileMenu(u, r.left, r.bottom + 4)))));
   }
-  const handle = [u.login && !u.bot ? u.login : '', u.pronouns || ''].filter(Boolean);
-  const inner = el('div', { className: 'inner' },
-    el('div', { className: 'p-head' }, el('button', { className: 'p-av', title: 'View Full Profile', onclick: () => toFull() }, avatarEl(u, { size: 74 })), bubbleEl(u, { mine })),
-    el('button', { className: 'pn', title: 'View Full Profile', onclick: () => toFull() }, styledName(el('span', {}, nameIn(u, sv)), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null),
-    sv && u.id && Store.nickIn(sv, u.id) ? el('div', { className: 'pr' }, u.name + ' · nickname in this server') : null,
-    handle.length || tagFor(u) ? el('div', { className: 'p-handle' }, handle.length ? el('span', { className: 'pr' }, handle.join(' • ')) : null, tagChipFor(u)) : null,
-    u.bot && u.via ? el('div', { className: 'pr' }, 'Run by @' + u.via + ' (Flubot speaks for whoever types the command)') : null,
-    u.bot ? null : badgeRow(u, { max: 7 }));
-  const sec = (title, ...kids) => el('div', { className: 'psec' }, el('h4', {}, title), ...kids);
-  if (live && !mine && !u.bot && u.id) {         // (what you have in common, with their faces: click it for the whole profile)
-    const ms = Store.mutualServerList(u.id), line = el('button', { className: 'p-mutual', onclick: () => toFull(ms.length ? 'servers' : 'friends') });
-    const say = (fr) => {
-      const faces = fr.length ? fr.slice(0, 3).map((f) => avatarEl(face(f), { size: 18 })) : ms.slice(0, 3).map((x) => serverFace(x, 18));
-      const words = [fr.length ? plural(fr.length, 'Mutual Friend') : '', ms.length ? plural(ms.length, 'Mutual Server') : ''].filter(Boolean).join(' • ');
-      line.replaceChildren(el('span', { className: 'p-faces' }, ...faces), el('span', {}, words)); line.hidden = !words;
-    };
-    say([]); inner.append(line);
-    Store.mutualFriends(u.id).then((fr) => { if (line.isConnected) say(fr); }, () => {});
-  }
-  if (playingNow(u.playing)) inner.append(sec('Playing', playingRow(u.playing)));
-  const bio = u.about ? el('div', { className: 'ab p-bio' }, u.about) : null;
-  if (bio) inner.append(bio);
-  if (u.since) inner.append(sec('Member Since', el('div', {}, new Date(u.since).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))));
+  const nick = sv && u.id ? Store.nickIn(sv, u.id) : '';
+  const inner = el('div', { className: 'inner pc-inner' }, profileHead(u, { size: 74, onOpen: () => toFull(), self: mine, name: nameIn(u, sv),
+    note: nick ? u.name + ' · nickname in this server' : u.bot && u.via ? 'Run by @' + u.via + ' (Flubot speaks for whoever types the command)' : null }),
+    ...profileParts(u, { onTab: (tab) => toFull(tab), closeFirst: () => closePop() }));
+  const bio = inner.querySelector('.dmp-about');
   // their roles in this server (admins can hand them out, or take them back, from here)
   if (live && sv && u.id && !u.bot) {
     const all = Store.roles(sv), can = Store.canManage(sv), has = all.filter((r) => ((Store.members(sv) || []).find((m) => m.id === u.id) || {}).roles?.includes(r.id));
@@ -3022,13 +3004,6 @@ function showProfile(user, anchor) {
       ...has.map((r) => el('span', { className: 'rchip' }, el('i', { style: `background:${safeColor(r.color, '#99aab5')}` }), roleIconEl(r, 14), r.name,
         can ? el('button', { className: 'rchip-x', title: `Take ${r.name} away`, onclick: async (e) => { e.stopPropagation(); if ((await attempt(() => Store.giveRole(sv, u.id, r.id, false))) !== null) { toast(`${u.name} is no longer ${r.name}.`); closePop(); } } }, icon('x', 11)) : null)),
       can && all.length ? el('button', { className: 'rchip add', title: 'Give a role', onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu(roleItems(sv, u), r.left, r.bottom + 4); } }, icon('plus', 13)) : null));
-  }
-  // what they added to their profile (fetched now): their games (Game Collection, Wishlist) and connections
-  const xid = u.bot ? null : mine ? myXid() : live && u.id ? u.id : null;
-  if (xid) {
-    const xbox = el('div', { className: 'p-extras' }), fill = (x) => xbox.replaceChildren(...gameRows(x, (tab) => toFull(tab)), ...extrasBits({ ...(x || {}), widgets: [] }, sec, () => toFull('board')));
-    fill(Store.extrasNow(xid)); inner.append(xbox);
-    Store.profileExtras(xid).then((x) => { if (xbox.isConnected) fill(x); }, () => {});
   }
   if (mine) inner.append(el('div', { className: 'card' }, el('button', { onclick: () => { closePop(); openProfileEditor(); } }, icon('edit'), 'Edit Profile')));
   else if (!u.bot) {
@@ -3163,11 +3138,13 @@ function profileParts(u, { full = false, onTab = () => {}, closeFirst = () => {}
   return out;
 }
 // the top of a profile card: their picture (with their status), their name, username and pronouns, and their bubble
-function profileHead(u, { size = 72, onOpen = null, self = isMe(u) } = {}) {
+function profileHead(u, { size = 72, onOpen = null, self = isMe(u), name = null, note = null } = {}) {
   const av = el(onOpen ? 'button' : 'div', { className: 'pc-av', title: onOpen ? 'View Full Profile' : '', ...(onOpen ? { onclick: onOpen } : {}) }, avatarEl(u, { size }));
-  const name = el(onOpen ? 'button' : 'div', { className: 'pc-name', ...(onOpen ? { onclick: onOpen, title: 'View Full Profile' } : {}) }, styledName(el('span', {}, u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null);
-  return el('div', { className: 'pc-id' }, av, el('div', { className: 'pc-names' }, name, u.login ? el('div', { className: 'pc-login' }, u.login) : null,
+  const nm = el(onOpen ? 'button' : 'div', { className: 'pc-name', ...(onOpen ? { onclick: onOpen, title: 'View Full Profile' } : {}) }, styledName(el('span', {}, name || u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null);
+  const head = el('div', { className: 'pc-id' }, av, el('div', { className: 'pc-names' }, nm, note ? el('div', { className: 'pc-pro' }, note) : null, u.login && !u.bot ? el('div', { className: 'pc-login' }, u.login) : null,
     u.pronouns ? el('div', { className: 'pc-pro' }, u.pronouns) : null, bubbleEl(u, { mine: self })));
+  head.style.setProperty('--pc-size', size + 'px');
+  return head;
 }
 // the profile beside a DM (as TrixWotel drew it): their banner, picture, name, username and pronouns, then the parts of
 // their profile, and View Full Profile and More (two buttons) at the bottom

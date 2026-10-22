@@ -93,7 +93,7 @@ export const ICON = {
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
   thread: '<path d="M4 7h11M4 12h8M4 17h5"/><path d="M15 12h5v8l-2.5-2H15z"/>',
   verified: '<path d="M12.00 1.60 L14.23 3.69 L17.20 2.99 L18.08 5.92 L21.01 6.80 L20.31 9.77 L22.40 12.00 L20.31 14.23 L21.01 17.20 L18.08 18.08 L17.20 21.01 L14.23 20.31 L12.00 22.40 L9.77 20.31 L6.80 21.01 L5.92 18.08 L2.99 17.20 L3.69 14.23 L1.60 12.00 L3.69 9.77 L2.99 6.80 L5.92 5.92 L6.80 2.99 L9.77 3.69Z" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m8.4 12.3 2.5 2.5 4.8-5" stroke="#fff" stroke-width="2.2"/>',
-  userCheck: '<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-7 7-7 1.6 0 3 .4 4.2 1.2"/><path d="m15 17 2.2 2.2L22 14.4"/>',
+  userCheck: '<circle cx="10.5" cy="7.5" r="4"/><path d="M3.5 20.5c0-4 3-7 7-7 1.6 0 3 .4 4.2 1.2"/><path d="m15.4 17.6 2.2 2.2 4.6-4.8"/>',
   medal: '<circle cx="12" cy="15" r="6"/><path d="M8.6 10.2 6 3h4l2 4 2-4h4l-2.6 7.2"/><path d="M12 12.4l.9 1.8 2 .3-1.45 1.4.35 2-1.8-.95-1.8.95.35-2-1.45-1.4 2-.3z" fill="currentColor" stroke="none"/>',
   frame: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M7 3.5c1.5 2 3.5 2 5 0 1.5 2 3.5 2 5 0M7 20.5c1.5-2 3.5-2 5 0 1.5-2 3.5-2 5 0"/>',
   collection: '<rect x="3.5" y="8.5" width="17" height="12" rx="2"/><path d="M6 5.5h12"/><path d="M8.5 2.5h7"/><path d="M8 13l2.5 2.5L16 10"/>',
