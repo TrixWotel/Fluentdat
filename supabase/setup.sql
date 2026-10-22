@@ -399,15 +399,17 @@ create table if not exists public.quest_rewards (
   kind text not null check (kind in ('deco', 'font', 'effect', 'frame', 'plate')),
   item text not null check (item ~ '^[a-z0-9-]{1,24}$')
 );
--- the Shop's bundles: a few things that go together, for less than they cost one by one (pct off; what you have
--- already isn't paid for again)
+-- the Shop's bundles: a few things that go together, for what they cost one by one (what you have already isn't paid
+-- for again), less on the holiday one is made for and on sale days (shop_sales)
 create table if not exists public.shop_bundles (
   id text primary key check (id ~ '^[a-z0-9-]{1,24}$'),
   name text not null check (char_length(name) between 1 and 40),
-  pct int not null check (pct between 0 and 90),
+  holiday text check (holiday ~ '^[a-z0-9-]{1,24}$'),
   items jsonb not null check (jsonb_typeof(items) = 'array' and jsonb_array_length(items) between 2 and 6),
   position int not null default 0
 );
+alter table public.shop_bundles add column if not exists holiday text check (holiday ~ '^[a-z0-9-]{1,24}$');
+alter table public.shop_bundles drop column if exists pct;
 -- a trade between two people: Datbux and things from the Shop each way; the other person accepts or declines it
 create table if not exists public.trades (
   id uuid primary key default gen_random_uuid(),
@@ -1584,7 +1586,7 @@ begin
 end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 12 $$;
+create or replace function public.setup_version() returns int language sql immutable as $$ select 13 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -1674,12 +1676,36 @@ begin
   insert into datbux_log (user_id, amount, kind, note) values (auth.uid(), -cost, 'buy', p_kind || ':' || p_item);
   return bal - cost;
 end $$;
--- what a bundle costs someone: its things they don't have yet, less the bundle's pct, to the nearest 10 (0: they have it all)
+-- the Shop's holidays on a day (UTC): a bundle made for a 'theme' one costs less while it's on, and on a 'sale' day every
+-- bundle does (as datbux.js HOLIDAYS). Black Friday runs from the day after Thanksgiving (November's fourth Thursday) to
+-- Cyber Monday
+create or replace function public.shop_sales(p_at timestamptz default now()) returns table (id text, name text, kind text, pct int, ends date)
+language sql stable set search_path = public as $$
+  with d as (select (p_at at time zone 'utc')::date as day),
+  t as (select day, extract(year from day)::int as yr, make_date(extract(year from day)::int, 11, 1) as nov1 from d),
+  h (id, name, kind, pct, starts, ends) as (
+    select 'valentines', 'Valentine’s Day', 'theme', 25, make_date(yr, 2, 7), make_date(yr, 2, 14) from t union all
+    select 'hanami', 'Cherry Blossom Season', 'theme', 25, make_date(yr, 3, 20), make_date(yr, 4, 10) from t union all
+    select 'halloween', 'Halloween', 'theme', 25, make_date(yr, 10, 17), make_date(yr, 10, 31) from t union all
+    select 'winter', 'Winter Holidays', 'theme', 25, make_date(yr, 12, 15), make_date(yr, 12, 31) from t union all
+    select 'blackfriday', 'Black Friday', 'sale', 30, nov1 + ((4 - extract(dow from nov1)::int + 7) % 7) + 22, nov1 + ((4 - extract(dow from nov1)::int + 7) % 7) + 25 from t union all
+    select 'yearend', 'Year-End Sale', 'sale', 30, make_date(yr, 12, 26), make_date(yr, 12, 31) from t)
+  select h.id, h.name, h.kind, h.pct, h.ends from h, d where d.day between h.starts and h.ends;
+$$;
+-- how much off a bundle is at a time: its holiday's, or a sale's (whichever is more)
+create or replace function public.bundle_pct(p_bundle text, p_at timestamptz default now()) returns int
+language sql stable set search_path = public as $$
+  select coalesce(max(s.pct), 0)::int from shop_bundles b, shop_sales(p_at) s where b.id = p_bundle and (s.kind = 'sale' or s.id = b.holiday);
+$$;
+-- what a bundle costs someone now: its things they don't have yet, one by one, less what's off (to the nearest 10 then;
+-- 0: they have it all)
 create or replace function public.bundle_cost(p_bundle text, p_user uuid) returns bigint
 language sql stable security definer set search_path = public as $$
-  select coalesce(round(sum(s.price) * (100 - max(b.pct)) / 1000.0) * 10, 0)::bigint
-  from shop_bundles b cross join lateral jsonb_array_elements(b.items) it join shop_items s on s.kind = it ->> 'k' and s.item = it ->> 'i'
-  where b.id = p_bundle and not exists (select 1 from owned_items o where o.user_id = p_user and o.kind = it ->> 'k' and o.item = it ->> 'i');
+  with s as (select coalesce(sum(i.price), 0)::bigint as total from shop_bundles b cross join lateral jsonb_array_elements(b.items) it
+               join shop_items i on i.kind = it ->> 'k' and i.item = it ->> 'i'
+             where b.id = p_bundle and not exists (select 1 from owned_items o where o.user_id = p_user and o.kind = it ->> 'k' and o.item = it ->> 'i')),
+       p as (select bundle_pct(p_bundle, now()) as pct)
+  select case when p.pct > 0 then (round(s.total * (100 - p.pct) / 1000.0) * 10)::bigint else s.total end from s, p;
 $$;
 -- buy a bundle: everything in it is yours (what you had already, you keep; it isn't paid for twice)
 create or replace function public.buy_bundle(p_bundle text) returns bigint
@@ -2362,8 +2388,8 @@ revoke all on function public.boost_server(uuid, int), public.set_boost_auto(uui
 grant execute on function public.boost_server(uuid, int), public.set_boost_auto(uuid, boolean), public.renew_boosts(), public.claim_quest_reward(text), public.boost_price() to authenticated;
 -- (bundles: yours to buy; what one costs someone else isn't anyone's business)
 revoke all on function public.bundle_cost(text, uuid) from public, anon, authenticated;
-revoke all on function public.buy_bundle(text) from public, anon;
-grant execute on function public.buy_bundle(text) to authenticated;
+revoke all on function public.buy_bundle(text), public.shop_sales(timestamptz), public.bundle_pct(text, timestamptz) from public, anon;
+grant execute on function public.buy_bundle(text), public.shop_sales(timestamptz), public.bundle_pct(text, timestamptz) to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -2422,19 +2448,19 @@ insert into public.shop_items (kind, item, price) values
   ('plate', 'waves', 100), ('plate', 'polka', 60), ('plate', 'zigzag', 60), ('plate', 'hearts', 100), ('plate', 'bubbles', 100), ('plate', 'flames', 150),
   ('plate', 'rainbow', 120), ('plate', 'marble', 150), ('plate', 'camo', 80), ('plate', 'honey', 100), ('plate', 'music', 100), ('plate', 'paws', 80)
 on conflict (kind, item) do update set price = excluded.price;
--- the bundles: 20% off two things, 25% three, 30% four, 35% five
-insert into public.shop_bundles (id, name, pct, items, position) values
-  ('spooky', 'Spooky Night', 30, '[{"k":"deco","i":"witch"},{"k":"effect","i":"ghosts"},{"k":"frame","i":"bats"},{"k":"font","i":"vampyre"}]', 0),
-  ('blossom', 'Cherry Blossom', 30, '[{"k":"deco","i":"sakura"},{"k":"effect","i":"petals"},{"k":"frame","i":"blossom"},{"k":"plate","i":"sakura"}]', 1),
-  ('cosmic', 'Cosmic', 25, '[{"k":"deco","i":"moon"},{"k":"effect","i":"galaxy"},{"k":"plate","i":"galaxy"}]', 2),
-  ('arcade', 'Arcade', 35, '[{"k":"deco","i":"pixel"},{"k":"effect","i":"pixels"},{"k":"frame","i":"pixelhearts"},{"k":"plate","i":"pixel"},{"k":"font","i":"silkscreen"}]', 3),
-  ('inferno', 'Inferno', 30, '[{"k":"deco","i":"flame"},{"k":"effect","i":"flames"},{"k":"frame","i":"inferno"},{"k":"plate","i":"lava"}]', 4),
-  ('frost', 'Winter Frost', 25, '[{"k":"deco","i":"snowflakes"},{"k":"effect","i":"snow"},{"k":"frame","i":"frost"}]', 5),
-  ('synthwave', 'Synthwave', 30, '[{"k":"deco","i":"neon"},{"k":"frame","i":"synth"},{"k":"plate","i":"neon"},{"k":"font","i":"audiowide"}]', 6),
-  ('royal', 'Royal Court', 25, '[{"k":"deco","i":"crown"},{"k":"frame","i":"royal"},{"k":"plate","i":"gold"}]', 7),
-  ('lovestruck', 'Love Struck', 20, '[{"k":"deco","i":"hearts"},{"k":"effect","i":"hearts"}]', 8),
-  ('headliner', 'Headliner', 30, '[{"k":"deco","i":"headphones"},{"k":"effect","i":"music"},{"k":"frame","i":"melody"},{"k":"plate","i":"music"}]', 9)
-on conflict (id) do update set name = excluded.name, pct = excluded.pct, items = excluded.items, position = excluded.position;
+-- the bundles, and the holiday each is made for (their prices are their things', less on that holiday and on sale days)
+insert into public.shop_bundles (id, name, holiday, items, position) values
+  ('spooky', 'Spooky Night', 'halloween', '[{"k":"deco","i":"witch"},{"k":"effect","i":"ghosts"},{"k":"frame","i":"bats"},{"k":"font","i":"vampyre"}]', 0),
+  ('blossom', 'Cherry Blossom', 'hanami', '[{"k":"deco","i":"sakura"},{"k":"effect","i":"petals"},{"k":"frame","i":"blossom"},{"k":"plate","i":"sakura"}]', 1),
+  ('cosmic', 'Cosmic', null, '[{"k":"deco","i":"moon"},{"k":"effect","i":"galaxy"},{"k":"plate","i":"galaxy"}]', 2),
+  ('arcade', 'Arcade', null, '[{"k":"deco","i":"pixel"},{"k":"effect","i":"pixels"},{"k":"frame","i":"pixelhearts"},{"k":"plate","i":"pixel"},{"k":"font","i":"silkscreen"}]', 3),
+  ('inferno', 'Inferno', null, '[{"k":"deco","i":"flame"},{"k":"effect","i":"flames"},{"k":"frame","i":"inferno"},{"k":"plate","i":"lava"}]', 4),
+  ('frost', 'Winter Frost', 'winter', '[{"k":"deco","i":"snowflakes"},{"k":"effect","i":"snow"},{"k":"frame","i":"frost"}]', 5),
+  ('synthwave', 'Synthwave', null, '[{"k":"deco","i":"neon"},{"k":"frame","i":"synth"},{"k":"plate","i":"neon"},{"k":"font","i":"audiowide"}]', 6),
+  ('royal', 'Royal Court', null, '[{"k":"deco","i":"crown"},{"k":"frame","i":"royal"},{"k":"plate","i":"gold"}]', 7),
+  ('lovestruck', 'Love Struck', 'valentines', '[{"k":"deco","i":"hearts"},{"k":"effect","i":"hearts"}]', 8),
+  ('headliner', 'Headliner', null, '[{"k":"deco","i":"headphones"},{"k":"effect","i":"music"},{"k":"frame","i":"melody"},{"k":"plate","i":"music"}]', 9)
+on conflict (id) do update set name = excluded.name, holiday = excluded.holiday, items = excluded.items, position = excluded.position;
 delete from public.shop_bundles where id not in ('spooky', 'blossom', 'cosmic', 'arcade', 'inferno', 'frost', 'synthwave', 'royal', 'lovestruck', 'headliner');
 -- (what people wore before there was anything to pay with stays theirs)
 insert into public.owned_items (user_id, kind, item, how) select id, 'deco', decoration, 'grant' from public.profiles where decoration ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;

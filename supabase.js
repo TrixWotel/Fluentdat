@@ -32,7 +32,7 @@ function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
     emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [], pins: {}, boosts: [], threadInfo: {},
-    wallet: null, owned: [], shop: {}, trades: [], bundles: [], settings: null };
+    wallet: null, owned: [], shop: {}, trades: [], bundles: [], sales: [], settings: null };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -159,7 +159,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 12;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 13;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -185,13 +185,15 @@ async function loadOnce() {
     // (Datbux: your wallet, what you have, the Shop's prices, your trades; the version is known once they are)
     const ver = Number(version) || 0;
     if (ver >= 9) {
-      const [wal, owned, shop, trades, bundles] = await Promise.all([soft(sb.from('wallets').select('*').eq('user_id', myId()).then(must), []),
+      const [wal, owned, shop, trades, bundles, sales] = await Promise.all([soft(sb.from('wallets').select('*').eq('user_id', myId()).then(must), []),
         soft(sb.from('owned_items').select('kind,item,how,got_at').eq('user_id', myId()).then(must), []), soft(q('shop_items'), []),
         soft(sb.from('trades').select('*').order('created_at', { ascending: false }).limit(80).then(must), []),
-        ver >= 12 ? soft(sb.from('shop_bundles').select('id,name,pct,items,position').order('position').then(must), []) : []]);
+        ver >= 13 ? soft(sb.from('shop_bundles').select('id,name,holiday,items,position').order('position').then(must), []) : [],
+        ver >= 13 ? soft(sb.rpc('shop_sales').then(must), []) : []]);
       if (seq !== loadSeq) return newestLoad;
       cache.wallet = wal[0] || null; cache.owned = owned; cache.shop = Object.fromEntries(shop.map((r) => [r.kind + ':' + r.item, Number(r.price) || 0])); cache.trades = trades;
-      cache.bundles = bundles.filter((b) => Array.isArray(b.items)).map((b) => ({ id: b.id, name: b.name, pct: Number(b.pct) || 0, items: b.items.filter((x) => x && x.k && x.i) }));
+      cache.bundles = bundles.filter((b) => Array.isArray(b.items)).map((b) => ({ id: b.id, name: b.name, holiday: b.holiday || null, items: b.items.filter((x) => x && x.k && x.i) }));
+      cache.sales = (Array.isArray(sales) ? sales : []).filter((h) => h && h.id).map((h) => ({ id: h.id, name: h.name, kind: h.kind, pct: Number(h.pct) || 0, ends: Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(String(h.ends)) ? h.ends + 'T00:00:00Z' : String(h.ends)) || 0 }));
       // (something you were putting on that isn't yours any more, after a trade, isn't kept on top)
       for (const [k, kind] of [['decoration', 'deco'], ['name_font', 'font'], ['effect', 'effect'], ['frame', 'frame']]) {
         const op = meOps.get(k);
@@ -857,9 +859,11 @@ export const SupabaseStore = {
   canBux: () => (cache.version || 0) >= 9,
   wallet: () => { const w = cache.wallet; return w ? { balance: +w.balance || 0, earned: +w.earned || 0, spent: +w.spent || 0, sent: +w.sent || 0, received: +w.received || 0 } : null; },
   priceOf: (kind, item) => (kind + ':' + item in cache.shop ? cache.shop[kind + ':' + item] : null),
-  // the Shop's bundles (a few things for less: pct off what you don't have yet), and buying one: your balance after
-  canBundles: () => (cache.version || 0) >= 12,
+  // the Shop's bundles (what their things cost, less on their holiday and sale days: the holidays on today, as the
+  // database counts them), and buying one: your balance after
+  canBundles: () => (cache.version || 0) >= 13,
   bundles: () => cache.bundles.slice(),
+  sales: () => cache.sales.slice(),
   async buyBundle(id) {
     const bal = Number(must(await sb.rpc('buy_bundle', { p_bundle: id })));
     // (it's yours at once: what the bundle holds, and what's left; the rest comes with a reload)

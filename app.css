@@ -20,7 +20,7 @@ svg.ic { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-wid
 :root.resizing .app { transition: none; }
 
 /* server rail */
-.rail { background: var(--rail); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0; overflow-y: auto; }
+.rail { background: var(--rail); display: flex; flex-direction: column; align-items: center; gap: var(--rail-gap, 12px); padding: 12px 0; overflow-y: auto; }
 .rail::-webkit-scrollbar { width: 0; }
 .srv { position: relative; width: var(--srv, 46px); height: var(--srv, 46px); border-radius: 15px; background: var(--side); display: grid; place-items: center; overflow: hidden; color: var(--text); font-weight: 700; transition: border-radius .15s, background .15s, color .15s; }
 .srv:hover, .srv.on { border-radius: 14px; background: var(--accent); color: var(--accent-text); }
@@ -678,7 +678,7 @@ textarea.area { min-height: 84px; resize: vertical; }
 .msg > .body { grid-column: 2; grid-row: 2; }
 .msg > .reply-line { grid-column: 1 / -1; grid-row: 1; }
 :root[data-avatars="off"] .msg { grid-template-columns: minmax(0, 1fr); } :root[data-avatars="off"] .msg > .body { grid-column: 1; }
-.msg.pinged { background: #f0b2321a; box-shadow: inset 2px 0 0 #f0b232; } .msg.pinged:hover { background: #f0b23226; }
+.msg.pinged { background: #f0b2321a; } .msg.pinged:hover { background: #f0b23226; }
 .msg.sending .text, .msg.sending .atts { opacity: .55; }
 .msg.flash { animation: flash 1.6s ease; } @keyframes flash { 0%, 40% { background: #5865f233; } }
 .msg-tools { position: absolute; top: -14px; right: 14px; display: none; background: var(--side); border: 1px solid var(--edge); border-radius: 8px; box-shadow: 0 2px 10px #0004; z-index: 2; }
@@ -2402,3 +2402,22 @@ button.pc-name:hover { text-decoration: underline; }
 /* (the Shop animates only what's on the screen, and nothing behind an open window) */
 .shp-item.still *, .shp-item.still *::before, .shp-item.still *::after, .shp-fr.still *, .shp-fr.still *::before, .shp-fr.still *::after,
 :root:has(.scrim) .shp-page *, :root:has(.scrim) .shp-page *::before, :root:has(.scrim) .shp-page *::after { animation-play-state: paused !important; }
+/* Round M: Shop nameplates move (a picture slides on by one tile, or glows, or shifts colour); DM rows of one height; a
+   straight bar beside messages that ping you; a bundle's holiday */
+.plated.npm-pan::before, .npm-self.npm-pan { animation: np-pan var(--np-dur, 8s) linear infinite; }
+.plated.npm-glow::before, .npm-self.npm-glow { animation: np-glow var(--np-dur, 4s) ease-in-out infinite alternate; }
+.plated.npm-hue::before, .npm-self.npm-hue { animation: np-hue var(--np-dur, 6s) ease-in-out infinite alternate; }
+.plated.npm-spin::before, .npm-self.npm-spin { animation: np-spin var(--np-dur, 6s) linear infinite; }
+.plated.npm-flicker::before, .npm-self.npm-flicker { animation: np-flicker var(--np-dur, 1s) ease-in-out infinite alternate; }
+@keyframes np-pan { to { background-position: var(--np-to); } }
+@keyframes np-glow { to { filter: brightness(1.2) saturate(1.2); } }
+@keyframes np-hue { to { filter: hue-rotate(45deg) brightness(1.08); } }
+@keyframes np-spin { to { filter: hue-rotate(360deg); } }
+@keyframes np-flicker { 0% { filter: brightness(1); } 40% { filter: brightness(1.28) saturate(1.25); } 100% { filter: brightness(.9); } }
+:root[data-platemove="hover"] .plated:not(:hover)::before, :root[data-platemove="hover"] .npm-self:not(:hover) { animation-play-state: paused; }
+.side .dm-row { height: max(calc(var(--chan-h, 34px) + 12px), calc(2.3em + 10px)); min-height: 0; }
+.side .dm-row .who { display: flex; flex-direction: column; justify-content: center; align-self: stretch; }
+.side .dm-row .nm2 { line-height: 1.25; } .side .dm-row .sub2 { line-height: 1.2; }
+.msg.pinged::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #f0b232; pointer-events: none; }
+:root[data-radius] .msg.pinged, .msg.pinged { border-radius: 0; }
+.bdl-sale { padding: 1px 7px; border-radius: 10px; background: color-mix(in srgb, #f0b232 18%, transparent); color: #f0b232; font-size: .72rem; font-weight: 800; }

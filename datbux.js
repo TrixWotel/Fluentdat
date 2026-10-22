@@ -49,21 +49,44 @@ export const PRICES = {
   'plate:rainbow': 120, 'plate:marble': 150, 'plate:camo': 80, 'plate:honey': 100, 'plate:music': 100, 'plate:paws': 80,
 };
 export const WELCOME = 200;
-// the Shop's bundles, as in setup.sql: a few things that go together, for less (pct off what you don't have yet, to the
-// nearest 10)
-export const BUNDLES = [
-  { id: 'spooky', name: 'Spooky Night', pct: 30, items: [{ k: 'deco', i: 'witch' }, { k: 'effect', i: 'ghosts' }, { k: 'frame', i: 'bats' }, { k: 'font', i: 'vampyre' }] },
-  { id: 'blossom', name: 'Cherry Blossom', pct: 30, items: [{ k: 'deco', i: 'sakura' }, { k: 'effect', i: 'petals' }, { k: 'frame', i: 'blossom' }, { k: 'plate', i: 'sakura' }] },
-  { id: 'cosmic', name: 'Cosmic', pct: 25, items: [{ k: 'deco', i: 'moon' }, { k: 'effect', i: 'galaxy' }, { k: 'plate', i: 'galaxy' }] },
-  { id: 'arcade', name: 'Arcade', pct: 35, items: [{ k: 'deco', i: 'pixel' }, { k: 'effect', i: 'pixels' }, { k: 'frame', i: 'pixelhearts' }, { k: 'plate', i: 'pixel' }, { k: 'font', i: 'silkscreen' }] },
-  { id: 'inferno', name: 'Inferno', pct: 30, items: [{ k: 'deco', i: 'flame' }, { k: 'effect', i: 'flames' }, { k: 'frame', i: 'inferno' }, { k: 'plate', i: 'lava' }] },
-  { id: 'frost', name: 'Winter Frost', pct: 25, items: [{ k: 'deco', i: 'snowflakes' }, { k: 'effect', i: 'snow' }, { k: 'frame', i: 'frost' }] },
-  { id: 'synthwave', name: 'Synthwave', pct: 30, items: [{ k: 'deco', i: 'neon' }, { k: 'frame', i: 'synth' }, { k: 'plate', i: 'neon' }, { k: 'font', i: 'audiowide' }] },
-  { id: 'royal', name: 'Royal Court', pct: 25, items: [{ k: 'deco', i: 'crown' }, { k: 'frame', i: 'royal' }, { k: 'plate', i: 'gold' }] },
-  { id: 'lovestruck', name: 'Love Struck', pct: 20, items: [{ k: 'deco', i: 'hearts' }, { k: 'effect', i: 'hearts' }] },
-  { id: 'headliner', name: 'Headliner', pct: 30, items: [{ k: 'deco', i: 'headphones' }, { k: 'effect', i: 'music' }, { k: 'frame', i: 'melody' }, { k: 'plate', i: 'music' }] },
+// the Shop's holidays (in UTC, as setup.sql's shop_sales): a bundle made for one costs less while it's on, and on a sale
+// day (Black Friday, the year's end) every bundle does. { id, name, kind 'theme' | 'sale', pct, from [month, day], to }
+export const HOLIDAYS = [
+  { id: 'valentines', name: 'Valentine’s Day', kind: 'theme', pct: 25, from: [2, 7], to: [2, 14] },
+  { id: 'hanami', name: 'Cherry Blossom Season', kind: 'theme', pct: 25, from: [3, 20], to: [4, 10] },
+  { id: 'halloween', name: 'Halloween', kind: 'theme', pct: 25, from: [10, 17], to: [10, 31] },
+  { id: 'winter', name: 'Winter Holidays', kind: 'theme', pct: 25, from: [12, 15], to: [12, 31] },
+  { id: 'blackfriday', name: 'Black Friday', kind: 'sale', pct: 30 },                // (the Friday after Thanksgiving to Cyber Monday)
+  { id: 'yearend', name: 'Year-End Sale', kind: 'sale', pct: 30, from: [12, 26], to: [12, 31] },
 ];
-export const bundleCost = (b, price, owns) => Math.round(b.items.filter((x) => !owns(x.k, x.i)).reduce((n, x) => n + (price(x.k, x.i) || 0), 0) * (100 - b.pct) / 1000) * 10;
+// the holidays on at a time: { ...holiday, ends (ms, the start of its last day) }
+export function activeHolidays(t = Date.now()) {
+  const d = new Date(t), y = d.getUTCFullYear(), day = Date.UTC(y, d.getUTCMonth(), d.getUTCDate()), at = ([m, dd]) => Date.UTC(y, m - 1, dd);
+  const thanks = Date.UTC(y, 10, 1 + ((4 - new Date(Date.UTC(y, 10, 1)).getUTCDay() + 7) % 7) + 21);          // (the fourth Thursday of November)
+  return HOLIDAYS.map((h) => { const [s, e] = h.id === 'blackfriday' ? [thanks + 864e5, thanks + 4 * 864e5] : [at(h.from), at(h.to)]; return { ...h, starts: s, ends: e }; })
+    .filter((h) => day >= h.starts && day <= h.ends);
+}
+// the Shop's bundles, as in setup.sql: a few things that go together, for what they cost one by one (what you have
+// already isn't paid for again), and less on their holiday or a sale day
+export const BUNDLES = [
+  { id: 'spooky', name: 'Spooky Night', holiday: 'halloween', items: [{ k: 'deco', i: 'witch' }, { k: 'effect', i: 'ghosts' }, { k: 'frame', i: 'bats' }, { k: 'font', i: 'vampyre' }] },
+  { id: 'blossom', name: 'Cherry Blossom', holiday: 'hanami', items: [{ k: 'deco', i: 'sakura' }, { k: 'effect', i: 'petals' }, { k: 'frame', i: 'blossom' }, { k: 'plate', i: 'sakura' }] },
+  { id: 'cosmic', name: 'Cosmic', holiday: null, items: [{ k: 'deco', i: 'moon' }, { k: 'effect', i: 'galaxy' }, { k: 'plate', i: 'galaxy' }] },
+  { id: 'arcade', name: 'Arcade', holiday: null, items: [{ k: 'deco', i: 'pixel' }, { k: 'effect', i: 'pixels' }, { k: 'frame', i: 'pixelhearts' }, { k: 'plate', i: 'pixel' }, { k: 'font', i: 'silkscreen' }] },
+  { id: 'inferno', name: 'Inferno', holiday: null, items: [{ k: 'deco', i: 'flame' }, { k: 'effect', i: 'flames' }, { k: 'frame', i: 'inferno' }, { k: 'plate', i: 'lava' }] },
+  { id: 'frost', name: 'Winter Frost', holiday: 'winter', items: [{ k: 'deco', i: 'snowflakes' }, { k: 'effect', i: 'snow' }, { k: 'frame', i: 'frost' }] },
+  { id: 'synthwave', name: 'Synthwave', holiday: null, items: [{ k: 'deco', i: 'neon' }, { k: 'frame', i: 'synth' }, { k: 'plate', i: 'neon' }, { k: 'font', i: 'audiowide' }] },
+  { id: 'royal', name: 'Royal Court', holiday: null, items: [{ k: 'deco', i: 'crown' }, { k: 'frame', i: 'royal' }, { k: 'plate', i: 'gold' }] },
+  { id: 'lovestruck', name: 'Love Struck', holiday: 'valentines', items: [{ k: 'deco', i: 'hearts' }, { k: 'effect', i: 'hearts' }] },
+  { id: 'headliner', name: 'Headliner', holiday: null, items: [{ k: 'deco', i: 'headphones' }, { k: 'effect', i: 'music' }, { k: 'frame', i: 'melody' }, { k: 'plate', i: 'music' }] },
+];
+// how much off a bundle is now (its holiday's, or a sale's: whichever is more), and what it costs you (to the nearest 10
+// when there's something off)
+export const bundlePct = (b, sales) => Math.max(0, ...sales.filter((h) => h.kind === 'sale' || h.id === b.holiday).map((h) => h.pct));
+export const bundleCost = (b, price, owns, pct = 0) => {
+  const sum = b.items.filter((x) => !owns(x.k, x.i)).reduce((n, x) => n + (price(x.k, x.i) || 0), 0);
+  return pct > 0 ? Math.round(sum * (100 - pct) / 1000) * 10 : sum;
+};
 export const fmtBux = (n) => Math.floor(Number(n) || 0).toLocaleString('en-US');
 // this day, week (Monday to Sunday), month or year, as the database names it (UTC): its name, and when it began and ends
 const pad = (n) => String(n).padStart(2, '0');

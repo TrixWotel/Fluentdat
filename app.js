@@ -3,7 +3,7 @@
 // customise, stickers you can make, and your own CSS themes you can edit. UI icons are inline SVG (not OS emoji).
 // Signed out it all stays in this browser; sign in (Discord, GitHub or email, via Supabase) and it's shared and live.
 import { Store, ready } from './backend.js';
-import { $, el, ICON, BRAND, brand, svgHTML, icon, readImage, scaled, pickFile, pickFiles, shrink, cropPicture, toast, attempt, copyText, modal, ask, confirmBox, menu, closeMenu, paint } from './ui.js';
+import { $, el, ICON, BRAND, brand, svgHTML, icon, readImage, scaled, pickFile, pickFiles, shrink, cropPicture, toast, attempt, copyText, modal, ask, confirmBox, menu, closeMenu, paint, plateMove } from './ui.js';
 import { render as richText, links as linksIn, plain as plainText, jumbo } from './format.js';
 import { embed } from './embeds.js';
 import { joinCall, mediaTrouble } from './calls.js';
@@ -16,7 +16,7 @@ import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily,
 import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
 import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, FRAMES, decoEl, effectEl, frameEl, decoInfo, effectInfo, frameInfo, questInfo, questProgress } from './shop.js';
 import { BADGE as PROFILE_BADGE, KINDS as BADGE_KINDS, SECRETS as SECRET_BADGES, COUNT as BADGE_COUNT, badgesOf, badgeState, badgeIcon, toNext, tierAt } from './badges.js';
-import { TASKS, TASK, EVERY, PRICES, WELCOME, BUNDLES, bundleCost, fmtBux, period, resetsIn } from './datbux.js';
+import { TASKS, TASK, EVERY, PRICES, WELCOME, BUNDLES, bundleCost, bundlePct, activeHolidays, fmtBux, period, resetsIn } from './datbux.js';
 import { NAMEPLATES, plateInfo } from './plates.js';
 import { SERVICES, SERVICE, brandIcon, setTileLook, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, gamesByLetter, LETTERS, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (Customize, the site of its own: customize.html is this same page, marked; app.js shows Customize there instead of the chat)
@@ -38,7 +38,7 @@ const DEFAULT_PREFS = {
   titlebar: 'on', titleAlign: 'center', frame: 'panels', panelPos: 'rail', bannerStyle: 'under', catStyle: 'dim', layoutV: 4,
   // sizes in pixels (Settings → Layout: drag them in the mini screen, or set them exactly)
   railW: 72, sideW: 240, membersW: 232, topH: 51, composerH: 44, panelH: 54, bannerH: 88, statusH: 30, titleH: 32, panelR: 14, panelGap: 6,
-  avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20, topGap: 8,
+  avatarPx: 40, memberAv: 32, chanH: 34, icTop: 20, icComposer: 20, icPanel: 20, topGap: 8, railGap: 12,
   // where things sit: the columns left to right, the sidebar and main area top to bottom, and the status bar
   cols: ['rail', 'side', 'main', 'members'], sideOrder: ['head', 'body', 'panel'], mainOrder: ['top', 'content', 'composer'], statusPos: 'top',
   radius: 'soft', uiFont: 'system',
@@ -56,19 +56,21 @@ const DEFAULT_PREFS = {
   nameHover: 'off', sideOff: false, keys: {},
   // connection icons on profiles: the services' own logo pictures ('png'), tiles in the theme's colours, or white tiles
   connLook: 'png',
+  // Shop nameplates move all the time, or only while the pointer is on them
+  plateMove: 'always',
 };
 const LAYOUT_PRESETS = {
   Default: {},
   Compact: { density: 'compact', fontSize: 14, avatarPx: 28, memberAv: 26, railW: 60, sideW: 190, membersW: 180, topH: 44, panelH: 46, chanH: 28,
-    composerH: 40, icTop: 18, icComposer: 18, icPanel: 18, topGap: 4, dividers: 'off', radius: 'sharp' },
+    composerH: 40, icTop: 18, icComposer: 18, icPanel: 18, topGap: 4, railGap: 6, dividers: 'off', radius: 'sharp' },
   Spacious: { density: 'cozy', fontSize: 16, avatarPx: 44, memberAv: 38, railW: 84, sideW: 300, membersW: 300, topH: 58, panelH: 62, chanH: 40,
-    composerH: 56, icTop: 22, icComposer: 22, icPanel: 22, topGap: 12, msgWidth: 'readable', radius: 'round' },
+    composerH: 56, icTop: 22, icComposer: 22, icPanel: 22, topGap: 12, railGap: 16, msgWidth: 'readable', radius: 'round' },
   Minimal: { rail: 'off', sideHead: 'off', userPanel: 'off', avatars: 'off', timestamps: 'off', dividers: 'off', banner: 'off', membersDefault: false, hover: 'off',
     serverBanner: 'off', plates: 'off', startHeaders: 'off', dmPanel: false, hidden: { call: true, video: true, search: true, emoji: true, sticker: true, upload: true, mic: true, deafen: true, chanInvite: true, findDM: true, voice: true, chanSettings: true, addPeople: true } },
 };
 // every size you can set in Layout: [what it is, smallest, largest] in pixels
 const SIZES = {
-  railW: ['Server rail width', 48, 120], sideW: ['Sidebar width', 160, 420], membersW: ['Member list width', 160, 420],
+  railW: ['Server rail width', 48, 120], railGap: ['Space between servers', 2, 28], sideW: ['Sidebar width', 160, 420], membersW: ['Member list width', 160, 420],
   topH: ['Top bar height', 36, 90], composerH: ['Message box height', 40, 160], panelH: ['User panel height', 40, 100],
   bannerH: ['Server banner height', 60, 260], statusH: ['Status bar height', 20, 56], titleH: ['Title bar height', 22, 56], panelR: ['Panel corners', 0, 28], panelGap: ['Space between panels', 0, 16],
   avatarPx: ['Message avatars', 20, 64],
@@ -416,6 +418,7 @@ function plateOn(row, plate) {
   const bg = prefs.plates !== 'off' && paint(plate);
   row.classList.toggle('plated', !!bg);
   if (bg) row.style.setProperty('--plate', bg); else row.style.removeProperty('--plate');
+  plateMove(row, bg ? plate : '');
   return row;
 }
 const setBanner = (node, value, color) => { node.style.background = paint(value) || safeColor(color); };
@@ -1564,7 +1567,12 @@ const Bux = {
   // the Shop's bundles (signed in, as the database has them), what one costs you (what you have already isn't paid for
   // again), and buying one
   bundles: () => (!buxReady() ? [] : buxLive() ? (Store.canBundles() ? Store.bundles() : []) : BUNDLES),
-  bundlePrice: (b) => bundleCost(b, Bux.price, Bux.owns),
+  // (the holidays on today: signed in, as the database counts them)
+  sales: () => (buxLive() ? Store.sales() : activeHolidays()),
+  bundlePct: (b) => bundlePct(b, Bux.sales()),
+  // what's off a bundle now and why: { pct, name } (the bigger of its holiday's and a sale's), or null
+  bundleOff: (b) => { const on = Bux.sales().filter((h) => h.kind === 'sale' || h.id === b.holiday).sort((x, y) => y.pct - x.pct)[0]; return on ? { pct: on.pct, name: on.name, ends: on.ends } : null; },
+  bundlePrice: (b) => bundleCost(b, Bux.price, Bux.owns, Bux.bundlePct(b)),
   bundleFull: (b) => b.items.reduce((n, x) => n + (Bux.price(x.k, x.i) || 0), 0),
   async buyBundle(b) {
     const cost = Bux.bundlePrice(b);
@@ -1601,9 +1609,10 @@ async function buyBundleFlow(b) {
   if (!(cost > 0)) return true;
   const bal = Bux.wallet().balance;
   if (bal < cost) { toast(`The ${name} costs ${fmtBux(cost)} Datbux, and you have ${fmtBux(bal)}. Earn more with tasks (Direct Messages → Bank).`); return false; }
-  const list = b.items.map((x) => `${itemName(x.k, x.i)} (${KIND_NAME[x.k] || x.k}${Bux.owns(x.k, x.i) ? ', yours already' : ''})`).join(', ');
+  const list = b.items.map((x) => `${itemName(x.k, x.i)} (${KIND_NAME[x.k] || x.k}${Bux.owns(x.k, x.i) ? ', yours already' : ''})`).join(', '), off = Bux.bundleOff(b);
+  const what = off ? `${off.pct}% off for ${off.name}` : `what ${b.items.some((x) => Bux.owns(x.k, x.i)) ? 'the rest of it costs' : 'its things cost'} one by one`;
   if (!(await confirmBox({ title: `Buy the ${name}?`, ok: `Buy for ${fmtBux(cost)}`,
-    text: `${list}. ${fmtBux(cost)} Datbux, ${b.pct}% less than ${b.items.some((x) => Bux.owns(x.k, x.i)) ? 'the rest of it' : 'its things'} one by one. You have ${fmtBux(bal)}, so ${fmtBux(bal - cost)} would be left. They’re yours to keep, or to trade.` }))) return false;
+    text: `${list}. ${fmtBux(cost)} Datbux: ${what}. You have ${fmtBux(bal)}, so ${fmtBux(bal - cost)} would be left. They’re yours to keep, or to trade.` }))) return false;
   if (!(await Bux.buyBundle(b))) return false;
   renderAll();
   return true;
@@ -1827,7 +1836,7 @@ function shopPage() {
   // (a nameplate behind your name, as it is in a member list)
   const nameplates = plates ? NAMEPLATES.map(([id, name]) => {
     const v = 'np:' + id, on = me.plate === v, row = el('div', { className: 'mem shp-plate plated' }, avatarEl(you, { size: 30 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, me.name)));
-    row.style.setProperty('--plate', paint(v));
+    row.style.setProperty('--plate', paint(v)); plateMove(row, v);
     return item(row, name, cost('plate', id), act('plate', id, on, { plate: '' }, { plate: v }, 'Nameplate taken off.', `${name} is behind your name now.`), on);
   }) : [];
   // (a bundle, as on Discord: its decoration on your avatar, its nameplate behind your name, and its effect and frame on a
@@ -1842,9 +1851,9 @@ function shopPage() {
     if (fx) { const e = effectEl(fx); if (e) card.append(e); }
     if (fr) withFrame(card, fr);
     const strip = pl || font ? el('div', { className: 'bdl-plate mem' + (pl ? ' plated' : '') }, avatarEl(you, { size: 20 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, nameOf('nmt')))) : null;
-    if (strip && pl) strip.style.setProperty('--plate', paint('np:' + pl));
+    if (strip && pl) { strip.style.setProperty('--plate', paint('np:' + pl)); plateMove(strip, 'np:' + pl); }
     const pv = el('div', { className: 'bdl-pv' }, card, strip, el('div', { className: 'bdl-av' }, avatarEl({ ...you, decoration: deco }, { size: 64 })));
-    const price = Bux.bundlePrice(b), mine = !(price > 0), owned = b.items.filter((x) => Bux.owns(x.k, x.i)).length;
+    const price = Bux.bundlePrice(b), mine = !(price > 0), owned = b.items.filter((x) => Bux.owns(x.k, x.i)).length, off = Bux.bundleOff(b);
     const what = b.items.map((x) => `${itemName(x.k, x.i)} (${KIND_NAME[x.k] || x.k})`).join(', ');
     const buy = mine ? el('button', { className: 'btn small bdl-buy', onclick: () => use(bundlePatch(b), `The ${b.name} Bundle is on.`) }, 'Use All')
       : el('button', { className: 'btn small primary bdl-buy', onclick: async () => {
@@ -1854,20 +1863,28 @@ function shopPage() {
     return el('div', { className: 'shp-item bdl' + (mine ? ' on' : ''), title: 'Includes ' + what }, pv,
       el('div', { className: 'shp-meta' }, el('b', {}, `${b.items.length}pc ${b.name} Bundle`),
         el('small', { className: 'bdl-price' }, ...(mine ? [el('span', { className: 'bux-own' }, icon('check', 13), 'Yours')]
-          : [buxTag(price), el('span', { className: 'bdl-off' }, `(-${b.pct}%)`), owned ? el('span', { className: 'bdl-have' }, `you have ${owned}`) : null]))),
+          : [buxTag(price), off ? el('span', { className: 'bdl-off' }, `(-${off.pct}%)`) : null, off ? el('span', { className: 'bdl-sale' }, off.name) : null,
+            owned ? el('span', { className: 'bdl-have' }, `you have ${owned}`) : null]))),
       buy);
   };
   const bundles = Bux.bundles().map(bundleCard);
+  // (what's on: a sale day takes something off every bundle, a holiday off the bundles made for it)
+  const dayOf = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const onNow = Bux.sales(), sale = onNow.filter((h) => h.kind === 'sale').sort((x, y) => y.pct - x.pct)[0];
+  const themed = onNow.filter((h) => h.kind === 'theme').map((h) => [h, Bux.bundles().filter((b) => b.holiday === h.id)]).filter(([, bs]) => bs.length);
+  const bundleSub = sale ? `${sale.name}: every bundle is ${sale.pct}% off, until ${dayOf(sale.ends)}.`
+    : themed.length ? themed.map(([h, bs]) => `${h.name}: ${bs.map((b) => 'the ' + b.name + ' Bundle').join(' and ')} ${bs.length === 1 ? 'is' : 'are'} ${h.pct}% off, until ${dayOf(h.ends)}.`).join(' ')
+    : 'A few things that go together, for what they cost one by one: less on the holiday a bundle is made for, and on sale days like Black Friday.';
   const sec = (title, sub, list, cls = '') => (list.length ? [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)] : []);
   const page = el('div', { className: 'shp-page' },
     el('div', { className: 'shp-hero' }, el('div', {}, el('h1', {}, 'Shop'),
-      el('p', {}, w ? 'Everything here costs Datbux: earn them with tasks in your Bank. Bundles cost less than their things one by one, and a few things are also a Quest’s reward, yours once you’ve done the Quest.' : 'Everything here is free. A few things unlock when you finish a Quest.'),
+      el('p', {}, w ? 'Everything here costs Datbux: earn them with tasks in your Bank. Bundles cost less on their holidays and on sale days, and a few things are also a Quest’s reward, yours once you’ve done the Quest.' : 'Everything here is free. A few things unlock when you finish a Quest.'),
       el('div', { className: 'shp-hero-acts' }, w ? el('button', { className: 'btn shp-bal', title: 'Your Datbux', onclick: () => goHome('datbux') }, icon('coin', 16), fmtBux(w.balance)) : null,
         el('button', { className: 'btn', onclick: () => goHome('quests') }, icon('quest', 16), labelOf('dmNav', 'questsNav')),
         el('button', { className: 'btn', onclick: () => goHome('collection') }, icon('collection', 16), labelOf('dmNav', 'collectionNav')),
         el('button', { className: 'btn', onclick: () => nameStyleDialog(me.style, (s) => { me.style = s; saveMe(); pushProfile(); renderAll(); }, asMember) }, icon('brush', 16), 'Display Name Style'))),
       el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
-    ...sec('Bundles', `${bundles.length} of them: a few things that go together, for less than one by one. What you have already isn’t paid for again.`, bundles, 'bundles'),
+    ...sec('Bundles', `${bundleSub} What you have already isn’t paid for again.`, bundles, 'bundles'),
     ...sec('Avatar Decorations', `${DECORATIONS.length} of them, each about a week of tasks, around your avatar everywhere: in chats, the member list and your profile.`, decos),
     ...sec('Name Fonts', `${FONTS.length - 1} of them. Your name, in a font of its own: in chats, the member list and your profile. Its colours and effect are your Display Name Style.`, fonts, 'wide'),
     ...sec('Profile Effects', `${PROFILE_EFFECTS.length} of them, played over your profile card when someone opens it.`, effects, 'wide'),
@@ -1905,7 +1922,7 @@ function collectionPage() {
     el('div', { className: 'shp-fr-meta' }, el('b', {}, name), el('small', {}, how('frame', id))), toggle(me.frame === id, { frame: '' }, { frame: id }, `${name} is around your profile now.`)));
   const plates = NAMEPLATES.filter(([id]) => Bux.owns('plate', id)).map(([id, name]) => {
     const v = 'np:' + id, row = el('div', { className: 'mem shp-plate plated' }, avatarEl(you, { size: 30 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, me.name)));
-    row.style.setProperty('--plate', paint(v));
+    row.style.setProperty('--plate', paint(v)); plateMove(row, v);
     return item(row, name, how('plate', id), me.plate === v, toggle(me.plate === v, { plate: '' }, { plate: v }, `${name} is behind your name now.`));
   });
   const goHome = (page) => { view = 'home'; dmId = null; homePage = page; renderAll(); };
@@ -4911,7 +4928,8 @@ function applyPrefs() {
   S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
   S('namehover', prefs.nameHover === 'underline' ? 'underline' : 'off');
   setTileLook(prefs.connLook);
-  V('--top-gap', prefs.topGap);
+  V('--top-gap', prefs.topGap); V('--rail-gap', prefs.railGap);
+  S('platemove', prefs.plateMove === 'hover' ? 'hover' : 'always');
   V('--rail-w', prefs.railW); V('--side-w', prefs.sideW); V('--members-w', prefs.membersW); V('--top-h', prefs.topH);
   V('--composer-h', prefs.composerH); V('--panel-h', prefs.panelH); V('--banner-h', prefs.bannerH); V('--status-h', prefs.statusH);
   V('--title-h', prefs.titleH); V('--panel-r', prefs.panelR); V('--panel-gap', prefs.panelGap);
@@ -5525,7 +5543,7 @@ function surfaceDialog(kind, current, onApply, who) {
     shopBox.replaceChildren(el('h5', {}, 'From the Shop'), el('div', { className: 'sf-plates' }, ...NAMEPLATES.map(([id, name]) => {
       const v = 'np:' + id, p = Bux.price('plate', id), buy = p > 0 && !Bux.owns('plate', id);
       const b = el('button', { className: 'sf-np' + (cur === v ? ' on' : ''), title: name + (buy ? ` (${fmtBux(p)} Datbux)` : ''), onclick: () => { cur = v; draw(); } }, buy ? el('span', { className: 'lk-price' }, icon('coin', 10), fmtBux(p)) : null);
-      b.style.background = paint(v);
+      b.style.background = paint(v); plateMove(b, v, true);
       return b;
     })));
     const p = /^np:/.test(cur) ? Bux.price('plate', cur.slice(3)) : 0, buy = p > 0 && !Bux.owns('plate', cur.slice(3));
@@ -6882,7 +6900,7 @@ function layoutStudio(redraw) {
       end: () => { document.documentElement.classList.remove('resizing'); hint.textContent = HINT; savePrefs(); studio.sel = partForSize(key); draw(); },
     });
   }
-  const partForSize = (key) => ({ railW: 'rail', sideW: 'side', membersW: 'members', topH: 'top', composerH: 'composer', panelH: 'panel', bannerH: 'head',
+  const partForSize = (key) => ({ railW: 'rail', railGap: 'rail', sideW: 'side', membersW: 'members', topH: 'top', composerH: 'composer', panelH: 'panel', bannerH: 'head',
     statusH: 'status', avatarPx: 'content', memberAv: 'members', chanH: 'body', icTop: 'top', topGap: 'top', icComposer: 'composer', icPanel: 'panel', fontSize: 'content' })[key] || studio.sel;
   function makeGhost(node, ev) {
     const r = node.getBoundingClientRect(), g = node.cloneNode(true);
@@ -7021,7 +7039,7 @@ function layoutStudio(redraw) {
       flag('liveBanner', 'Say when all is well', '“Live, signed in as @you.” Off, the bar only shows when something needs you.'), size('statusH'),
       row2('Position', 'Across the top or the bottom of the window.', el('div', { className: 'btn-row' }, ...[['top', 'Top'], ['bottom', 'Bottom']].map(([v, l]) =>
         el('button', { className: 'btn small' + (prefs.statusPos === v || (v === 'top' && prefs.statusPos !== 'bottom') ? ' primary' : ''), onclick: () => { remember(); prefs.statusPos = v; commit(); } }, l)))));
-    if (id === 'rail') out.push(flag('rail', 'Show the server rail', 'The strip of server icons.'), size('railW', 'Server icons grow with it.'), sideways('cols', COLS),
+    if (id === 'rail') out.push(flag('rail', 'Show the server rail', 'The strip of server icons.'), size('railW', 'Server icons grow with it.'), size('railGap'), sideways('cols', COLS),
       pickRow('iconShape', 'Icon shape', [['squircle', 'Circle, squircle when open (Discord)'], ['round', 'Always a circle'], ['square', 'Always a rounded square']]), ...buttonRows('rail'));
     if (id === 'side') out.push(size('sideW'), sideways('cols', COLS), size('chanH'), flag('cats', 'Category headings', 'TEXT CHANNELS, VOICE CHANNELS…'), flag('chanIcons', 'Channel icons', 'The # and speaker marks.'), ...buttonRows('dms'));
     if (id === 'head') out.push(flag('sideHead', 'Show the server header', 'The server’s name and menu.'), flag('serverBanner', 'Server banners', 'A server’s picture at the top of its channels.'),
@@ -7177,6 +7195,7 @@ function czPane(id, redraw) {
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => set('decorations', on ? 'on' : 'off'))),
     row2('Profile effects and frames', 'Snow, sparkles, frames and more on profile cards.', sw(prefs.effects !== 'off', (on) => set('effects', on ? 'on' : 'off'))),
     flag('plates', 'Nameplates', 'Pictures behind names in member lists and DMs.'),
+    row2('Moving nameplates', 'Nameplates from the Shop drift, glow and shimmer behind names.', pick('plateMove', [['always', 'All the time'], ['hover', 'When you point at them']])),
     row2('Connection icons', 'How the accounts people added look on their profiles.', pick('connLook', [['png', 'The services’ own logos'], ['theme', 'Tiles in your theme’s colours'], ['white', 'White tiles']])),
     flag('dmPanel', 'Profile beside DMs', 'Their card, beside your conversation with them.'),
     flag('memberOffline', 'Offline people in member lists', ''), flag('memberStatusText', 'A second line in member lists', 'Each person’s about text.'),

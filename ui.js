@@ -2,7 +2,7 @@
 // about servers or messages; app.js puts them together. (Windows replace the browser's prompt() and confirm():
 // apps built on Electron, like the Fluent browser, don't have prompt(), so anything that used it did nothing there.)
 import { animOn } from './anim.js';
-import { plateBg } from './plates.js';
+import { plateBg, plateMotion } from './plates.js';
 
 export const $ = (s) => document.querySelector(s);
 export const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k)); return n; };
@@ -247,6 +247,16 @@ export const GRADS = [
 ];
 const PICTURE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
 // a value someone saved → a CSS background (anything that isn't one of ours is ignored)
+// a Shop nameplate's motion, on whatever it's behind (its ::before), or with self on the thing's own background
+export function plateMove(node, plate, self = false) {
+  const m = /^np:[a-z0-9-]{1,24}$/.test(plate || '') ? plateMotion(plate.slice(3)) : null;
+  for (const c of [...node.classList]) if (c.startsWith('npm-')) node.classList.remove(c);
+  if (!m) { node.style.removeProperty('--np-to'); node.style.removeProperty('--np-dur'); return node; }
+  node.classList.add('npm-' + m[0]); if (self) node.classList.add('npm-self');
+  if (m[0] === 'pan') node.style.setProperty('--np-to', m[1]);
+  node.style.setProperty('--np-dur', m[m.length - 1] + 's');
+  return node;
+}
 export function paint(v) {
   if (!v || typeof v !== 'string') return '';
   if (/^g:\d$/.test(v)) return GRADS[+v.slice(2)];

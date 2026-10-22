@@ -44,6 +44,19 @@ export const NAMEPLATES = [
   ['music', 'Music', `${svg(44, 44, "<g fill='#e5dbff'><path d='M10 30V12l12-3v16' fill='none' stroke='#e5dbff' stroke-width='1.6'/><ellipse cx='8' cy='30' rx='3' ry='2.2'/><ellipse cx='20' cy='25' rx='3' ry='2.2'/><path d='M34 14v12' stroke='#e5dbff' stroke-width='1.4'/><ellipse cx='32' cy='26' rx='2.6' ry='2'/></g>")} 0 0 / 44px 44px, linear-gradient(#5f3dc4, #845ef7)`],
   ['paws', 'Paw Prints', `${svg(44, 44, at(12, 14, `<g fill='#c08552'>${PAW}</g>`, ' rotate(-20)') + at(32, 32, `<g fill='#d9a066'>${PAW}</g>`, ' rotate(15)'))} 0 0 / 44px 44px, #f3d9b1`],
 ];
+// how each one moves: ['pan', where each picture layer ends a loop (one tile on, so it joins up), seconds], or
+// ['glow' | 'hue' | 'spin' | 'flicker', seconds]
+const MOTION = {
+  sunset: ['glow', 5], ocean: ['pan', '80px 100%, 0 0', 7], galaxy: ['pan', '70px 0, 0 0, 0 0', 30], sakura: ['pan', '60px 44px, 0 0', 9],
+  forest: ['pan', '60px 100%, 0 0', 16], lava: ['glow', 2.5], circuit: ['pan', '60px 0', 8], candy: ['pan', '28.284px 0', 2.4],
+  pixel: ['pan', '26px 0', 5], aurora: ['hue', 6], stars: ['pan', '60px 0, 0 0', 40], clouds: ['pan', '70px 0, 0 0', 16],
+  neon: ['pan', '0 11px, 0 0, 0 0', 1.2], gold: ['glow', 3], frost: ['pan', '0 44px, 0 0', 7], autumn: ['pan', '56px 44px, 0 0', 9],
+  code: ['pan', '0 44px', 3], checkers: ['pan', '14px 14px', 4], waves: ['pan', '40px 0, 0 0', 3], polka: ['pan', '14px 14px, 21px 21px', 5],
+  zigzag: ['pan', '8px 0, 8px 0, 16px 0, 16px 0', 1.6], hearts: ['pan', '0 -44px', 5], bubbles: ['pan', '0 -44px, 0 0', 4], flames: ['flicker', 0.8],
+  rainbow: ['spin', 6], marble: ['glow', 6], camo: ['pan', '60px 44px, 60px 44px, 60px 44px, 60px 44px', 24], honey: ['glow', 4],
+  music: ['pan', '0 -44px, 0 0', 6], paws: ['pan', '44px 0', 6],
+};
+export const plateMotion = (id) => MOTION[id] || null;
 const BG = Object.fromEntries(NAMEPLATES.map(([id, , bg]) => [id, bg]));
 export const plateInfo = (id) => NAMEPLATES.find((p) => p[0] === id) || null;
 // a nameplate's background (for CSS), or '' for one there isn't

@@ -83,7 +83,7 @@ const fallback = {
   canFrame: () => true,
   canWikiGames: () => true,
   // (Datbux signed out: the app keeps a wallet of its own in this browser; sending and trading come with signing in)
-  canBux: () => false, canBundles: () => false, bundles: () => [], buyBundle: async () => { throw new Error(SIGN_IN + 'buy bundles.'); }, onTrade: () => () => {}, wallet: () => null, priceOf: () => null, owns: () => false, ownedList: () => [], trades: () => [],
+  canBux: () => false, canBundles: () => false, bundles: () => [], sales: () => [], buyBundle: async () => { throw new Error(SIGN_IN + 'buy bundles.'); }, onTrade: () => () => {}, wallet: () => null, priceOf: () => null, owns: () => false, ownedList: () => [], trades: () => [],
   ownedBy: async () => [], buxLog: async () => [],
   // (settings follow an account only when signed in: here they're this browser's)
   canSync: () => false, settings: () => null, saveSettings: async () => 0,
