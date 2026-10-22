@@ -326,7 +326,7 @@ function menuBox(items, isSub) {
     const openHere = () => {
       if (b.classList.contains('open')) return;
       closeSub();
-      const s = menuBox(it.sub(), true); document.body.append(s);
+      const s = menuBox(it.sub(), true); document.body.append(s); s.style.maxHeight = (innerHeight - 16) + 'px';
       const r = b.getBoundingClientRect(), w = s.offsetWidth, h = s.offsetHeight;
       s.style.left = (r.right + 6 + w <= innerWidth - 8 ? r.right + 6 : Math.max(8, r.left - w - 6)) + 'px';
       s.style.top = Math.max(8, Math.min(r.top - 7, innerHeight - h - 8)) + 'px';
@@ -347,9 +347,12 @@ export function menu(items, x, y) {
   closeMenu();
   const m = menuBox(items, false);
   document.body.append(m);
-  const r = m.getBoundingClientRect();
-  m.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
-  m.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+  // (its size as laid out: it opens with a small grow, so for a moment the box on screen is smaller than it is. One
+  // taller than the window scrolls)
+  m.style.maxHeight = (innerHeight - 16) + 'px';
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(x, innerWidth - w - 8)) + 'px';
+  m.style.top = Math.max(8, Math.min(y, innerHeight - h - 8)) + 'px';
   openMenu = m;
   return m;
 }

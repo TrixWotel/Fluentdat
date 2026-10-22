@@ -18,7 +18,7 @@ import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, FRAMES, decoEl, effect
 import { BADGE as PROFILE_BADGE, KINDS as BADGE_KINDS, SECRETS as SECRET_BADGES, COUNT as BADGE_COUNT, badgesOf, badgeState, badgeIcon, toNext, tierAt } from './badges.js';
 import { TASKS, TASK, EVERY, PRICES, WELCOME, fmtBux, period, resetsIn } from './datbux.js';
 import { NAMEPLATES, plateInfo } from './plates.js';
-import { SERVICES, SERVICE, brandIcon, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, gamesByLetter, LETTERS, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
+import { SERVICES, SERVICE, brandIcon, setTileLook, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, gamesByLetter, LETTERS, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (Customize, the site of its own: customize.html is this same page, marked; app.js shows Customize there instead of the chat)
 const CUSTOMIZE = document.documentElement.dataset.customize === '1';
 try { if (!window.name) window.name = CUSTOMIZE ? 'fluentdat-customize' : 'fluentdat'; } catch {}
@@ -54,6 +54,8 @@ const DEFAULT_PREFS = {
   // a line under someone's name in the chat while the mouse is on it ('off': none), the sidebar hidden with its shortcut
   // (on this device), and the keys you chose for the shortcuts (User Settings → Keyboard Shortcuts)
   nameHover: 'off', sideOff: false, keys: {},
+  // connection icons on profiles: the services' own logo pictures ('png'), tiles in the theme's colours, or white tiles
+  connLook: 'png',
 };
 const LAYOUT_PRESETS = {
   Default: {},
@@ -777,10 +779,10 @@ function railState(w, { on, unread, ping, voice, tip, open }) {
   if (txt && !b) { b = el('span', { className: 'badge' }); w.append(b); }
   if (b) {
     if (!txt) b.remove();
-    else if (b.textContent !== txt) { b.textContent = txt; b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
+    else if (b.textContent !== txt) { b.textContent = txt; b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); }
   }
   const vb = w.querySelector('.vbadge');
-  if (voice && !vb) w.append(el('span', { className: 'vbadge pop' }, icon('volume', 11)));
+  if (voice && !vb) w.append(el('span', { className: 'vbadge bump' }, icon('volume', 11)));
   if (!voice && vb) vb.remove();
   return w;
 }
@@ -998,7 +1000,7 @@ function dmSide(head, body) {
     onclick: onclick || (() => { dmId = null; homePage = page; renderAll(); $('#app').classList.remove('show-side'); }) }, icon(ic), el('span', { className: 'grow' }, labelOf('dmNav', id)), badge || null);
   for (const id of ordered('dmNav')) {
     if (!shown(id)) continue;
-    if (id === 'browseNav') parts.push(nav(id, 'search', undefined, null, () => newDMDialog()));
+    if (id === 'browseNav') parts.push(nav(id, 'search', 'browse'));
     if (id === 'friendsNav') parts.push(nav(id, 'users', null, req ? el('span', { className: 'mbadge' }, String(req)) : null));
     if (id === 'datbuxNav') { const n = buxLive() && Store.canBux() ? Store.trades().filter((t) => t.status === 'open' && t.to === Store.myId()).length : 0; parts.push(nav(id, 'coin', 'datbux', n ? el('span', { className: 'mbadge', title: 'Trades waiting for you' }, String(n)) : null)); }
     if (id === 'collectionNav') parts.push(nav(id, 'collection', 'collection'));
@@ -1106,7 +1108,7 @@ function renderTop() {
   const act = (ic, title, onclick, on) => el('button', { className: 'act' + (on ? ' on' : ''), title, onclick }, icon(ic), prefs.btnLabels === 'on' ? el('span', { className: 'lbl' }, title) : null);
   let where = null;
   if (view === 'discover') parts.push(el('span', { className: 'hash' }, icon('compass')), el('span', {}, 'Discover'));
-  else if (view === 'home' && !dmId) { const nid = { shop: 'shopNav', quests: 'questsNav', datbux: 'datbuxNav', collection: 'collectionNav' }[homePage] || 'friendsNav';
+  else if (view === 'home' && !dmId) { const nid = { shop: 'shopNav', quests: 'questsNav', datbux: 'datbuxNav', collection: 'collectionNav', browse: 'browseNav' }[homePage] || 'friendsNav';
     parts.push(el('span', { className: 'hash' }, icon(BUTTONS.dmNav[1].find((b) => b[0] === nid)[2])), el('span', {}, labelOf('dmNav', nid))); }
   else if (view === 'home') {
     const d = Store.dmInfo ? Store.dmInfo(dmId) : null;
@@ -1227,6 +1229,65 @@ async function runFinder(raw, { more = false } = {}) {
     finder.results = more ? finder.results.concat(got) : got; finder.more = got.length >= 25;
   } catch (e) { if (seq === finder.seq) finder.error = String((e && e.message) || e); }
   if (seq === finder.seq) { finder.loading = false; finder.q = p.q; renderAll(); }
+}
+// ---------- Browse (Direct Messages → Browse): messages and files in all your DMs and group chats, newest first ----------
+const dmBrowse = { q: '', has: '', from: '', results: [], loading: false, error: '', more: false, ran: false, seq: 0 };
+let dmBrowseBox = null;
+async function runDmBrowse({ more = false } = {}) {
+  const seq = ++dmBrowse.seq;
+  Object.assign(dmBrowse, { loading: true, error: '' });
+  if (!more) { dmBrowse.results = []; dmBrowse.more = false; }
+  drawDmBrowse();
+  try {
+    const got = await Store.searchAllDMs({ q: dmBrowse.q, has: dmBrowse.has, from: dmBrowse.from || null, before: more && dmBrowse.results.length ? dmBrowse.results[dmBrowse.results.length - 1].ts : null });
+    if (seq !== dmBrowse.seq) return;
+    dmBrowse.results = more ? dmBrowse.results.concat(got) : got; dmBrowse.more = got.length >= 25;
+  } catch (e) { if (seq === dmBrowse.seq) dmBrowse.error = String((e && e.message) || e); }
+  if (seq === dmBrowse.seq) { dmBrowse.loading = false; dmBrowse.ran = true; drawDmBrowse(); }
+}
+// (where a result is, when its sender doesn't already say: a group's name, or who you sent it to)
+function dmBrowseWhere(m) {
+  const d = Store.dmInfo ? Store.dmInfo(m.place) : null;
+  if (d && d.kind === 'group') return el('span', { className: 'br-where' }, 'in ', dmAvatar(d, 16), dmName(d));
+  const u = Store.dmUser(m.place);
+  return u && isMe(m.user) ? el('span', { className: 'br-where' }, 'to ', avatarEl(u, { size: 16 }), u.name) : null;
+}
+function drawDmBrowse() {
+  if (!dmBrowseBox || !dmBrowseBox.isConnected) return;
+  const n = dmBrowse.results.length, rows = dmBrowse.results.map((m) => {
+    const files = (m.files || []).filter((f) => f && f.name);
+    return el('button', { className: 'fd-row br-row', onclick: () => goToMessage({ dm: true, place: m.place, id: m.id }) }, avatarEl(m.user, { size: 36 }),
+      el('div', { className: 'fd-body' }, el('div', { className: 'fd-meta' }, el('b', {}, nameIn(m.user)), dmBrowseWhere(m), el('time', {}, when(m.ts, true))),
+        m.text ? el('div', { className: 'fd-text' }, markText(plainText(m.text, fmtCtx()).slice(0, 400), dmBrowse.q)) : null,
+        files.length ? el('div', { className: 'fd-files' }, ...files.map((f) => el('span', {}, icon(f.kind === 'image' ? 'image' : f.kind === 'video' ? 'video' : 'file', 13), markText(f.name, dmBrowse.q)))) : null));
+  });
+  dmBrowseBox.replaceChildren(...[
+    dmBrowse.ran || dmBrowse.loading ? el('div', { className: 'br-count' }, dmBrowse.loading && !n ? 'Searching…' : dmBrowse.error ? '' : `${n}${dmBrowse.more ? '+' : ''} result${n === 1 ? '' : 's'}`) : null,
+    ...(dmBrowse.error ? [el('div', { className: 'note-box' }, dmBrowse.error)] : rows.length ? rows : dmBrowse.ran && !dmBrowse.loading ? [el('div', { className: 'fd-empty' }, el('div', { className: 'fp-empty-ic' }, icon('search', 30)), 'Nothing found. Try other words, or another kind of thing.')]
+      : dmBrowse.loading ? [] : [el('div', { className: 'fd-empty' }, el('div', { className: 'fp-empty-ic' }, icon('search', 30)), 'Type what you’re looking for and press Enter, or pick Files to see every file people sent you.')]),
+    dmBrowse.more ? el('button', { className: 'btn small fd-more', disabled: dmBrowse.loading, onclick: () => runDmBrowse({ more: true }) }, dmBrowse.loading ? 'Loading…' : 'Load More') : null].filter(Boolean));
+}
+function dmBrowsePage() {
+  const input = el('input', { type: 'search', className: 'br-q', placeholder: 'Search messages and files in your DMs', value: dmBrowse.q, spellcheck: false });
+  const go = () => { dmBrowse.q = input.value.trim(); runDmBrowse(); };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  input.addEventListener('search', () => { if (!input.value && dmBrowse.q) { dmBrowse.q = ''; runDmBrowse(); } });
+  // (from anyone, or from one of the people you have conversations with)
+  const people = [...new Map(Store.dmList().flatMap((d) => (d.kind === 'group' ? d.people || [] : [d.user])).filter((p) => p && p.id && !p.bot).map((p) => [p.id, p])).values()]
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const from = sel(dmBrowse.from, [['', 'From anyone'], ...people.map((p) => [p.id, 'From ' + p.name])], (v) => { dmBrowse.from = v; runDmBrowse(); });
+  const chips = el('div', { className: 'fd-chips br-chips' });
+  const drawChips = () => chips.replaceChildren(...[['', 'Messages'], ['file', 'Files'], ['image', 'Images'], ['video', 'Videos'], ['link', 'Links']].map(([v, l]) =>
+    el('button', { className: 'fd-chip' + (dmBrowse.has === v ? ' on' : ''), onclick: () => { dmBrowse.has = v; drawChips(); runDmBrowse(); } }, l)));
+  drawChips();
+  dmBrowseBox = el('div', { className: 'br-list' });
+  drawDmBrowse();
+  setTimeout(() => { if (input.isConnected && !dmBrowse.q) input.focus(); }, 0);
+  return el('div', { className: 'br-page' },
+    el('div', { className: 'br-head' }, el('div', { className: 'grow' }, el('h1', {}, labelOf('dmNav', 'browseNav')), el('p', {}, 'Messages and files in all your DMs and group chats, newest first.')),
+      el('button', { className: 'btn', onclick: () => newDMDialog() }, icon('personAdd', 16), 'Start a Conversation')),
+    el('div', { className: 'br-bar' }, el('label', { className: 'br-search' }, icon('search', 18), input), from, el('button', { className: 'btn primary', onclick: go }, 'Search')),
+    chips, dmBrowseBox);
 }
 function closeFinder() { if (!finder.open) return; finder.open = false; finder.results = []; finder.has = ''; finder.seq++; renderAll(); syncFind(); }
 // a word, lit up wherever it is in a bit of text
@@ -2437,10 +2498,10 @@ function renderContent() {
   }
   if (view === 'home' && !dmId && homePage) {
     const bux = buxReady() ? [Bux.wallet().balance, Bux.owned().length] : null;
-    const key = homePage + ':' + JSON.stringify(homePage === 'shop' ? [me.decoration, me.effect, me.plate, me.frame, me.style, me.name, me.avatar, me.color, questsDone(), bux]
+    const key = homePage + ':' + JSON.stringify(homePage === 'browse' ? 'browse' : homePage === 'shop' ? [me.decoration, me.effect, me.plate, me.frame, me.style, me.name, me.avatar, me.color, questsDone(), bux]
       : homePage === 'datbux' ? [bux, buxLive() && Store.canBux() ? Store.trades().map((t) => t.id + t.status) : null, buxReady()]
       : homePage === 'collection' ? [bux, me.decoration, me.effect, me.frame, me.style, questsDone()] : [questStats(), questsDone(), me.decoration]);
-    if (content.dataset.key !== key) { content.replaceChildren(homePage === 'shop' ? shopPage() : homePage === 'datbux' ? datbuxPage() : homePage === 'collection' ? collectionPage() : questsPage()); content.dataset.key = key; }
+    if (content.dataset.key !== key) { content.replaceChildren(homePage === 'browse' ? dmBrowsePage() : homePage === 'shop' ? shopPage() : homePage === 'datbux' ? datbuxPage() : homePage === 'collection' ? collectionPage() : questsPage()); content.dataset.key = key; }
     composer.hidden = true; return;
   }
   if (view === 'home' && !dmId) {
@@ -3106,9 +3167,9 @@ const myXid = () => (Store.kind === 'supabase' ? Store.myId() : 'me');
 function extrasBits(x, sec, onBoard) {
   const out = [], conns = (x && x.connections) || [];
   if (conns.length) out.push(sec('Connections', el('div', { className: 'p-conns' }, ...conns.map((c) => {
-    const href = connectionLink(c), s = SERVICE[c.s] || { name: c.s }, t = brandIcon(c.s, 18, { tile: true }), title = `${s.name}: ${connectionLabel(c)}${c.v ? ' (verified)' : ''}`;
-    if (c.v) t.append(el('span', { className: 'p-cv' }, icon('check', 9)));
-    return href ? el('a', { className: 'p-conn', href, target: '_blank', rel: 'noopener noreferrer', title }, t) : el('span', { className: 'p-conn', title }, t);
+    const href = connectionLink(c), s = SERVICE[c.s] || { name: c.s }, title = `${s.name}: ${connectionLabel(c)}${c.v ? ' (verified)' : ''}`;
+    const kids = [brandIcon(c.s, 18, { tile: true }), c.v ? el('span', { className: 'p-cv' }, icon('check', 9)) : null];
+    return href ? el('a', { className: 'p-conn', href, target: '_blank', rel: 'noopener noreferrer', title }, ...kids) : el('span', { className: 'p-conn', title }, ...kids);
   }))));
   const w = widgetsOf(x).find((v) => v && Array.isArray(v.g) && v.g.length);
   if (w) out.push(sec((WIDGET[w.t] || { title: 'Games' }).title, el('button', { className: 'p-board', title: 'See their Board', onclick: onBoard },
@@ -4775,6 +4836,7 @@ function applyPrefs() {
     ['frame', prefs.frame], ['catstyle', prefs.catStyle], ['memstyle', prefs.membersStyle], ['bannerstyle', prefs.bannerStyle]]) S(attr, val);
   S('timestamps', prefs.timestamps === 'off' ? 'off' : 'on');
   S('namehover', prefs.nameHover === 'underline' ? 'underline' : 'off');
+  setTileLook(prefs.connLook);
   V('--top-gap', prefs.topGap);
   V('--rail-w', prefs.railW); V('--side-w', prefs.sideW); V('--members-w', prefs.membersW); V('--top-h', prefs.topH);
   V('--composer-h', prefs.composerH); V('--panel-h', prefs.panelH); V('--banner-h', prefs.bannerH); V('--status-h', prefs.statusH);
@@ -7041,6 +7103,7 @@ function czPane(id, redraw) {
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => set('decorations', on ? 'on' : 'off'))),
     row2('Profile effects and frames', 'Snow, sparkles, frames and more on profile cards.', sw(prefs.effects !== 'off', (on) => set('effects', on ? 'on' : 'off'))),
     flag('plates', 'Nameplates', 'Pictures behind names in member lists and DMs.'),
+    row2('Connection icons', 'How the accounts people added look on their profiles.', pick('connLook', [['png', 'The services’ own logos'], ['theme', 'Tiles in your theme’s colours'], ['white', 'White tiles']])),
     flag('dmPanel', 'Profile beside DMs', 'Their card, beside your conversation with them.'),
     flag('memberOffline', 'Offline people in member lists', ''), flag('memberStatusText', 'A second line in member lists', 'Each person’s about text.'),
     row2('Group members by role', 'People with a role shown separately get their own heading.', pick('memberGroups', [['on', 'Grouped'], ['off', 'One list']])),

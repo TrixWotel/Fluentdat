@@ -1082,6 +1082,16 @@ export const SupabaseStore = {
     const rows = must(await sb.rpc('search_dm', { p_dm: dm, p_query: o.q || '', p_from: o.from || null, p_has: o.has || '', p_before: o.before ? new Date(o.before).toISOString() : null, p_limit: 25 })) || [];
     return rows.map((r) => ({ ...toMessage(r), place: r.dm_id }));
   },
+  // every DM and group chat at once (Direct Messages → Browse): each one's newest 25, put together, the newest 25 of those
+  async searchAllDMs(o = {}) {
+    const ids = SupabaseStore.dmList().map((d) => d.id), out = []; let failed = null;
+    for (let i = 0; i < ids.length; i += 4) {
+      const got = await Promise.all(ids.slice(i, i + 4).map((id) => SupabaseStore.searchDM(id, o).catch((e) => { failed = failed || e; return []; })));
+      out.push(...got.flat());
+    }
+    if (!out.length && failed) throw failed;
+    return out.sort((a, b) => b.ts - a.ts).slice(0, 25);
+  },
   // ---- a server's events (Discord's): upcoming and happening ones, soonest first, with who's interested ----
   events(sv) {
     const now = Date.now(), me = myId();

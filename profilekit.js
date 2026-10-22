@@ -36,10 +36,19 @@ export const SERVICES = [
 ];
 export const SERVICE = Object.fromEntries(SERVICES.map((s) => [s.id, s]));
 const lum = (hex) => { const n = parseInt(hex.slice(1), 16); return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255; };
-// a service's icon: its colour (a dark one shows in the page's text colour), or in a white tile as on Discord's profiles
+// how a tile looks (Customize → Profiles → Connection icons): 'png' the service's own logo picture (icons/conn/<id>.png),
+// 'theme' its logo on a tile in the theme's colours, 'white' its logo on a white tile
+let tileLook = 'png';
+export const setTileLook = (v) => { tileLook = ['png', 'theme', 'white'].includes(v) ? v : 'png'; };
+// a service's icon: its colour (a dark one shows in the page's text colour), or a tile, as on Discord's profiles
 export function brandIcon(id, size = 20, { tile = false } = {}) {
   const s = SERVICE[id] || SERVICE.website;
-  const b = el('span', { className: 'bi' + (tile ? ' bi-tile' : '') + (lum(s.color) < 0.25 ? ' dark' : ''), title: s.name });
+  if (tile && tileLook === 'png') {
+    const b = el('span', { className: 'bi bi-tile bi-png', title: s.name });
+    b.append(el('img', { src: new URL(`./icons/conn/${SERVICE[id] ? id : 'website'}.png`, import.meta.url).href, width: size + 10, height: size + 10, alt: '', draggable: false }));
+    return b;
+  }
+  const b = el('span', { className: 'bi' + (tile ? ' bi-tile' + (tileLook === 'theme' ? ' bi-theme' : '') : '') + (lum(s.color) < 0.25 ? ' dark' : ''), title: s.name });
   b.style.setProperty('--bc', s.color);
   if (s.path) b.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path d="${s.path}"/></svg>`;
   else b.append(icon(s.icon, size));

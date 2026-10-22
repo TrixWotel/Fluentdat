@@ -113,6 +113,7 @@ const fallback = {
   // searching what's kept in this browser
   searchServer: async (sv, o = {}) => localSearch(Store.channels(sv).map((c) => [c.id, Store.messages(c.id)]), o),
   searchDM: async (dm, o = {}) => localSearch([[dm, Store.dm(dm)]], o),
+  searchAllDMs: async (o = {}) => localSearch(Store.dmList().map((d) => [d.id, Store.dm(d.id)]), o),
   adoptTag: async () => { throw new Error(SIGN_IN + 'wear a server tag.'); },
   tagInfo: async () => null,
   findUser: async () => null,
