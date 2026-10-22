@@ -16,7 +16,7 @@ import { FONTS, EFFECTS, NAME_COLORS, styleName, hasStyle, surprise, fontFamily,
 import { BADGES, TAG_COLORS, tagChip, badgeSVG } from './tags.js';
 import { DECORATIONS, EFFECTS as PROFILE_EFFECTS, QUESTS, FRAMES, decoEl, effectEl, frameEl, decoInfo, effectInfo, frameInfo, questInfo, questProgress } from './shop.js';
 import { BADGE as PROFILE_BADGE, KINDS as BADGE_KINDS, SECRETS as SECRET_BADGES, COUNT as BADGE_COUNT, badgesOf, badgeState, badgeIcon, toNext, tierAt } from './badges.js';
-import { TASKS, TASK, EVERY, PRICES, WELCOME, fmtBux, period, resetsIn } from './datbux.js';
+import { TASKS, TASK, EVERY, PRICES, WELCOME, BUNDLES, bundleCost, fmtBux, period, resetsIn } from './datbux.js';
 import { NAMEPLATES, plateInfo } from './plates.js';
 import { SERVICES, SERVICE, brandIcon, setTileLook, parseConnection, connectionLink, connectionLabel, gameTile, cleanGame, localGames, searchGames, gamesByLetter, LETTERS, sameGame, POPULAR, WIDGETS, playingNow } from './profilekit.js';
 // (Customize, the site of its own: customize.html is this same page, marked; app.js shows Customize there instead of the chat)
@@ -1561,6 +1561,22 @@ const Bux = {
     w.balance -= cost; w.spent += cost; w.owned.push(kind + ':' + item); keepWallet(w, { amount: -cost, kind: 'buy', note: kind + ':' + item });
     return true;
   },
+  // the Shop's bundles (signed in, as the database has them), what one costs you (what you have already isn't paid for
+  // again), and buying one
+  bundles: () => (!buxReady() ? [] : buxLive() ? (Store.canBundles() ? Store.bundles() : []) : BUNDLES),
+  bundlePrice: (b) => bundleCost(b, Bux.price, Bux.owns),
+  bundleFull: (b) => b.items.reduce((n, x) => n + (Bux.price(x.k, x.i) || 0), 0),
+  async buyBundle(b) {
+    const cost = Bux.bundlePrice(b);
+    if (!(cost > 0)) return true;
+    if (buxLive()) return (await attempt(() => Store.buyBundle(b.id))) !== null;
+    const w = localWallet();
+    if (w.balance < cost) { toast(`That costs ${fmtBux(cost)} Datbux, and you have ${fmtBux(w.balance)}.`); return false; }
+    w.balance -= cost; w.spent += cost;
+    for (const x of b.items) if (!w.owned.includes(x.k + ':' + x.i)) w.owned.push(x.k + ':' + x.i);
+    keepWallet(w, { amount: -cost, kind: 'buy', note: 'bundle:' + b.id });
+    return true;
+  },
   // what's happened in your wallet, newest first: { at, amount, kind, note, other }
   async history() {
     if (!buxLive()) return localWallet().log || [];
@@ -1578,6 +1594,28 @@ async function buyFlow(kind, item) {
   if (!(await Bux.buy(kind, item))) return false;
   toast(`${name} is yours.`); renderAll();
   return true;
+}
+// buying a bundle (asked first, with what's in it): true once it's all yours
+async function buyBundleFlow(b) {
+  const cost = Bux.bundlePrice(b), name = `${b.name} Bundle`;
+  if (!(cost > 0)) return true;
+  const bal = Bux.wallet().balance;
+  if (bal < cost) { toast(`The ${name} costs ${fmtBux(cost)} Datbux, and you have ${fmtBux(bal)}. Earn more with tasks (Direct Messages → Bank).`); return false; }
+  const list = b.items.map((x) => `${itemName(x.k, x.i)} (${KIND_NAME[x.k] || x.k}${Bux.owns(x.k, x.i) ? ', yours already' : ''})`).join(', ');
+  if (!(await confirmBox({ title: `Buy the ${name}?`, ok: `Buy for ${fmtBux(cost)}`,
+    text: `${list}. ${fmtBux(cost)} Datbux, ${b.pct}% less than ${b.items.some((x) => Bux.owns(x.k, x.i)) ? 'the rest of it' : 'its things'} one by one. You have ${fmtBux(bal)}, so ${fmtBux(bal - cost)} would be left. They’re yours to keep, or to trade.` }))) return false;
+  if (!(await Bux.buyBundle(b))) return false;
+  renderAll();
+  return true;
+}
+// what wearing a whole bundle changes on your profile
+function bundlePatch(b) {
+  const patch = {};
+  for (const x of b.items) {
+    if (x.k === 'deco') patch.decoration = x.i; else if (x.k === 'effect') patch.effect = x.i; else if (x.k === 'frame') patch.frame = x.i;
+    else if (x.k === 'plate') patch.plate = 'np:' + x.i; else if (x.k === 'font') patch.style = { ...(me.style || {}), font: x.i };
+  }
+  return patch;
 }
 // the people you could send Datbux to or trade with: friends, the people in your DMs and in your servers
 function knownPeople() {
@@ -1693,7 +1731,8 @@ function tradeCard(t) {
 // a line of your wallet's history
 function buxLine(h) {
   const who = h.other ? person(h.other).name : '', [kind, item] = String(h.note || '').split(':');
-  const what = { welcome: 'Welcome to Datbux', task: `Task: ${(TASK[h.note] || {}).title || h.note}`, buy: `Bought ${itemName(kind, item)}`, boost: `Boosted ${h.note || 'a server'}`, send: `Sent to ${who}`, receive: `From ${who}`, trade: `Trade with ${who}` }[h.kind] || h.kind;
+  const bundle = kind === 'bundle' ? (Bux.bundles().find((b) => b.id === item) || BUNDLES.find((b) => b.id === item) || { name: item }) : null;
+  const what = { welcome: 'Welcome to Datbux', task: `Task: ${(TASK[h.note] || {}).title || h.note}`, buy: bundle ? `Bought the ${bundle.name} Bundle` : `Bought ${itemName(kind, item)}`, boost: `Boosted ${h.note || 'a server'}`, send: `Sent to ${who}`, receive: `From ${who}`, trade: `Trade with ${who}` }[h.kind] || h.kind;
   const said = (h.kind === 'send' || h.kind === 'receive') && h.note ? h.note : '';
   return el('div', { className: 'dbx-log' }, el('span', { className: 'dbx-ld' }, icon(h.kind === 'buy' ? 'shop' : h.kind === 'task' ? 'check' : h.kind === 'trade' ? 'swap' : h.kind === 'welcome' ? 'gift' : h.kind === 'boost' ? 'gem' : 'send', 16)),
     el('div', { className: 'grow' }, el('b', {}, what), said ? el('small', {}, '“' + said + '”') : null), el('time', {}, when(h.at, true)),
@@ -1791,21 +1830,56 @@ function shopPage() {
     row.style.setProperty('--plate', paint(v));
     return item(row, name, cost('plate', id), act('plate', id, on, { plate: '' }, { plate: v }, 'Nameplate taken off.', `${name} is behind your name now.`), on);
   }) : [];
+  // (a bundle, as on Discord: its decoration on your avatar, its nameplate behind your name, and its effect and frame on a
+  // card, tilted together; what it costs you, and how much less that is)
+  const bundleCard = (b) => {
+    const has = (k) => (b.items.find((x) => x.k === k) || {}).i || '', deco = has('deco'), fx = has('effect'), fr = has('frame'), pl = has('plate'), font = has('font');
+    const st2 = font ? { ...(me.style || {}), font } : me.style || {};
+    const nameOf = (cls) => styleName(el('span', { className: cls }, me.name || 'Your Name'), st2, { fallback: safeColor(me.color, '#ffffff') });
+    const card = el('div', { className: 'bdl-card' }, el('div', { className: 'bdl-card-b' }), el('div', { className: 'bdl-card-av' }, avatarEl({ ...you, decoration: '' }, { size: 30 })),
+      el('div', { className: 'bdl-card-n' }, nameOf('bdl-nm')), el('i', { className: 'l1' }), el('i', { className: 'l2' }));
+    setBanner(card.firstChild, me.banner, me.color); themeCard(card, you.theme);
+    if (fx) { const e = effectEl(fx); if (e) card.append(e); }
+    if (fr) withFrame(card, fr);
+    const strip = pl || font ? el('div', { className: 'bdl-plate mem' + (pl ? ' plated' : '') }, avatarEl(you, { size: 20 }), el('div', { className: 'who' }, el('div', { className: 'nm' }, nameOf('nmt')))) : null;
+    if (strip && pl) strip.style.setProperty('--plate', paint('np:' + pl));
+    const pv = el('div', { className: 'bdl-pv' }, card, strip, el('div', { className: 'bdl-av' }, avatarEl({ ...you, decoration: deco }, { size: 64 })));
+    const price = Bux.bundlePrice(b), mine = !(price > 0), owned = b.items.filter((x) => Bux.owns(x.k, x.i)).length;
+    const what = b.items.map((x) => `${itemName(x.k, x.i)} (${KIND_NAME[x.k] || x.k})`).join(', ');
+    const buy = mine ? el('button', { className: 'btn small bdl-buy', onclick: () => use(bundlePatch(b), `The ${b.name} Bundle is on.`) }, 'Use All')
+      : el('button', { className: 'btn small primary bdl-buy', onclick: async () => {
+        if (!(await buyBundleFlow(b))) return;
+        notice(`The ${b.name} Bundle is yours.`, 'Put It On', () => use(bundlePatch(b), `The ${b.name} Bundle is on.`));
+      } }, icon('coin', 14), 'Buy for ' + fmtBux(price));
+    return el('div', { className: 'shp-item bdl' + (mine ? ' on' : ''), title: 'Includes ' + what }, pv,
+      el('div', { className: 'shp-meta' }, el('b', {}, `${b.items.length}pc ${b.name} Bundle`),
+        el('small', { className: 'bdl-price' }, ...(mine ? [el('span', { className: 'bux-own' }, icon('check', 13), 'Yours')]
+          : [buxTag(price), el('span', { className: 'bdl-off' }, `(-${b.pct}%)`), owned ? el('span', { className: 'bdl-have' }, `you have ${owned}`) : null]))),
+      buy);
+  };
+  const bundles = Bux.bundles().map(bundleCard);
   const sec = (title, sub, list, cls = '') => (list.length ? [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)] : []);
-  return el('div', { className: 'shp-page' },
+  const page = el('div', { className: 'shp-page' },
     el('div', { className: 'shp-hero' }, el('div', {}, el('h1', {}, 'Shop'),
-      el('p', {}, w ? 'Everything here costs Datbux: earn them with tasks in your Bank. A few things are also a Quest’s reward, yours once you’ve done the Quest.' : 'Everything here is free. A few things unlock when you finish a Quest.'),
+      el('p', {}, w ? 'Everything here costs Datbux: earn them with tasks in your Bank. Bundles cost less than their things one by one, and a few things are also a Quest’s reward, yours once you’ve done the Quest.' : 'Everything here is free. A few things unlock when you finish a Quest.'),
       el('div', { className: 'shp-hero-acts' }, w ? el('button', { className: 'btn shp-bal', title: 'Your Datbux', onclick: () => goHome('datbux') }, icon('coin', 16), fmtBux(w.balance)) : null,
         el('button', { className: 'btn', onclick: () => goHome('quests') }, icon('quest', 16), labelOf('dmNav', 'questsNav')),
         el('button', { className: 'btn', onclick: () => goHome('collection') }, icon('collection', 16), labelOf('dmNav', 'collectionNav')),
         el('button', { className: 'btn', onclick: () => nameStyleDialog(me.style, (s) => { me.style = s; saveMe(); pushProfile(); renderAll(); }, asMember) }, icon('brush', 16), 'Display Name Style'))),
       el('div', { className: 'shp-you' }, avatarEl(you, { size: 96 }))),
-    ...sec('Avatar Decorations', `${DECORATIONS.length} of them, around your avatar everywhere: in chats, the member list and your profile.`, decos),
+    ...sec('Bundles', `${bundles.length} of them: a few things that go together, for less than one by one. What you have already isn’t paid for again.`, bundles, 'bundles'),
+    ...sec('Avatar Decorations', `${DECORATIONS.length} of them, each about a week of tasks, around your avatar everywhere: in chats, the member list and your profile.`, decos),
     ...sec('Name Fonts', `${FONTS.length - 1} of them. Your name, in a font of its own: in chats, the member list and your profile. Its colours and effect are your Display Name Style.`, fonts, 'wide'),
     ...sec('Profile Effects', `${PROFILE_EFFECTS.length} of them, played over your profile card when someone opens it.`, effects, 'wide'),
     ...sec('Profile Frames', `${FRAMES.length} of them, drawn around your profile card wherever someone opens it.`, frames, 'frames'),
     ...sec('Nameplates', `${NAMEPLATES.length} of them, behind your name in the member list and your DMs (when people have nameplates on). Plain colours and your own pictures are free in Edit Profile.`, nameplates, 'wide'),
     prefs.decorations === 'off' || prefs.effects === 'off' ? el('div', { className: 'note-box' }, 'You’ve turned off decorations or effects for yourself (Customize → Profiles), so you won’t see them on other people.') : null);
+  // (only what's on the screen moves: a Shop full of effects and frames is a lot to animate at once)
+  if (window.IntersectionObserver) {
+    const io = new IntersectionObserver((es) => { if (!page.isConnected) return io.disconnect(); for (const e of es) e.target.classList.toggle('still', !e.isIntersecting); }, { rootMargin: '150px 0px' });
+    for (const c of page.querySelectorAll('.shp-item, .shp-fr')) { c.classList.add('still'); io.observe(c); }
+  }
+  return page;
 }
 // Collection (Direct Messages → Collection): what's yours from the Shop (bought, traded, or kept from before things had
 // prices) and from Quests, to put on or take off

@@ -399,6 +399,15 @@ create table if not exists public.quest_rewards (
   kind text not null check (kind in ('deco', 'font', 'effect', 'frame', 'plate')),
   item text not null check (item ~ '^[a-z0-9-]{1,24}$')
 );
+-- the Shop's bundles: a few things that go together, for less than they cost one by one (pct off; what you have
+-- already isn't paid for again)
+create table if not exists public.shop_bundles (
+  id text primary key check (id ~ '^[a-z0-9-]{1,24}$'),
+  name text not null check (char_length(name) between 1 and 40),
+  pct int not null check (pct between 0 and 90),
+  items jsonb not null check (jsonb_typeof(items) = 'array' and jsonb_array_length(items) between 2 and 6),
+  position int not null default 0
+);
 -- a trade between two people: Datbux and things from the Shop each way; the other person accepts or declines it
 create table if not exists public.trades (
   id uuid primary key default gen_random_uuid(),
@@ -847,6 +856,9 @@ create policy "what people you know have" on public.owned_items for select to au
 alter table public.quest_rewards enable row level security;
 drop policy if exists "what Quests give" on public.quest_rewards;
 create policy "what Quests give" on public.quest_rewards for select to authenticated using (true);
+alter table public.shop_bundles enable row level security;
+drop policy if exists "the Shop's bundles" on public.shop_bundles;
+create policy "the Shop's bundles" on public.shop_bundles for select to authenticated using (true);
 alter table public.trades enable row level security;
 drop policy if exists "your trades" on public.trades;
 create policy "your trades" on public.trades for select to authenticated using (from_user = auth.uid() or to_user = auth.uid());
@@ -1572,7 +1584,7 @@ begin
 end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 11 $$;
+create or replace function public.setup_version() returns int language sql immutable as $$ select 12 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -1660,6 +1672,31 @@ begin
   update wallets set balance = balance - cost, spent = spent + cost, updated_at = now() where user_id = auth.uid();
   insert into owned_items (user_id, kind, item, how) values (auth.uid(), p_kind, p_item, 'buy');
   insert into datbux_log (user_id, amount, kind, note) values (auth.uid(), -cost, 'buy', p_kind || ':' || p_item);
+  return bal - cost;
+end $$;
+-- what a bundle costs someone: its things they don't have yet, less the bundle's pct, to the nearest 10 (0: they have it all)
+create or replace function public.bundle_cost(p_bundle text, p_user uuid) returns bigint
+language sql stable security definer set search_path = public as $$
+  select coalesce(round(sum(s.price) * (100 - max(b.pct)) / 1000.0) * 10, 0)::bigint
+  from shop_bundles b cross join lateral jsonb_array_elements(b.items) it join shop_items s on s.kind = it ->> 'k' and s.item = it ->> 'i'
+  where b.id = p_bundle and not exists (select 1 from owned_items o where o.user_id = p_user and o.kind = it ->> 'k' and o.item = it ->> 'i');
+$$;
+-- buy a bundle: everything in it is yours (what you had already, you keep; it isn't paid for twice)
+create or replace function public.buy_bundle(p_bundle text) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare b shop_bundles%rowtype; cost bigint; bal bigint;
+begin
+  if auth.uid() is null then raise exception 'Sign in first.'; end if;
+  select * into b from shop_bundles where id = p_bundle;
+  if not found then raise exception 'That bundle isn''t in the Shop.'; end if;
+  perform wallet_open(auth.uid());
+  select balance into bal from wallets where user_id = auth.uid() for update;
+  cost := bundle_cost(p_bundle, auth.uid());
+  if cost <= 0 then raise exception 'You have everything in the % Bundle already.', b.name; end if;
+  if bal < cost then raise exception 'That costs % Datbux, and you have %.', cost, bal; end if;
+  update wallets set balance = balance - cost, spent = spent + cost, updated_at = now() where user_id = auth.uid();
+  insert into owned_items (user_id, kind, item, how) select auth.uid(), it ->> 'k', it ->> 'i', 'buy' from jsonb_array_elements(b.items) it on conflict do nothing;
+  insert into datbux_log (user_id, amount, kind, note) values (auth.uid(), -cost, 'buy', 'bundle:' || b.id);
   return bal - cost;
 end $$;
 -- send someone you know some Datbux (up to 100,000 at a time)
@@ -2323,6 +2360,10 @@ revoke all on function public.perm_for(uuid, uuid, text), public.chan_perm(uuid,
 revoke all on function public.renew_boosts_for(uuid), public.renew_all_boosts() from public, anon, authenticated;
 revoke all on function public.boost_server(uuid, int), public.set_boost_auto(uuid, boolean), public.renew_boosts(), public.claim_quest_reward(text) from public, anon;
 grant execute on function public.boost_server(uuid, int), public.set_boost_auto(uuid, boolean), public.renew_boosts(), public.claim_quest_reward(text), public.boost_price() to authenticated;
+-- (bundles: yours to buy; what one costs someone else isn't anyone's business)
+revoke all on function public.bundle_cost(text, uuid) from public, anon, authenticated;
+revoke all on function public.buy_bundle(text) from public, anon;
+grant execute on function public.buy_bundle(text) to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -2340,9 +2381,9 @@ revoke all on public.profiles, public.servers, public.server_members, public.cat
 grant select, insert, update, delete on public.user_settings to authenticated;
 revoke all on public.user_settings from anon;
 -- (Datbux: looked at only; changed only by its functions)
-grant select on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards to authenticated;
-revoke insert, update, delete, truncate on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards from authenticated;
-revoke all on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards from anon;
+grant select on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards, public.shop_bundles to authenticated;
+revoke insert, update, delete, truncate on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards, public.shop_bundles from authenticated;
+revoke all on public.wallets, public.datbux_log, public.task_claims, public.shop_items, public.owned_items, public.trades, public.quest_rewards, public.shop_bundles from anon;
 -- (boosts: looked at by the server's people, started through boost_server, stopped by deleting your own)
 revoke insert, update on public.server_boosts from authenticated;
 
@@ -2350,14 +2391,14 @@ revoke insert, update on public.server_boosts from authenticated;
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
 
 -- the Shop's prices in Datbux: everything in it (decorations, name fonts, effects, frames, nameplates); a Quest's reward is
--- yours once you've done the Quest
+-- yours once you've done the Quest. A decoration costs about a week of tasks (100 a day and 420 a week: 1,120)
 insert into public.shop_items (kind, item, price) values
-  ('deco', 'halo', 150), ('deco', 'flame', 300), ('deco', 'catears', 200), ('deco', 'leaves', 200), ('deco', 'gears', 250), ('deco', 'glitch', 300),
-  ('deco', 'hearts', 250), ('deco', 'sparkle', 200), ('deco', 'rainbow', 250), ('deco', 'neon', 250), ('deco', 'orbit', 250), ('deco', 'crown', 300),
-  ('deco', 'bubbles', 150), ('deco', 'starring', 200), ('deco', 'snowflakes', 200), ('deco', 'devil', 250), ('deco', 'angel', 300), ('deco', 'bunny', 200),
-  ('deco', 'headphones', 250), ('deco', 'flowers', 250), ('deco', 'bolts', 300), ('deco', 'notes', 200), ('deco', 'pixel', 150), ('deco', 'foxears', 200),
-  ('deco', 'clouds', 150), ('deco', 'aurora', 350), ('deco', 'sakura', 250), ('deco', 'witch', 300), ('deco', 'bow', 200), ('deco', 'shades', 250),
-  ('deco', 'moon', 300), ('deco', 'crystals', 350),
+  ('deco', 'halo', 800), ('deco', 'flame', 1250), ('deco', 'catears', 950), ('deco', 'leaves', 950), ('deco', 'gears', 1100), ('deco', 'glitch', 1250),
+  ('deco', 'hearts', 1100), ('deco', 'sparkle', 950), ('deco', 'rainbow', 1100), ('deco', 'neon', 1100), ('deco', 'orbit', 1100), ('deco', 'crown', 1250),
+  ('deco', 'bubbles', 800), ('deco', 'starring', 950), ('deco', 'snowflakes', 950), ('deco', 'devil', 1100), ('deco', 'angel', 1250), ('deco', 'bunny', 950),
+  ('deco', 'headphones', 1100), ('deco', 'flowers', 1100), ('deco', 'bolts', 1250), ('deco', 'notes', 950), ('deco', 'pixel', 800), ('deco', 'foxears', 950),
+  ('deco', 'clouds', 800), ('deco', 'aurora', 1400), ('deco', 'sakura', 1100), ('deco', 'witch', 1250), ('deco', 'bow', 950), ('deco', 'shades', 1100),
+  ('deco', 'moon', 1250), ('deco', 'crystals', 1400),
   ('font', 'tempo', 100), ('font', 'sakura', 100), ('font', 'jelly', 150), ('font', 'modern', 150), ('font', 'medieval', 200), ('font', 'pixel', 200),
   ('font', 'vampyre', 250), ('font', 'chunky', 150), ('font', 'comic', 80), ('font', 'script', 200), ('font', 'type', 80), ('font', 'marker', 150),
   ('font', 'elegant', 250), ('font', 'lobster', 150), ('font', 'bangers', 150), ('font', 'righteous', 120), ('font', 'audiowide', 150), ('font', 'monoton', 250),
@@ -2381,6 +2422,20 @@ insert into public.shop_items (kind, item, price) values
   ('plate', 'waves', 100), ('plate', 'polka', 60), ('plate', 'zigzag', 60), ('plate', 'hearts', 100), ('plate', 'bubbles', 100), ('plate', 'flames', 150),
   ('plate', 'rainbow', 120), ('plate', 'marble', 150), ('plate', 'camo', 80), ('plate', 'honey', 100), ('plate', 'music', 100), ('plate', 'paws', 80)
 on conflict (kind, item) do update set price = excluded.price;
+-- the bundles: 20% off two things, 25% three, 30% four, 35% five
+insert into public.shop_bundles (id, name, pct, items, position) values
+  ('spooky', 'Spooky Night', 30, '[{"k":"deco","i":"witch"},{"k":"effect","i":"ghosts"},{"k":"frame","i":"bats"},{"k":"font","i":"vampyre"}]', 0),
+  ('blossom', 'Cherry Blossom', 30, '[{"k":"deco","i":"sakura"},{"k":"effect","i":"petals"},{"k":"frame","i":"blossom"},{"k":"plate","i":"sakura"}]', 1),
+  ('cosmic', 'Cosmic', 25, '[{"k":"deco","i":"moon"},{"k":"effect","i":"galaxy"},{"k":"plate","i":"galaxy"}]', 2),
+  ('arcade', 'Arcade', 35, '[{"k":"deco","i":"pixel"},{"k":"effect","i":"pixels"},{"k":"frame","i":"pixelhearts"},{"k":"plate","i":"pixel"},{"k":"font","i":"silkscreen"}]', 3),
+  ('inferno', 'Inferno', 30, '[{"k":"deco","i":"flame"},{"k":"effect","i":"flames"},{"k":"frame","i":"inferno"},{"k":"plate","i":"lava"}]', 4),
+  ('frost', 'Winter Frost', 25, '[{"k":"deco","i":"snowflakes"},{"k":"effect","i":"snow"},{"k":"frame","i":"frost"}]', 5),
+  ('synthwave', 'Synthwave', 30, '[{"k":"deco","i":"neon"},{"k":"frame","i":"synth"},{"k":"plate","i":"neon"},{"k":"font","i":"audiowide"}]', 6),
+  ('royal', 'Royal Court', 25, '[{"k":"deco","i":"crown"},{"k":"frame","i":"royal"},{"k":"plate","i":"gold"}]', 7),
+  ('lovestruck', 'Love Struck', 20, '[{"k":"deco","i":"hearts"},{"k":"effect","i":"hearts"}]', 8),
+  ('headliner', 'Headliner', 30, '[{"k":"deco","i":"headphones"},{"k":"effect","i":"music"},{"k":"frame","i":"melody"},{"k":"plate","i":"music"}]', 9)
+on conflict (id) do update set name = excluded.name, pct = excluded.pct, items = excluded.items, position = excluded.position;
+delete from public.shop_bundles where id not in ('spooky', 'blossom', 'cosmic', 'arcade', 'inferno', 'frost', 'synthwave', 'royal', 'lovestruck', 'headliner');
 -- (what people wore before there was anything to pay with stays theirs)
 insert into public.owned_items (user_id, kind, item, how) select id, 'deco', decoration, 'grant' from public.profiles where decoration ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
 insert into public.owned_items (user_id, kind, item, how) select id, 'font', name_font, 'grant' from public.profiles where name_font ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;

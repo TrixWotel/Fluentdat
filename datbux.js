@@ -19,12 +19,12 @@ export const TASK = Object.fromEntries(TASKS.map((t) => [t.id, t]));
 export const EVERY = { day: 'Daily', week: 'Weekly', month: 'Monthly', year: 'Yearly' };
 // what the Shop asks (Datbux), as in setup.sql: everything has a price (a Quest's reward is yours once you've done it)
 export const PRICES = {
-  'deco:halo': 150, 'deco:flame': 300, 'deco:catears': 200, 'deco:leaves': 200, 'deco:gears': 250, 'deco:glitch': 300,
-  'deco:hearts': 250, 'deco:sparkle': 200, 'deco:rainbow': 250, 'deco:neon': 250, 'deco:orbit': 250, 'deco:crown': 300,
-  'deco:bubbles': 150, 'deco:starring': 200, 'deco:snowflakes': 200, 'deco:devil': 250, 'deco:angel': 300, 'deco:bunny': 200,
-  'deco:headphones': 250, 'deco:flowers': 250, 'deco:bolts': 300, 'deco:notes': 200, 'deco:pixel': 150, 'deco:foxears': 200,
-  'deco:clouds': 150, 'deco:aurora': 350, 'deco:sakura': 250, 'deco:witch': 300, 'deco:bow': 200, 'deco:shades': 250,
-  'deco:moon': 300, 'deco:crystals': 350,
+  'deco:halo': 800, 'deco:flame': 1250, 'deco:catears': 950, 'deco:leaves': 950, 'deco:gears': 1100, 'deco:glitch': 1250,
+  'deco:hearts': 1100, 'deco:sparkle': 950, 'deco:rainbow': 1100, 'deco:neon': 1100, 'deco:orbit': 1100, 'deco:crown': 1250,
+  'deco:bubbles': 800, 'deco:starring': 950, 'deco:snowflakes': 950, 'deco:devil': 1100, 'deco:angel': 1250, 'deco:bunny': 950,
+  'deco:headphones': 1100, 'deco:flowers': 1100, 'deco:bolts': 1250, 'deco:notes': 950, 'deco:pixel': 800, 'deco:foxears': 950,
+  'deco:clouds': 800, 'deco:aurora': 1400, 'deco:sakura': 1100, 'deco:witch': 1250, 'deco:bow': 950, 'deco:shades': 1100,
+  'deco:moon': 1250, 'deco:crystals': 1400,
   'font:tempo': 100, 'font:sakura': 100, 'font:jelly': 150, 'font:modern': 150, 'font:medieval': 200, 'font:pixel': 200,
   'font:vampyre': 250, 'font:chunky': 150, 'font:comic': 80, 'font:script': 200, 'font:type': 80, 'font:marker': 150,
   'font:elegant': 250, 'font:lobster': 150, 'font:bangers': 150, 'font:righteous': 120, 'font:audiowide': 150, 'font:monoton': 250,
@@ -49,6 +49,21 @@ export const PRICES = {
   'plate:rainbow': 120, 'plate:marble': 150, 'plate:camo': 80, 'plate:honey': 100, 'plate:music': 100, 'plate:paws': 80,
 };
 export const WELCOME = 200;
+// the Shop's bundles, as in setup.sql: a few things that go together, for less (pct off what you don't have yet, to the
+// nearest 10)
+export const BUNDLES = [
+  { id: 'spooky', name: 'Spooky Night', pct: 30, items: [{ k: 'deco', i: 'witch' }, { k: 'effect', i: 'ghosts' }, { k: 'frame', i: 'bats' }, { k: 'font', i: 'vampyre' }] },
+  { id: 'blossom', name: 'Cherry Blossom', pct: 30, items: [{ k: 'deco', i: 'sakura' }, { k: 'effect', i: 'petals' }, { k: 'frame', i: 'blossom' }, { k: 'plate', i: 'sakura' }] },
+  { id: 'cosmic', name: 'Cosmic', pct: 25, items: [{ k: 'deco', i: 'moon' }, { k: 'effect', i: 'galaxy' }, { k: 'plate', i: 'galaxy' }] },
+  { id: 'arcade', name: 'Arcade', pct: 35, items: [{ k: 'deco', i: 'pixel' }, { k: 'effect', i: 'pixels' }, { k: 'frame', i: 'pixelhearts' }, { k: 'plate', i: 'pixel' }, { k: 'font', i: 'silkscreen' }] },
+  { id: 'inferno', name: 'Inferno', pct: 30, items: [{ k: 'deco', i: 'flame' }, { k: 'effect', i: 'flames' }, { k: 'frame', i: 'inferno' }, { k: 'plate', i: 'lava' }] },
+  { id: 'frost', name: 'Winter Frost', pct: 25, items: [{ k: 'deco', i: 'snowflakes' }, { k: 'effect', i: 'snow' }, { k: 'frame', i: 'frost' }] },
+  { id: 'synthwave', name: 'Synthwave', pct: 30, items: [{ k: 'deco', i: 'neon' }, { k: 'frame', i: 'synth' }, { k: 'plate', i: 'neon' }, { k: 'font', i: 'audiowide' }] },
+  { id: 'royal', name: 'Royal Court', pct: 25, items: [{ k: 'deco', i: 'crown' }, { k: 'frame', i: 'royal' }, { k: 'plate', i: 'gold' }] },
+  { id: 'lovestruck', name: 'Love Struck', pct: 20, items: [{ k: 'deco', i: 'hearts' }, { k: 'effect', i: 'hearts' }] },
+  { id: 'headliner', name: 'Headliner', pct: 30, items: [{ k: 'deco', i: 'headphones' }, { k: 'effect', i: 'music' }, { k: 'frame', i: 'melody' }, { k: 'plate', i: 'music' }] },
+];
+export const bundleCost = (b, price, owns) => Math.round(b.items.filter((x) => !owns(x.k, x.i)).reduce((n, x) => n + (price(x.k, x.i) || 0), 0) * (100 - b.pct) / 1000) * 10;
 export const fmtBux = (n) => Math.floor(Number(n) || 0).toLocaleString('en-US');
 // this day, week (Monday to Sunday), month or year, as the database names it (UTC): its name, and when it began and ends
 const pad = (n) => String(n).padStart(2, '0');

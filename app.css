@@ -2384,3 +2384,21 @@ button.pc-name:hover { text-decoration: underline; }
 .br-count { color: var(--muted); font-size: .82rem; font-weight: 600; }
 .br-where { display: inline-flex; align-items: center; gap: 5px; min-width: 0; } .br-where .avatar .dot { display: none; }
 @media (max-width: 640px) { .br-head { flex-direction: column; } .br-bar { flex-wrap: wrap; } .br-bar select { flex: 1; height: 40px; } }
+/* Round L: the Shop's bundles, as on Discord: the decoration on your avatar, the nameplate behind your name, and the
+   effect and frame on a tilted card, with what it costs you and how much less that is */
+.shp-grid.bundles { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.bdl-pv { position: relative; height: 172px; border-radius: 10px; overflow: hidden; background: radial-gradient(120% 90% at 18% 18%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 62%), linear-gradient(160deg, #ffffff12, #00000033); }
+.bdl-av { position: absolute; left: 22px; top: 20px; z-index: 2; } .bdl-av .avatar .dot { display: none; }
+.bdl-pv > .bdl-card, .bdl-pv > .bdl-card.framed { position: absolute; right: -12px; top: 14px; z-index: 1; width: 50%; height: 158px; border-radius: 12px; overflow: hidden; background: var(--side); transform: rotate(8deg); box-shadow: 0 10px 26px #0009; }
+.bdl-card-b { height: 46px; }
+.bdl-card-av { position: absolute; left: 10px; top: 26px; padding: 3px; border-radius: 50%; background: var(--side); } .bdl-card-av .avatar .dot { display: none; }
+.bdl-card-n { position: absolute; left: 12px; right: 8px; top: 70px; font-weight: 800; font-size: .82rem; color: var(--bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bdl-card > i { position: absolute; left: 12px; height: 6px; border-radius: 3px; background: var(--edge); } .bdl-card > i.l1 { top: 96px; width: 62%; } .bdl-card > i.l2 { top: 108px; width: 40%; }
+.bdl-pv > .bdl-plate { position: absolute; left: 8px; bottom: 16px; z-index: 3; width: 60%; height: 36px; padding: 4px 10px; gap: 7px; border-radius: 9px; background: var(--side); transform: rotate(-7deg); box-shadow: 0 8px 20px #0009; pointer-events: none; }
+.bdl-plate .nm { font-size: .84rem; } .bdl-plate .avatar .dot { display: none; }
+.bdl-price { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.bdl-off { color: #23a55a; font-weight: 800; font-size: .8rem; } .bdl-have { color: var(--muted); font-size: .76rem; }
+@media (hover: hover) { .bdl:not(.on):not(:hover):not(:focus-within) .bdl-buy { visibility: hidden; } }
+/* (the Shop animates only what's on the screen, and nothing behind an open window) */
+.shp-item.still *, .shp-item.still *::before, .shp-item.still *::after, .shp-fr.still *, .shp-fr.still *::before, .shp-fr.still *::after,
+:root:has(.scrim) .shp-page *, :root:has(.scrim) .shp-page *::before, :root:has(.scrim) .shp-page *::after { animation-play-state: paused !important; }
