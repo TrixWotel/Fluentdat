@@ -4795,6 +4795,14 @@ async function kick(sv, m, after) {
   if ((await attempt(() => Store.removeMember(sv, m.id))) === null) return;
   toast(`${m.name} was removed.`); renderAll(); if (after) after();
 }
+// Transfer Ownership (Discord's): they own the server, and you stay on as an admin
+async function transferFlow(sv, m, after) {
+  const s = Store.server(sv) || { name: 'this server' };
+  if (!(await confirmBox({ title: `Transfer ownership of ${s.name}?`, ok: 'Transfer Ownership', danger: true,
+    text: `${m.name} becomes its owner: they can change or delete anything in it, and only they can hand it back. You stay on as an admin.` }))) return;
+  if ((await attempt(() => Store.transferServer(sv, m.id))) === null) return;
+  toast(`${m.name} owns ${s.name} now.`); renderAll(); if (after) after();
+}
 function banFlow(sv, m, after) {
   const reason = el('textarea', { maxLength: 200, placeholder: 'Optional: why (only admins see this)' });
   const ban = el('button', { className: 'btn red', textContent: 'Ban' });
@@ -5242,28 +5250,28 @@ function signInDialog(after, title, startWith) {
       el('p', { className: 'sg-sub' }, 'Chat with your team: servers, DMs and friends, live on every device.'),
       btns, or, byEmail,
       msg,
-      el('button', { className: 'sg-alt', onclick: usernameForm }, icon('user', 16), el('span', {}, 'Log in with a username and password')),
+      el('button', { className: 'sg-alt', onclick: usernameForm }, icon('user', 16), el('span', {}, 'Log in with a password')),
       el('div', { className: 'row' }, el('button', { className: 'btn ghost', onclick: () => tokenForm(false) }, icon('key', 16), ' GitHub token instead'), el('span', { style: 'flex:1' }), cancel));
   }
 
-  // accounts made from a one-time link have a username and a password, and no email
+  // a password, with your username (accounts made from a one-time link) or your email (anyone who's set a password)
   function usernameForm() {
     say();
-    const user = el('input', { type: 'text', autocomplete: 'username', autocapitalize: 'off', spellcheck: false, maxLength: 25 });
+    const user = el('input', { type: 'text', autocomplete: 'username', autocapitalize: 'off', spellcheck: false, maxLength: 254 });
     const pw = el('input', { type: 'password', autocomplete: 'current-password', maxLength: 72 });
     const go = el('button', { className: 'btn primary wide' }, 'Log In');
     go.onclick = async () => {
       const h = user.value.trim().replace(/^@/, ''), p = pw.value;
-      if (!h) { say('Type your username.'); return user.focus(); }
+      if (!h) { say('Type your username or email.'); return user.focus(); }
       if (!p) { say('Type your password.'); return pw.focus(); }
       go.disabled = true; go.textContent = 'Logging in…'; say();
-      try { const acc = await Store.signInUsername(h, p); done(acc ? acc.login : h); }
+      try { const acc = await (Store.signInAny ? Store.signInAny(h, p) : Store.signInUsername(h, p)); done(acc ? acc.login : h); }
       catch (e) { say(e); go.disabled = false; go.textContent = 'Log In'; pw.select(); }
     };
     for (const i of [user, pw]) i.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
     box.replaceChildren(sgLogo(),
-      el('h3', {}, 'Welcome back!'), el('p', { className: 'sg-sub' }, 'Log in with the username and password you made from your invite link.'),
-      el('div', { className: 'field jf' }, el('label', {}, 'Username', el('span', { className: 'req' }, ' *')), user),
+      el('h3', {}, 'Welcome back!'), el('p', { className: 'sg-sub' }, 'Your username (from your invite link) or your email, and your password.'),
+      el('div', { className: 'field jf' }, el('label', {}, 'Username or Email', el('span', { className: 'req' }, ' *')), user),
       el('div', { className: 'field jf' }, el('label', {}, 'Password', el('span', { className: 'req' }, ' *')), pw),
       msg, go,
       el('div', { className: 'row' }, Store.configured ? el('button', { className: 'btn ghost', textContent: 'Other ways to sign in', onclick: home }) : null, el('span', { style: 'flex:1' }), cancel));
@@ -5999,17 +6007,18 @@ function peopleYouHid(redraw) {
   return out;
 }
 // a new password (accounts made from a one-time link)
-function changePassword() {
+function changePassword({ first = false, after = null } = {}) {
   const pw = el('input', { type: 'password', maxLength: 72, autocomplete: 'new-password' }), pw2 = el('input', { type: 'password', maxLength: 72, autocomplete: 'new-password' });
-  const msg = el('div', { className: 'sg-msg' }), ok = el('button', { className: 'btn primary' }, 'Done');
-  const w = modal({ title: 'Change Your Password', sub: 'At least 8 characters. There’s no email to reset it with, so keep it somewhere safe.',
+  const msg = el('div', { className: 'sg-msg' }), ok = el('button', { className: 'btn primary' }, 'Done'), acc = Store.account() || {};
+  const w = modal({ title: first ? 'Set a Password' : 'Change Your Password',
+    sub: 'At least 8 characters. ' + (acc.password ? 'There’s no email to reset it with, so keep it somewhere safe.' : `Then you can also sign in with ${acc.email || 'your email'} and this password.`),
     body: [el('div', { className: 'field jf' }, el('label', {}, 'New Password'), pw), el('div', { className: 'field jf' }, el('label', {}, 'Confirm New Password'), pw2), msg],
     actions: [el('button', { className: 'btn', textContent: 'Cancel', onclick: () => w.close() }), ok] });
   ok.onclick = async () => {
     if (pw.value.length < 8) { msg.textContent = 'Your password needs at least 8 characters.'; return pw.focus(); }
     if (pw.value !== pw2.value) { msg.textContent = 'The two passwords aren’t the same.'; return pw2.focus(); }
     ok.disabled = true; msg.textContent = '';
-    try { await Store.changePassword(pw.value); w.close(); toast('Your password was changed.'); }
+    try { await Store.changePassword(pw.value); w.close(); toast(first ? 'Your password is set.' : 'Your password was changed.'); if (after) after(); }
     catch (e) { msg.textContent = String((e && e.message) || e); ok.disabled = false; }
   };
   for (const i of [pw, pw2]) i.onkeydown = (e) => { if (e.key === 'Enter') ok.click(); };
@@ -6032,8 +6041,7 @@ function accountPane(redraw) {
   if (live) {
     out.push(row2('Signed in', `With ${via}. Your servers, DMs and friends follow you to any device you sign in on.`, signOut));
     out.push(row2('Your @handle', 'Friends add you with this. Share it with people you want to hear from.', el('button', { className: 'btn', onclick: () => copyText('@' + acc.login, 'Copied @' + acc.login) }, 'Copy @' + acc.login)));
-    if (acc.password) out.push(row2('Password', 'You log in with your username and this.', el('button', { className: 'btn', onclick: changePassword }, 'Change Password')));
-    else if (acc.email) out.push(row2('Email', 'Only you can see this.', el('span', { className: 'chip' }, acc.email)));
+    out.push(...signInWays());
   } else {
     out.push(row2(acc ? 'GitHub account' : 'Sign in', acc ? 'Signed in with a token. Messages, profiles and DMs sync through the data repository.'
       : Store.configured ? 'With Discord, GitHub or email: chat live with your team, and pick up where you left off on any device.' : 'Sign in to share servers, messages and DMs with your team.',
@@ -6041,7 +6049,70 @@ function accountPane(redraw) {
     out.push(row2('User ID', 'Handy when someone needs to add you.', el('button', { className: 'btn', onclick: () => { const v = acc ? acc.login : me.id; copyText(v, 'Copied ' + v); } }, 'Copy')));
   }
   out.push(row2('Status', 'How you show up to everyone else.', sel(me.status, STATUSES, (v) => { me.status = v; saveMe(); pushProfile(); renderAll(); })));
+  if (live && Store.canAccount()) out.push(el('h3', {}, 'Delete account'),
+    row2('Delete Account', 'Everything that’s yours goes with it: your profile, messages, DMs, friends, Datbux and the servers only you are in. It can’t be undone.',
+      el('button', { className: 'btn red', onclick: deleteAccountFlow }, 'Delete Account')));
   return out;
+}
+// Ways to sign in (My Account): Discord, GitHub, your email and a password, as many as you like; any of them gets you in
+function signInWays() {
+  if (!Store.canAccount()) {
+    const acc = Store.account();
+    return [acc.password ? row2('Password', 'You log in with your username and this.', el('button', { className: 'btn', onclick: () => changePassword() }, 'Change Password'))
+      : acc.email ? row2('Email', 'Only you can see this.', el('span', { className: 'chip' }, acc.email)) : null].filter(Boolean);
+  }
+  const box = el('div', { className: 'sx-list sw-ways' }, el('div', { className: 'it muted' }, 'Loading…'));
+  const fill = async () => {
+    let ways, pw, on;
+    try { [ways, pw, on] = await Promise.all([Store.signInMethods(), Store.hasPassword(), Store.providers()]); }
+    catch (e) { return box.replaceChildren(el('div', { className: 'it' }, String((e && e.message) || e))); }
+    const acc = Store.account(), username = !!acc.password, email = username ? '' : acc.email || '';
+    const row = (ic, name, sub, act) => el('div', { className: 'it' }, el('span', { className: 'sw-ic' }, ic), el('div', { className: 'who2' }, el('div', { className: 'n' }, name), el('div', { className: 'h' }, sub)), act || null);
+    const oauth = (p, label) => {
+      const w = ways.find((x) => x.provider === p);
+      if (!w && !on[p]) return null;
+      return row(brandIcon(p, 20, { tile: true }), label, w ? 'Linked' + (w.name ? ' as ' + w.name : '') + (ways.length > 1 ? '' : ': your only way in, so it stays') : `Sign in with your ${label} account too`,
+        w ? (ways.length > 1 ? el('button', { className: 'btn small', onclick: async () => {
+          if (!(await confirmBox({ title: `Remove ${label}?`, text: `You won’t sign in with ${label} any more. Your other ways in stay.`, ok: 'Remove', danger: true }))) return;
+          if ((await attempt(() => Store.unlinkAccount(w.raw))) !== null) { toast(`${label} removed.`); fill(); }
+        } }, 'Remove') : null)
+          : el('button', { className: 'btn small primary', onclick: () => attempt(() => Store.linkAccount(p)) }, 'Add'));
+    };
+    box.replaceChildren(...[oauth('discord', 'Discord'), oauth('github', 'GitHub'),
+      username ? row(icon('user', 18), 'Username', '@' + acc.login + ', with your password') : null,
+      !username ? row(icon('mail', 18), 'Email', email ? `${email}: a sign-in link${pw ? ', or your password' : ''}` : 'Add an email to sign in with it', el('button', { className: 'btn small', onclick: () => emailDialog(email) }, email ? 'Change' : 'Add')) : null,
+      row(icon('key', 18), 'Password', pw ? `With your ${username ? 'username' : 'email'}` : email ? 'Set one to sign in with your email and a password' : 'Add an email first',
+        pw || email || username ? el('button', { className: 'btn small', onclick: () => changePassword({ first: !pw, after: fill }) }, pw ? 'Change' : 'Set a Password') : null)].filter(Boolean));
+  };
+  fill();
+  return [el('h3', {}, 'Ways to sign in'), el('p', { className: 'hint' }, 'Any of these gets you into this account. Add as many as you like.'), box];
+}
+// a new email (or your first): a link to it finishes the change
+function emailDialog(had) {
+  const input = el('input', { type: 'email', maxLength: 254, value: '', placeholder: 'you@example.com', autocomplete: 'email' });
+  const msg = el('div', { className: 'sg-msg' }), ok = el('button', { className: 'btn primary' }, 'Send Link');
+  const w = modal({ title: had ? 'Change Your Email' : 'Add an Email', sub: had ? `Now: ${had}. A link goes to the new address (and maybe one to this one); open it to finish.` : 'A link goes to it; open it to finish. Then you can sign in with it.',
+    body: [el('div', { className: 'field jf' }, el('label', {}, 'Email'), input), msg], actions: [el('button', { className: 'btn', textContent: 'Cancel', onclick: () => w.close() }), ok] });
+  ok.onclick = async () => {
+    const v = input.value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { msg.textContent = 'That doesn’t look like an email address.'; return input.focus(); }
+    ok.disabled = true; msg.textContent = '';
+    try { await Store.changeEmail(v); w.close(); toast(`Check ${v}: open the link in it to finish.`); }
+    catch (e) { msg.textContent = String((e && e.message) || e); ok.disabled = false; }
+  };
+  input.onkeydown = (e) => { if (e.key === 'Enter') ok.click(); };
+  setTimeout(() => input.focus(), 0);
+}
+// Delete Account: not while you own a server other people are in (hand it on first); then, typed to be sure, everything goes
+async function deleteAccountFlow() {
+  const acc = Store.account(), mine = Store.myId(), held = Store.servers().filter((sv) => sv.owner === mine && (Store.members(sv.id) || []).some((m) => m.id !== mine));
+  if (held.length) return confirmBox({ title: 'Hand your servers on first', ok: 'OK',
+    text: `You own ${held.map((sv) => sv.name).join(', ')}, and other people are in ${held.length === 1 ? 'it' : 'them'}. Give each one a new owner (Server Settings → Members → Transfer Ownership) or delete it, then come back.` });
+  if (!(await confirmBox({ title: 'Delete your account?', danger: true, ok: 'Delete Account', type: acc.login,
+    text: `@${acc.login} and everything that’s yours goes for good: your profile, every message you sent, your DMs (for both of you), friends, Datbux, things from the Shop, and the servers only you are in. Nobody can bring it back.` }))) return;
+  if ((await attempt(() => Store.deleteAccount())) === null) return;
+  if (openUserSettings.ref) openUserSettings.ref.shut();
+  renderAll(); toast('Your account is deleted. Goodbye!');
 }
 
 function syncPane(redraw) {
@@ -6723,6 +6794,7 @@ function svPeople(sv, redraw) {
         if ((await attempt(() => Store.setMemberRole(sv.id, m.id, to))) === null) return;
         toast(to === 'admin' ? `${m.name} is now an admin.` : `${m.name} is no longer an admin.`); redraw(); renderMembers();
       } }, m.role === 'admin' ? 'Remove admin' : 'Make admin'));
+      if (owner && Store.canAccount && Store.canAccount()) acts.push(iconBtn('crown', 'Transfer Ownership', () => transferFlow(sv.id, m, redraw)));
       if (owner || (can && m.role === 'member')) acts.push(iconBtn('x', 'Remove from the server', () => kick(sv.id, m, redraw), 'del'), iconBtn('ban', 'Ban', () => banFlow(sv.id, m, redraw), 'del'));
     }
     list.append(el('div', { className: 'it' }, avatarEl(m, { size: 32 }),

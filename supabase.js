@@ -168,7 +168,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 16;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 17;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -522,10 +522,13 @@ async function fileLink(path, download) {
   p.catch(() => links.delete(key));
   return p;
 }
-// signing in with a password (accounts made from a one-time link: their address is made up from their username)
-async function signInPassword(email, password) {
+// (adding a way to sign in that didn't work: what to do about it)
+const linkTrouble = (m) => (/already linked|identity_already_exists|already (been )?(used|taken)/i.test(m) ? 'that account already has a Fluentdat account of its own. Sign in with it and delete that account (My Account), then add it here.'
+  : /manual linking/i.test(m) ? 'adding ways to sign in is turned off for this Fluentdat. Whoever runs it can turn on “Allow manual linking” in Supabase (Authentication → Sign In / Providers).' : m);
+// signing in with a password: your email's, or (accounts made from a one-time link) the address made up from your username
+async function signInPassword(email, password, what = 'username') {
   const r = await sb.auth.signInWithPassword({ email, password: String(password || '') });
-  if (r.error) throw new Error(/invalid login|invalid credentials/i.test(r.error.message || '') ? 'That username and password don’t match.' : friendly(r.error.message || String(r.error)));
+  if (r.error) throw new Error(/invalid login|invalid credentials/i.test(r.error.message || '') ? `That ${what} and password don’t match.` : friendly(r.error.message || String(r.error)));
   session = (r.data && r.data.session) || (await sb.auth.getSession()).data.session;
   if (!session) throw new Error('Couldn’t sign in. Try again.');
   await start();
@@ -563,7 +566,7 @@ export const SupabaseStore = {
       const hash = h.toString();
       history.replaceState(null, '', url.pathname + (url.search || '') + (hash ? '#' + hash : ''));
     }
-    if (err) state.error = 'Sign-in didn’t finish: ' + err;
+    if (err) state.error = 'Sign-in didn’t finish: ' + linkTrouble(err);
     if (!session) return false;
     await start();
     return true;
@@ -607,6 +610,12 @@ export const SupabaseStore = {
     await signInPassword(email, password);
     return SupabaseStore.account();
   },
+  // a password with your username, or your email (anything with an @ in the middle)
+  async signInAny(who, password) {
+    const w = String(who || '').trim();
+    if (/^[^@\s]+@[^@\s]+$/.test(w)) { await client(); await signInPassword(w, password, 'email'); return SupabaseStore.account(); }
+    return SupabaseStore.signInUsername(w, password);
+  },
   async signInUsername(handle, password) {
     await client();
     const email = must(await sb.rpc('login_email', { p_handle: String(handle || '').trim() }));
@@ -614,10 +623,40 @@ export const SupabaseStore = {
     await signInPassword(email, password);
     return SupabaseStore.account();
   },
-  // a new password (accounts made from a one-time link)
+  // a new password (or your first: then you can sign in with your email, or username, and it)
   async changePassword(password) {
     const r = await sb.auth.updateUser({ password: String(password || '') });
+    if (r.error) throw new Error(/reauthenticat/i.test(r.error.message || '') ? 'For your safety, sign out and in again, then set it.' : friendly(r.error.message || String(r.error)));
+  },
+  // ---- your account: the ways you sign in, your email, handing a server on, and deleting it ----
+  canAccount: () => (cache.version || 0) >= 17,
+  async hasPassword() { return !!must(await sb.rpc('has_password')); },
+  async signInMethods() {
+    const r = await sb.auth.getUserIdentities();
     if (r.error) throw new Error(friendly(r.error.message || String(r.error)));
+    return ((r.data && r.data.identities) || []).map((i) => { const d = i.identity_data || {};
+      return { provider: i.provider, name: i.provider === 'discord' ? d.full_name || String(d.name || '').split('#')[0] : d.user_name || d.preferred_username || d.email || '', raw: i }; });
+  },
+  async unlinkAccount(raw) {
+    must(await sb.auth.unlinkIdentity(raw));
+    const r = await sb.auth.refreshSession(); if (r.data && r.data.session) session = r.data.session;
+    emit();
+  },
+  // a new email: a link goes to it (and, if Supabase asks for it, one to the old one too) to finish
+  async changeEmail(email) {
+    const r = await sb.auth.updateUser({ email: String(email || '').trim() }, { emailRedirectTo: location.origin + location.pathname });
+    if (r.error) throw new Error(/rate limit/i.test(r.error.message || '') ? 'Too many emails just now. Try again in a little while.' : friendly(r.error.message || String(r.error)));
+  },
+  async transferServer(sv, user) { must(await sb.rpc('transfer_server', { p_server: sv, p_user: user })); await loadAll(); },
+  // your files first (storage keeps them otherwise: they're found from your messages), then your account and all that's yours
+  async deleteAccount() {
+    try {
+      const rows = [...must(await sb.from('messages').select('files').eq('author', myId())), ...must(await sb.from('dm_messages').select('files').eq('author', myId()))];
+      const paths = rows.flatMap((r) => (Array.isArray(r.files) ? r.files : [])).map((f) => f && f.path).filter((x) => typeof x === 'string' && x.split('/')[2] === myId());
+      for (let i = 0; i < paths.length; i += 100) await sb.storage.from('files').remove(paths.slice(i, i + 100));
+    } catch {}
+    must(await sb.rpc('delete_my_account'));
+    await SupabaseStore.signOut();
   },
   // someone by their @handle (for a profile link)
   async findUser(handle) {
@@ -1216,7 +1255,10 @@ export const SupabaseStore = {
     return { provider: i.provider, name: i.provider === 'discord' ? d.full_name || String(d.name || '').split('#')[0] : d.user_name || d.preferred_username || d.nickname || d.name || '' };
   }),
   // link another sign-in to your account (off unless the project allows it): the page goes there and comes back
-  async linkAccount(provider) { must(await sb.auth.linkIdentity({ provider, options: { redirectTo: location.origin + location.pathname } })); },
+  async linkAccount(provider) {
+    const r = await sb.auth.linkIdentity({ provider, options: { redirectTo: location.origin + location.pathname } });
+    if (r.error) throw new Error(linkTrouble(r.error.message || String(r.error)));
+  },
   // ---- server tags: a server's admins give it one; its members may wear it (only one at a time) ----
   styled: () => styled,
   async adoptTag(serverId) { must(await sb.rpc('adopt_tag', { p_server: serverId || null })); await loadAll(); },

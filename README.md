@@ -10,6 +10,7 @@ Live: https://trixwotel.github.io/Fluentdat/
 * Customize, a site of its own (customize.html): the theme, the layout (a small copy of the screen to drag and resize), every element (shown or hidden, where it goes, what it's called), messages, profiles and animations. The open chat changes with it at once, and signed in, it all follows your account to every device
 * Servers with categories, text channels and voice channels, invites, Discover for public servers, roles, bans and banners
 * Commands for the people who run Fluentdat (type / in a server): ban someone from all of Fluentdat and let them back in, take someone out of a server, and give Datbux
+* Accounts with as many ways in as you like (Discord, GitHub, email, a password), Transfer Ownership for servers, and deleting your account
 * Profile privacy: choose who sees your mutual friends, Collection, Wishlist, Game Collection, Favorite Game, Activity, what you're playing, connections, member since, boosting since and badges (everyone, friends, or only you); your name, picture, decorations, banner and About are always shown
 * Browse in Direct Messages: search the messages and files in all your DMs and group chats at once (Files, Images, Videos, Links, and from someone)
 * Keyboard shortcuts you can change (User Settings → Keyboard Shortcuts, or Customize → Layout): hide the sidebar (⇧⌘S, Ctrl+Shift+S elsewhere), the member list or the server rail

@@ -1120,7 +1120,7 @@ create trigger guard_expression before insert or update on public.server_sticker
 create or replace function public.guard_server() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if new.owner is distinct from old.owner then raise exception 'A server''s owner can''t be changed.'; end if;
+  if new.owner is distinct from old.owner and coalesce(current_setting('fluentdat.transfer', true), '') <> 'on' then raise exception 'A server''s owner can''t be changed.'; end if;
   if new.public is distinct from old.public and not is_owner(old.id) then raise exception 'Only the owner can make the server public or private.'; end if;
   return new;
 end $$;
@@ -1633,8 +1633,8 @@ end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates;
 -- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it;
--- 16: who sees what of your profile)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 16 $$;
+-- 16: who sees what of your profile; 17: deleting your account, and handing a server on)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 17 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -2281,6 +2281,47 @@ language sql stable security definer set search_path = public as $$
   from profile_extras e where e.id = p_user and auth.uid() is not null and knows(p_user);
 $$;
 
+-- ===================== your account =====================
+-- does your account have a password (to sign in with your email, or your username, and it)?
+create or replace function public.has_password() returns boolean
+language plpgsql stable security definer set search_path = public as $$
+begin
+  return coalesce((select encrypted_password is not null and encrypted_password <> '' from auth.users where id = auth.uid()), false);
+end $$;
+-- hand a server to someone in it (Discord's Transfer Ownership): only its owner can, and stays on as an admin
+create or replace function public.transfer_server(p_server uuid, p_user uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_owner(p_server) then raise exception 'Only the owner can hand the server on.'; end if;
+  if p_user is null or p_user = auth.uid() then raise exception 'Pick someone else in the server.'; end if;
+  if not exists (select 1 from server_members where server_id = p_server and user_id = p_user) then raise exception 'They need to be in the server first.'; end if;
+  perform set_config('fluentdat.transfer', 'on', true);
+  update servers set owner = p_user where id = p_server;
+  perform set_config('fluentdat.transfer', '', true);
+  update server_members set role = 'admin' where server_id = p_server and user_id = auth.uid();
+  update server_members set role = 'owner' where server_id = p_server and user_id = p_user;
+end $$;
+-- delete your account, and everything that's yours with it: your profile, messages, DMs, friends, Datbux, and the servers
+-- only you are in. Not while you own a server other people are in (hand it on first), nor as the last one who runs Fluentdat
+create or replace function public.delete_my_account() returns void
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if me is null then raise exception 'Sign in first.'; end if;
+  if exists (select 1 from app_admins where user_id = me) and not exists (select 1 from app_admins where user_id <> me) then
+    raise exception 'You''re the only one who runs Fluentdat. Make someone else one of the people who run it first (setup.sql says how).';
+  end if;
+  if exists (select 1 from servers s where s.owner = me and exists (select 1 from server_members m where m.server_id = s.id and m.user_id <> me)) then
+    raise exception 'You own a server other people are in. Hand it on (Server Settings → Members → Transfer Ownership) or delete it first.';
+  end if;
+  perform set_config('fluentdat.leaving', 'on', true);
+  begin
+    execute 'update storage.objects set owner = null where owner = $1' using me;     -- (their files are gone from their messages; nobody owns them now)
+  exception when others then null;
+  end;
+  delete from auth.users where id = me;          -- (their profile goes with it, and so does everything that's theirs)
+end $$;
+
 -- ===================== TrixWotel's commands (for the people who run Fluentdat) =====================
 -- /ban: ban someone from all of Fluentdat (never yourself, nor anyone else who runs it)
 create or replace function public.app_ban(p_user uuid, p_reason text default '')
@@ -2531,6 +2572,8 @@ grant execute on function public.buy_bundle(text), public.shop_sales(timestamptz
 -- (TrixWotel's commands: anyone signed in may ask, and only the people who run Fluentdat get anything done)
 grant execute on function public.app_banned() to authenticated;
 grant execute on function public.privacy_ok(jsonb), public.shown_to_me(uuid, text) to authenticated;
+revoke all on function public.has_password(), public.transfer_server(uuid, uuid), public.delete_my_account() from public, anon;
+grant execute on function public.has_password(), public.transfer_server(uuid, uuid), public.delete_my_account() to authenticated;
 revoke all on function public.profile_more(uuid[]), public.profile_extras_of(uuid) from public, anon;
 grant execute on function public.profile_more(uuid[]), public.profile_extras_of(uuid) to authenticated;
 revoke all on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) from public, anon;
@@ -2719,6 +2762,7 @@ end $$;
 create or replace function public.no_banned_writes() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
+  if coalesce(current_setting('fluentdat.leaving', true), '') = 'on' then return null; end if;     -- (deleting their account)
   if auth.uid() is not null and exists (select 1 from app_bans where user_id = auth.uid()) then
     raise exception 'You''re banned from Fluentdat.';
   end if;

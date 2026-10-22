@@ -123,7 +123,7 @@ const fallback = {
   block: async () => { throw new Error(SIGN_IN + 'block people.'); },
   unblock: async () => {},
   report: async () => { throw new Error(SIGN_IN + 'report something.'); },
-  isAppAdmin: () => false, canStaff: () => false, banned: () => null, canPrivacy: () => false,
+  isAppAdmin: () => false, canStaff: () => false, banned: () => null, canPrivacy: () => false, canAccount: () => false,
   markUnread: () => {},
   emojiAll: () => [], serverEmoji: () => [], serverStickers: () => [], expressionUrl: () => '',
   addEmoji: async () => { throw new Error(SIGN_IN + 'add server emoji.'); },
@@ -219,6 +219,7 @@ export const Store = new Proxy({}, {
       case 'verifyEmailCode': return async (email, code) => { await SupabaseStore.verifyEmailCode(email, code); impl = SupabaseStore; emit(); return SupabaseStore.account(); };
       // a username and password (an account made from a one-time link), or making one with that link
       case 'signInUsername': return async (handle, pw) => { const a = await SupabaseStore.signInUsername(handle, pw); impl = SupabaseStore; emit(); return a; };
+      case 'signInAny': return async (who, pw) => { const a = await SupabaseStore.signInAny(who, pw); impl = SupabaseStore; emit(); return a; };
       case 'redeemAppInvite': return async (code, handle, pw, name) => { const a = await SupabaseStore.redeemAppInvite(code, handle, pw, name); impl = SupabaseStore; emit(); return a; };
       case 'appInviteCheck': return (code) => SupabaseStore.appInviteCheck(code);
       case 'signOut': return async () => {

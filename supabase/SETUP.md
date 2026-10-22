@@ -94,6 +94,12 @@ insert into public.app_admins (user_id) select id from public.profiles where han
 
 Password sign-in uses Supabase's **Email** provider, which is on from the start: leave **Authentication → Sign In / Providers → Email** turned on.
 
+### More than one way to sign in, and deleting an account
+
+Anyone can add more ways to sign in to their account in **User Settings → My Account → Ways to sign in**: Discord, GitHub, an email address and a password (signing in with a password takes a username or an email). Adding Discord or GitHub to an account needs one switch in Supabase: **Authentication → Sign In / Providers → Allow manual linking**, on.
+
+The same page has **Delete Account**: it deletes the account and everything that's theirs (profile, messages, DMs, friends, Datbux, and servers only they are in). It's refused while they own a server other people are in (they hand it on first: **Server Settings → Members → Transfer Ownership**), and for the last one who runs Fluentdat.
+
 ### TrixWotel's commands
 
 The people who run Fluentdat have commands of their own: type `/` in any server's message box to see them (nobody else sees or can use them; the database checks).

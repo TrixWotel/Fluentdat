@@ -2485,3 +2485,6 @@ button.pc-name:hover { text-decoration: underline; }
 .banned-card h1 { margin: 6px 0 0; font-size: 1.35rem; color: var(--bright); }
 .banned-card p { margin: 0; line-height: 1.45; } .banned-card b { color: var(--bright); } .banned-when { color: var(--muted); font-size: .86rem; }
 .banned-card .btn { margin-top: 8px; }
+/* Round T: ways to sign in (My Account), each with its own mark */
+.sw-ways .sw-ic { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--input); color: var(--text); }
+.sw-ways .sw-ic .bi { width: 32px; height: 32px; border-radius: 8px; }
