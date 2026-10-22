@@ -83,7 +83,7 @@ const fallback = {
   canFrame: () => true,
   canWikiGames: () => true,
   // (Datbux signed out: the app keeps a wallet of its own in this browser; sending and trading come with signing in)
-  canBux: () => false, canBundles: () => false, bundles: () => [], sales: () => [], buyBundle: async () => { throw new Error(SIGN_IN + 'buy bundles.'); }, onTrade: () => () => {}, wallet: () => null, priceOf: () => null, owns: () => false, ownedList: () => [], trades: () => [],
+  canBux: () => false, canBundles: () => false, bundles: () => [], sales: () => [], canBadgeLog: () => true, buyBundle: async () => { throw new Error(SIGN_IN + 'buy bundles.'); }, onTrade: () => () => {}, wallet: () => null, priceOf: () => null, owns: () => false, ownedList: () => [], trades: () => [],
   ownedBy: async () => [], buxLog: async () => [],
   // (settings follow an account only when signed in: here they're this browser's)
   canSync: () => false, settings: () => null, saveSettings: async () => 0,
@@ -178,12 +178,13 @@ function localSearch(places, o) {
   return out.sort((a, b) => b.ts - a.ts).slice(0, 25);
 }
 const EXTRAS = 'fluentdat.extras';
-const blankExtras = () => ({ connections: [], widgets: [], activity: [], quests: [], badges: { order: [], hidden: [] }, playSeconds: 0 });
+const blankExtras = () => ({ connections: [], widgets: [], activity: [], quests: [], badges: { order: [], hidden: [] }, playSeconds: 0, badgeLog: {} });
 function localExtras() {
   try {
     const v = JSON.parse(localStorage.getItem(EXTRAS)) || {}, b = v.badges && typeof v.badges === 'object' ? v.badges : {};
     return { connections: Array.isArray(v.connections) ? v.connections : [], widgets: Array.isArray(v.widgets) ? v.widgets : [], activity: Array.isArray(v.activity) ? v.activity : [],
-      quests: Array.isArray(v.quests) ? v.quests : [], badges: { order: Array.isArray(b.order) ? b.order : [], hidden: Array.isArray(b.hidden) ? b.hidden : [] }, playSeconds: 0 };
+      quests: Array.isArray(v.quests) ? v.quests : [], badges: { order: Array.isArray(b.order) ? b.order : [], hidden: Array.isArray(b.hidden) ? b.hidden : [] }, playSeconds: 0,
+      badgeLog: v.badgeLog && typeof v.badgeLog === 'object' && !Array.isArray(v.badgeLog) ? v.badgeLog : {} };
   }
   catch { return blankExtras(); }
 }

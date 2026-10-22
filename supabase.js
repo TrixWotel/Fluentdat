@@ -95,7 +95,8 @@ const rolesOf = (sv, uid) => cache.memberRoles.filter((x) => x.server_id === sv 
 const toExtras = (r) => ({ connections: Array.isArray(r && r.connections) ? r.connections : [], widgets: Array.isArray(r && r.widgets) ? r.widgets : [],
   activity: Array.isArray(r && r.activity) ? r.activity : [], quests: Array.isArray(r && r.quests) ? r.quests : [],
   badges: { order: Array.isArray(r && r.badges && r.badges.order) ? r.badges.order : [], hidden: Array.isArray(r && r.badges && r.badges.hidden) ? r.badges.hidden : [] },
-  playSeconds: Number(r && r.play_seconds) || 0 });
+  playSeconds: Number(r && (r.play_seconds ?? r.playSeconds)) || 0,
+  badgeLog: [r && r.badge_log, r && r.badgeLog].find((v) => v && typeof v === 'object' && !Array.isArray(v)) || {} });
 const toCategory = (r) => ({ id: r.id, server: r.server_id, name: r.name, position: r.position });
 const toChannel = (r) => ({ id: r.id, server: r.server_id, category: r.category_id, name: r.name, kind: r.kind, position: r.position, topic: r.topic || '',
   parent: r.parent_id || null, starter: r.starter || null, by: r.created_by || null, archived: !!r.archived });
@@ -159,7 +160,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 13;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 14;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -868,14 +869,15 @@ export const SupabaseStore = {
     const bal = Number(must(await sb.rpc('buy_bundle', { p_bundle: id })));
     // (it's yours at once: what the bundle holds, and what's left; the rest comes with a reload)
     const b = cache.bundles.find((x) => x.id === id);
-    if (b) for (const x of b.items) if (!cache.owned.some((o) => o.kind === x.k && o.item === x.i)) cache.owned.push({ kind: x.k, item: x.i, how: 'buy' });
+    if (b) for (const x of b.items) if (!cache.owned.some((o) => o.kind === x.k && o.item === x.i)) cache.owned.push({ kind: x.k, item: x.i, how: 'buy', got_at: new Date().toISOString() });
     if (cache.wallet) cache.wallet = { ...cache.wallet, balance: bal };
     emit(); loadAll();
     return bal;
   },
   owns: (kind, item) => cache.owned.some((o) => o.kind === kind && o.item === item),
-  ownedList: () => cache.owned.map((o) => ({ kind: o.kind, item: o.item, how: o.how })),
-  async ownedBy(uid) { return must(await sb.from('owned_items').select('kind,item').eq('user_id', uid)) || []; },
+  ownedList: () => cache.owned.map((o) => ({ kind: o.kind, item: o.item, how: o.how, at: Date.parse(o.got_at || '') || 0 })),
+  async ownedBy(uid) { return (must(await sb.from('owned_items').select('kind,item,how,got_at').eq('user_id', uid)) || []).map((o) => ({ kind: o.kind, item: o.item, how: o.how, at: Date.parse(o.got_at || '') || 0 })); },
+  canBadgeLog: () => (cache.version || 0) >= 14,                // (when each badge came, kept on the profile)
   async taskProgress() { return (must(await sb.rpc('task_progress')) || []).map((t) => ({ ...t, resets: Date.parse(t.resets) || 0 })); },
   async claimTask(task) { const b = must(await sb.rpc('claim_task', { p_task: task })); await loadAll(); return Number(b); },
   async buyItem(kind, item) { const b = must(await sb.rpc('buy_item', { p_kind: kind, p_item: item })); await loadAll(); return Number(b); },
@@ -1154,6 +1156,7 @@ export const SupabaseStore = {
   async setProfileExtras(patch) {
     const id = myId(), was = cache.extras[id], row = { id };
     for (const k of ['connections', 'widgets', 'activity', 'quests', ...(profileSet === 0 ? ['badges'] : [])]) if (k in patch) row[k] = patch[k];
+    if ('badgeLog' in patch && SupabaseStore.canBadgeLog()) row.badge_log = patch.badgeLog;
     // (an older database doesn't know games' pictures from Wikipedia yet: they're found again by name meanwhile)
     if (row.widgets && !SupabaseStore.canWikiGames()) row.widgets = row.widgets.map((w) => (w && Array.isArray(w.g) ? { ...w, g: w.g.map(({ w: _, ...g }) => g) } : w));
     cache.extras[id] = { ...toExtras(was), ...patch }; emit();

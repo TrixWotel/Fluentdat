@@ -28,7 +28,7 @@ export const EFFECTS = [
 // { id, title, what it's about, icon, colour (a hue), tasks: [what's counted, what to do, how many], reward: [kind, id] }
 export const QUESTS = [
   { id: 'first-steps', title: 'First Steps', desc: 'Make yourself at home.', icon: 'sparkle', hue: 262,
-    tasks: [['about', 'Write your About Me', 1], ['send', 'Send a message', 1], ['react', 'React to a message', 1]], reward: ['deco', 'sparkle'] },
+    tasks: [['about', 'Write your About', 1], ['send', 'Send a message', 1], ['react', 'React to a message', 1]], reward: ['deco', 'sparkle'] },
   { id: 'chatterbox', title: 'Chatterbox', desc: 'Keep the conversation going.', icon: 'message', hue: 212, tasks: [['send', 'Send 50 messages', 50]], reward: ['deco', 'rainbow'] },
   { id: 'reactor', title: 'Reactor', desc: 'Let people know what you think.', icon: 'smilePlus', hue: 330, tasks: [['react', 'Add 20 reactions', 20]], reward: ['effect', 'hearts'] },
   { id: 'connected', title: 'Connected', desc: 'Show people where else to find you.', icon: 'link', hue: 186, tasks: [['connections', 'Add 2 connections to your profile', 2]], reward: ['deco', 'neon'] },

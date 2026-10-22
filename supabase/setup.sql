@@ -460,6 +460,8 @@ alter table public.profiles add column if not exists bubble_until timestamptz;
 -- by the database and only ever added to by it)
 alter table public.profile_extras add column if not exists badges jsonb not null default '{}'::jsonb;
 alter table public.profile_extras add column if not exists play_seconds bigint not null default 0;
+-- (when each of your badges came: { badge: time }, for your profile's Collection log; see guard_profile_extras)
+alter table public.profile_extras add column if not exists badge_log jsonb not null default '{}'::jsonb;
 -- a role's icon (an emoji, or a small picture), shown beside its name, as on Discord; and when a channel (a thread) was made
 alter table public.roles add column if not exists icon text not null default '';
 alter table public.channels add column if not exists created_at timestamptz not null default now();
@@ -1331,6 +1333,16 @@ begin
                 or exists (select 1 from jsonb_array_elements(e.value) b where coalesce(jsonb_typeof(b), '') <> 'string' or (b #>> '{}') !~ '^[a-z0-9-]{1,24}$')) then
     raise exception 'Your badges are kept by name: the order you show them in, and the ones you hide.';
   end if;
+  -- (your badges' log: the database writes the time a badge first shows up in it. One that knows its own day, like time on
+  -- Fluentdat, may say so, but not before your account or after now. What's there stays as it was)
+  if coalesce(jsonb_typeof(new.badge_log), '') <> 'object' or (select count(*) from jsonb_object_keys(new.badge_log)) > 140
+     or exists (select 1 from jsonb_object_keys(new.badge_log) k where k !~ '^[a-z0-9-]{1,24}$') then
+    raise exception 'Your badges'' log is kept by badge name (up to 140).';
+  end if;
+  new.badge_log := coalesce((select jsonb_object_agg(e.key, to_jsonb(case when (e.value #>> '{}') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$'
+      then greatest(least((e.value #>> '{}')::timestamptz, now()), coalesce((select created_at from profiles where id = new.id), now())) else now() end))
+    from jsonb_each(new.badge_log) e), '{}'::jsonb);
+  if TG_OP = 'UPDATE' then new.badge_log := new.badge_log || coalesce(old.badge_log, '{}'::jsonb); end if;
   -- (Game Time only goes up when the database times a game you stopped playing)
   if coalesce(current_setting('fluentdat.playtime', true), '') <> 'on' then
     new.play_seconds := case when TG_OP = 'UPDATE' then old.play_seconds else 0 end;
@@ -1586,7 +1598,7 @@ begin
 end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 13 $$;
+create or replace function public.setup_version() returns int language sql immutable as $$ select 14 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)

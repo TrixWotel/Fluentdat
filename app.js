@@ -278,6 +278,18 @@ const statsId = (u) => (!u || u.bot ? null : Store.kind === 'supabase' ? (isMe(u
 async function statsOf(u) { if (Store.kind !== 'supabase') return isMe(u) ? localStats() : null; const id = statsId(u); return id ? Store.badgeStats(id) : null; }
 const statsNow = (u) => (Store.kind !== 'supabase' ? (isMe(u) ? localStats() : null) : statsId(u) ? Store.badgeStatsNow(statsId(u)) : null);
 const badgePrefs = (u) => { const id = statsId(u), x = id ? Store.extrasNow(id) : null; return (x && x.badges) || { order: [], hidden: [] }; };
+// (noted now and then, while Fluentdat is open: a new badge goes in your log, for your profile's Collection)
+let badgesNoted = 0;
+async function noteBadges() {
+  if ((Store.kind === 'supabase' && !Store.canBadgeLog()) || Date.now() - badgesNoted < 60000) return;
+  badgesNoted = Date.now();
+  const you = asMember(), stats = await statsOf(you).catch(() => null), x = await Store.profileExtras(myXid()).catch(() => null);
+  if (!stats || !x) return;
+  const log = x.badgeLog || {}, add = {};
+  for (const b of badgesOf(stats, { all: true }).have) if (b.id && !log[b.id]) add[b.id] = new Date(b.unlocked > 0 && b.unlocked < Date.now() ? b.unlocked : Date.now()).toISOString();
+  if (Object.keys(add).length) await Store.setProfileExtras({ badgeLog: { ...log, ...add } }).catch(() => {});
+}
+setInterval(() => { if (Store.signedIn || Store.kind !== 'supabase') noteBadges(); }, 5 * 60000);
 const badgeTitle = (b) => `${b.kind ? b.kind.name + ': ' : ''}${b.name} (${b.rarity[0]})`;
 // a row of someone's badges (the ones they show, in their order), filled in when they're known; click one for its details
 function badgeRow(u, { max = 6 } = {}) {
@@ -445,7 +457,7 @@ const BUTTONS = {
   composer: ['Message box', [['upload', 'Attach files and pictures', 'plusCircle'], ['input', 'The text box', 'edit', 1], ['emoji', 'Emoji', 'smile'], ['sticker', 'Stickers', 'sticker'], ['voice', 'Voice message', 'mic'], ['send', 'Send', 'send']]],
   panel: ['Your controls, under the sidebar', [['me', 'You (avatar and name)', 'user', 1], ['mic', 'Mute', 'mic'], ['deafen', 'Deafen', 'headphones'], ['settings', 'User Settings', 'gear', 1]]],
   profileCard: ['Profile cards (DM profile and full profile)', [['pBadges', 'Badges and server tag', 'medal'], ['pMutual', 'Mutual friends and servers', 'users'], ['pSince', 'Member since, boosting since, friends since', 'calendar'],
-    ['pBio', 'About me', 'edit'], ['pPlaying', 'Playing', 'game'], ['pGames', 'Game Collection', 'game'], ['pWish', 'Wishlist', 'star'], ['pConns', 'Connections', 'link'], ['pNote', 'Your note on them', 'edit']]],
+    ['pBio', 'About', 'edit'], ['pPlaying', 'Playing', 'game'], ['pGames', 'Game Collection', 'game'], ['pWish', 'Wishlist', 'star'], ['pConns', 'Connections', 'link'], ['pNote', 'Your note on them', 'edit']]],
   profileTabs: ['Full profile tabs', [['tWidget', 'Widget', 'apps'], ['tWish', 'Wishlist', 'star'], ['tCollection', 'Collection', 'collection'], ['tFriends', 'Mutual Friends', 'users'],
     ['tServers', 'Mutual Server', 'compass'], ['tActivity', 'Activity', 'clock']]],
 };
@@ -3113,7 +3125,7 @@ function profileParts(u, { full = false, onTab = () => {}, closeFirst = () => {}
       if (fs) box.append(line('users', 'Friends Since', dateLong(fs)));
       out.push(box);
     }
-    else if (id === 'pBio' && u.about) out.push(sec('pc-bio', el('h4', {}, 'About Me'), el('div', { className: 'dmp-about' }, u.about)));
+    else if (id === 'pBio' && u.about) out.push(sec('pc-bio', el('h4', {}, 'About'), el('div', { className: 'dmp-about' }, u.about)));
     else if (id === 'pPlaying' && playingNow(u.playing)) out.push(sec('pc-play', el('h4', {}, 'Playing'), playingRow(u.playing)));
     else if ((id === 'pGames' || id === 'pWish' || id === 'pConns') && xid) {
       const box = sec('pc-' + id.slice(1).toLowerCase());
@@ -3215,15 +3227,41 @@ function fullProfile(user, tab = null) {
     const r = await attempt(() => Store.setProfileExtras(patch));
     extras = r || Store.extrasNow(xid) || extras; if (fullOpen === w) draw(false);
   };
-  // their Collection: what they have from the Shop (and, yours, from Quests too)
+  // their Collection: a log of what they got and when, newest first: things from the Shop (bought, traded, a Quest's
+  // reward, kept from before the Shop) and their badges (the ones they show)
+  let colShow = 'all';
   const collectionView = () => {
-    const items = self ? Bux.owned().map((o) => [o.kind, o.item]) : (theirs || []).map((o) => [o.kind, o.item]);
-    if (self) for (const [id, , q] of DECORATIONS) if (q && unlocked(q) && !items.some(([k, i]) => k === 'deco' && i === id)) items.push(['deco', id]);
     if (!self && theirs === null) return [el('div', { className: 'fp-empty' }, 'Loading…')];
-    if (!items.length) return [el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('collection', 34)), self ? 'Nothing yet: the Shop has decorations and name fonts.' : `${u.name} hasn’t collected anything yet.`)];
-    return [el('div', { className: 'fp-col' }, ...items.map(([kind, item]) => el('div', { className: 'fp-col-it', title: KIND_NAME[kind] || '' },
-      el('div', { className: 'fp-col-pv' }, kind === 'deco' ? avatarEl({ ...u, decoration: item, status: '' }, { size: 56 }) : kind === 'font' ? styleName(el('span', { className: 'shp-font' }, u.name), { font: item }) : icon(kind === 'frame' ? 'frame' : 'sparkle', 26)),
-      el('b', {}, itemName(kind, item)), el('small', {}, KIND_NAME[kind] || ''))))];
+    // (things: yours signed out have the times your wallet wrote down)
+    let things = self ? Bux.owned() : theirs || [];
+    if (self && Store.kind !== 'supabase') {
+      const at = {}, log = localWallet().log || [];
+      for (const h of log) if (h.kind === 'buy') { const [k, i] = String(h.note || '').split(':'); if (k === 'bundle') { const bd = BUNDLES.find((x) => x.id === i); for (const x of (bd ? bd.items : [])) at[x.k + ':' + x.i] = at[x.k + ':' + x.i] || h.at; } else at[k + ':' + i] = at[k + ':' + i] || h.at; }
+      things = things.map((o) => ({ ...o, at: o.at || at[o.kind + ':' + o.item] || 0 }));
+    }
+    const stats = statsNow(u), log = (extras && extras.badgeLog) || {};
+    const badges = stats ? (self ? badgesOf(stats, { all: true }).have : badgesOf(stats, badgePrefs(u)).shown) : [];
+    const rows = [...(colShow === 'badges' ? [] : things.map((o) => ({ at: o.at || 0, o }))), ...(colShow === 'shop' ? [] : badges.map((b) => ({ at: Date.parse(log[b.id] || '') || 0, b })))]
+      .sort((x, y) => (y.at || 0) - (x.at || 0));
+    const chips = el('div', { className: 'fd-chips fp-log-chips' }, ...[['all', 'Everything'], ['shop', 'From the Shop'], ['badges', 'Badges']].map(([v, l]) =>
+      el('button', { className: 'fd-chip' + (colShow === v ? ' on' : ''), onclick: () => { colShow = v; draw(false); } }, l)));
+    if (!rows.length) return [chips, el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('collection', 34)),
+      colShow === 'badges' ? (stats ? 'No badges yet.' : 'Loading…') : self ? 'Nothing yet: the Shop has decorations, fonts, effects, frames and nameplates.' : `${u.name} hasn’t got anything from the Shop yet.`)];
+    const HOWS = { buy: 'Bought', trade: 'Traded for', grant: 'Kept from before the Shop', quest: 'A Quest’s reward' };
+    const face = (kind, item) => kind === 'deco' ? avatarEl({ ...u, decoration: item, status: '' }, { size: 34 }) : kind === 'font' ? styleName(el('span', { className: 'fp-log-font' }, 'Aa'), { font: item })
+      : kind === 'plate' ? plateMove(el('span', { className: 'fp-log-plate', style: `background:${paint('np:' + item)}` }), 'np:' + item, true) : el('span', { className: 'fp-log-ic' }, icon(kind === 'frame' ? 'frame' : 'sparkle', 18));
+    const dayOf = (t) => { if (!t) return 'Before the log began'; const d = new Date(t), n = new Date(), y = new Date(Date.now() - 864e5);
+      return d.toDateString() === n.toDateString() ? 'Today' : d.toDateString() === y.toDateString() ? 'Yesterday' : d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }); };
+    const out = [chips]; let day = null;
+    for (const r of rows) {
+      const d = dayOf(r.at); if (d !== day) { day = d; out.push(el('div', { className: 'fp-log-day' }, d)); }
+      const time = r.at ? el('time', {}, new Date(r.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) : null;
+      out.push(r.o ? el('div', { className: 'fp-log', title: KIND_NAME[r.o.kind] || '' }, el('div', { className: 'fp-log-pv' }, face(r.o.kind, r.o.item)),
+          el('div', { className: 'fp-log-t' }, el('b', {}, itemName(r.o.kind, r.o.item)), el('small', {}, `${HOWS[r.o.how] || 'Got'} · ${KIND_NAME[r.o.kind] || ''}`)), time)
+        : el('button', { className: 'fp-log', title: badgeTitle(r.b), onclick: () => badgesDialog(u, r.b.id) }, el('div', { className: 'fp-log-pv' }, badgeIcon(r.b.id, 28)),
+          el('div', { className: 'fp-log-t' }, el('b', {}, r.b.name), el('small', {}, `Badge · ${r.b.kind ? r.b.kind.name : 'Secret'} · ${r.b.rarity ? r.b.rarity[0] : ''}`)), time));
+    }
+    return out;
   };
   const draw = (anim = true) => {
     tabsEl.replaceChildren(...tabs().map(([id, label, n]) =>
@@ -3247,6 +3285,8 @@ function fullProfile(user, tab = null) {
     right.append(tabsEl, list); draw();
     if (!self && live && !u.bot) Store.mutualFriends(u.id).then((f) => { friends = f; if (fullOpen === w) draw(false); }, () => { friends = []; if (fullOpen === w) draw(false); });
     if (!self && live && !u.bot && u.id && Store.canBux()) Store.ownedBy(u.id).then((o) => { theirs = o; if (fullOpen === w) draw(false); }, () => { theirs = []; if (fullOpen === w) draw(false); });
+    // (their badges, for the Collection's log; yours go in it first)
+    if (!u.bot) (self ? noteBadges().catch(() => {}).then(() => Store.profileExtras(myXid())).then((x) => { if (x) extras = x; }) : statsOf(u)).then(() => { if (fullOpen === w && tab === 'collection') draw(false); }, () => {});
     else theirs = [];
   } else right.append(el('div', { className: 'fp-empty' }, el('div', { className: 'fp-empty-ic' }, icon('users', 34)), u.bot ? 'Nothing to show here.' : 'Sign in to see what you have in common.'));
   const w = modal({ cls: 'fp-dlg', body: [el('div', { className: 'fp' }, leftBox, right)], onClose: () => { if (fullOpen === w) fullOpen = null; } });
@@ -3940,7 +3980,7 @@ function openSettings() {
     el('div', { className: 'field' }, el('label', {}, 'Avatar'), el('div', { className: 'avatar-edit' }, preview, el('div', {}, upload, ' ', clearImg, el('div', { style: 'margin-top:10px' }, swatches)))),
     el('div', { className: 'field' }, el('label', {}, 'Display name'), name),
     el('div', { className: 'field' }, el('label', {}, 'Pronouns'), pronouns),
-    el('div', { className: 'field' }, el('label', {}, 'About me'), about),
+    el('div', { className: 'field' }, el('label', {}, 'About'), about),
     el('div', { className: 'row' }, el('button', { className: 'btn ghost', textContent: 'Themes…', onclick: () => { scrim.remove(); openThemes(); } }, ), el('span', { style: 'flex:1' }), el('button', { className: 'btn', textContent: 'Close', onclick: () => scrim.remove() }),
       el('button', { className: 'btn primary', textContent: 'Save', onclick: () => { me = { ...me, name: name.value.trim().slice(0, 24) || 'You', color, avatar, pronouns: pronouns.value.trim(), about: about.value.trim() }; saveMe(); pushProfile(); renderAll(); scrim.remove(); } }))));
   scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
@@ -5000,7 +5040,7 @@ ready.then((ok) => {
   if (CUSTOMIZE) { lastLocal = JSON.stringify(settingsData()); if (ok) adoptSettings(); renderCustomize(); return; }
   lastLocal = JSON.stringify(settingsData());
   if (joinCode) { if (ok) { adoptProfile(); renderAll(); } return appJoin(joinCode); }
-  if (ok) { adoptProfile(); adoptSettings(); renderAll(); joinPendingInvite(); finishLinking(); Store.profileExtras(Store.myId()).then(() => { questCheck(); renderSide(); }, () => {}); return; }
+  if (ok) { adoptProfile(); adoptSettings(); renderAll(); joinPendingInvite(); finishLinking(); Store.profileExtras(Store.myId()).then(() => { questCheck(); renderSide(); setTimeout(noteBadges, 4000); }, () => {}); return; }
   if (Store.resumeError) toast('Sign-in trouble: ' + Store.resumeError);
   let code = null; try { code = localStorage.getItem(PENDING_INVITE); } catch {}
   if (code && Store.configured) signInDialog(null, 'Sign in to join the server you were invited to');
@@ -5268,7 +5308,7 @@ function welcomeSetup() {
   const w = modal({ cls: 'sg ws', body: [
     el('h3', { className: 'center' }, `Welcome, ${me.name}!`), el('p', { className: 'sg-sub center' }, 'Make your profile yours. You can skip this and do it later: click your name at the bottom left, then Edit Profile.'),
     el('div', { className: 'ws-top' }, pv, el('div', { className: 'ws-pick' }, up, swatches)),
-    el('div', { className: 'field' }, el('label', {}, 'Pronouns'), pron), el('div', { className: 'field' }, el('label', {}, 'About Me'), about)],
+    el('div', { className: 'field' }, el('label', {}, 'Pronouns'), pron), el('div', { className: 'field' }, el('label', {}, 'About'), about)],
     actions: [el('button', { className: 'btn ghost', onclick: () => { w.close(); toast(`You’re in, @${(Store.account() || {}).login}!`); } }, 'Skip'), el('span', { style: 'flex:1' }),
       el('button', { className: 'btn primary', onclick: () => {
         me = { ...me, avatar, color, pronouns: pron.value.trim(), about: about.value.trim() };

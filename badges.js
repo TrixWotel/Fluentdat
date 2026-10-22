@@ -119,7 +119,7 @@ export const KINDS = [
   { id: 'caller', name: 'Caller', unit: ['call', 'calls'], value: (s) => n(s, 'calls'), line: said('call started', 'calls started'),
     how: 'Start voice and video calls, in DMs, groups or voice channels.', tiers: [[1, 'Hello?'], [5, 'On the Line'], [25, 'Party Line'], [75, 'Switchboard'], [200, 'Broadcaster']] },
   { id: 'stylist', name: 'Stylist', unit: ['part of your look', 'parts of your look'], value: (s) => looks(s), line: (v) => `${fmt(v)} of 12 parts of a look`,
-    how: 'Make your profile yours: a picture, a banner, an About Me, pronouns, a theme, a name style, a decoration, an effect, a frame, a nameplate, a status and a tag.',
+    how: 'Make your profile yours: a picture, a banner, an About, pronouns, a theme, a name style, a decoration, an effect, a frame, a nameplate, a status and a tag.',
     tiers: [[1, 'Fresh Look'], [3, 'Stylish'], [6, 'Trendsetter'], [9, 'Fashion Icon'], [12, 'Masterpiece']] },
   { id: 'shopper', name: 'Shopper', unit: ['thing from the Shop', 'things from the Shop'], value: (s) => n(s, 'owned'), line: said('thing from the Shop', 'things from the Shop'),
     how: 'Buy decorations and name fonts in the Shop with Datbux.', tiers: [[1, 'First Find'], [3, 'Shopper'], [6, 'Wardrobe'], [10, 'Big Collection'], [15, 'Treasure Trove']] },
