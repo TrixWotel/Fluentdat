@@ -1869,9 +1869,10 @@ a.fp-conn:hover { background: var(--hover); } a.fp-conn:hover .fp-conn-n { text-
 .bst-lv span { display: grid; justify-items: center; padding: 4px 0; border-radius: 8px; color: var(--muted); font-weight: 700; }
 .bst-lv span small { font-size: .64rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
 .bst-lv span.had { color: var(--text); } .bst-lv span.on { background: #ff73fa22; color: #ff73fa; }
-.bst-who { margin-top: 18px; }
+.bst-who { margin: 18px 0 16px; }
 .bst-who h4 { margin: 0 0 8px; font-size: .74rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-.bst-faces { display: flex; flex-wrap: wrap; gap: 6px; } .bst-faces .avatar .dot { display: none; }
+/* (room round each face for its decoration, which reaches past the picture) */
+.bst-faces { display: flex; flex-wrap: wrap; gap: 14px; padding: 6px 5px; } .bst-faces .avatar .dot { display: none; }
 .app-card { display: flex; gap: 14px; align-items: flex-start; padding: 14px; border-radius: 12px; background: var(--rail); box-shadow: inset 0 0 0 1px var(--edge-soft); }
 .app-ic { width: 48px; height: 48px; flex: none; border-radius: 14px; background: var(--accent); color: #fff; display: grid; place-items: center; }
 .app-card b { color: var(--bright); margin-right: 8px; } .app-card p { margin: 6px 0 10px; color: var(--muted); font-size: .86rem; }
