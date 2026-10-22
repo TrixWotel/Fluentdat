@@ -3158,13 +3158,15 @@ function profileParts(u, { full = false, only = null, onTab = () => {}, closeFir
   }
   return out;
 }
-// the top of a profile card, as the DM profile has it: their picture (with their status) under the banner, and beside it
-// their name, username and pronouns, and their bubble
+// the top of a profile card, as the DM profile has it: their picture (with their status) under the banner, beside it
+// their name, username and pronouns, and over it all their bubble (a thought from the picture, over the banner)
 function profileHead(u, { size = 72, onOpen = null, self = isMe(u), name = null, note = null } = {}) {
   const av = el(onOpen ? 'button' : 'div', { className: 'pc-av', title: onOpen ? 'View Full Profile' : '', ...(onOpen ? { onclick: onOpen } : {}) }, avatarEl(u, { size }));
   const nm = el(onOpen ? 'button' : 'div', { className: 'pc-name', ...(onOpen ? { onclick: onOpen, title: 'View Full Profile' } : {}) }, styledName(el('span', {}, name || u.name), u), u.bot ? el('span', { className: 'tag' }, 'bot') : null);
-  return el('div', { className: 'pc-id' }, av, el('div', { className: 'pc-names' }, nm, note ? el('div', { className: 'pc-pro' }, note) : null, u.login && !u.bot ? el('div', { className: 'pc-login' }, u.login) : null,
-    u.pronouns ? el('div', { className: 'pc-pro' }, u.pronouns) : null, bubbleEl(u, { mine: self })));
+  const head = el('div', { className: 'pc-id' }, av, el('div', { className: 'pc-names' }, nm, note ? el('div', { className: 'pc-pro' }, note) : null, u.login && !u.bot ? el('div', { className: 'pc-login' }, u.login) : null,
+    u.pronouns ? el('div', { className: 'pc-pro' }, u.pronouns) : null), bubbleEl(u, { mine: self }));
+  head.style.setProperty('--pc-size', size + 'px');
+  return head;
 }
 // the profile beside a DM (as TrixWotel drew it): their banner, picture, name, username and pronouns, then the parts of
 // their profile, and View Full Profile and More (two buttons) at the bottom
@@ -5545,10 +5547,10 @@ function openProfileEditor() {
   const head = el('div', { className: 'pe-head' }), avBox = el('div', { className: 'pe-cav' }), bubbleBox = el('div', { className: 'pe-bub' });
   const badgesBox = el('div', { className: 'pe-badges', title: 'Customize your badges', onclick: () => customizeBadges(() => drawBadges()) });
   const connBox = el('div', { className: 'pe-conns' });
-  // (as every profile card is: your picture under the banner, with your name, username, pronouns and bubble beside it)
+  // (as every profile card is: your picture under the banner, your name, username and pronouns beside it, your bubble over it)
   const card = el('div', { className: 'pe-card' }, head,
     el('div', { className: 'pe-id' }, avBox, el('div', { className: 'pe-names' }, nameView, nameIn,
-      el('div', { className: 'pe-handle' }, el('span', {}, (Store.account() || {}).login || (live ? '' : 'you')), el('span', { className: 'pe-dot' }, '•'), pronIn, tagSel), bubbleBox)),
+      el('div', { className: 'pe-handle' }, el('span', {}, (Store.account() || {}).login || (live ? '' : 'you')), el('span', { className: 'pe-dot' }, '•'), pronIn, tagSel)), bubbleBox),
     el('div', { className: 'pe-cbody' }, badgesBox,
       el('div', { className: 'pe-acts' }, el('span', { className: 'btn pe-fake' }, icon('message', 16), 'Message'),
         el('button', { className: 'btn fp-icon', title: 'Shop', onclick: () => toShop() }, icon('shop', 18)), el('span', { className: 'btn fp-icon pe-fake' }, icon('more', 18))),
@@ -6566,7 +6568,9 @@ function svRoles(sv, redraw, state) {
   const r = roles.find((x) => x.id === state.role) || roles[0];
   const count = (id) => people.filter((m) => (m.roles || []).includes(id)).length;
   const create = el('button', { className: 'btn primary', onclick: async () => {
-    const id = await attempt(() => Store.addRole(sv.id, { name: 'new role' })); if (id) { state.role = id; redraw(); }
+    create.disabled = true;
+    const id = await attempt(() => Store.addRole(sv.id, { name: 'new role' }));
+    create.disabled = false; if (id) { state.role = id; redraw(); }
   } }, 'Create Role');
   const list = el('div', { className: 'role-list' }, ...roles.map((x) => el('button', { className: 'role-pill' + (r && x.id === r.id ? ' on' : ''), onclick: () => { state.role = x.id; redraw(); } },
     el('i', { style: `background:${safeColor(x.color, '#99aab5')}` }), roleIconEl(x, 16), el('span', {}, x.name), el('small', {}, String(count(x.id))))), create);

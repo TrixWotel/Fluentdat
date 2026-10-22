@@ -780,11 +780,12 @@ export const SupabaseStore = {
 
   // ---- roles (a name and a colour that admins hand out) ----
   roles: (sv) => cache.roles.filter((r) => r.server_id === sv).sort(byPos).map(toRole),
+  // a new role: there at once (the reload that follows only confirms it)
   async addRole(sv, role = {}) {
-    const id = uuid();
-    must(await sb.from('roles').insert({ id, server_id: sv, name: String(role.name || 'new role').trim().slice(0, 40) || 'new role',
-      color: role.color || '', hoist: role.hoist !== false, position: SupabaseStore.roles(sv).length }));
-    await loadAll(); return id;
+    const id = uuid(), row = { id, server_id: sv, name: String(role.name || 'new role').trim().slice(0, 40) || 'new role', color: role.color || '', hoist: role.hoist !== false, position: SupabaseStore.roles(sv).length };
+    must(await sb.from('roles').insert(row));
+    if (!cache.roles.some((r) => r.id === id)) cache.roles = [...cache.roles, { icon: '', ...row }];
+    emit(); loadAll(); return id;
   },
   updateRole(id, patch) {
     const r = cache.roles.find((x) => x.id === id); if (r) Object.assign(r, patch); emit();

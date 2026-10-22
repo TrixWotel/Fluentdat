@@ -1432,7 +1432,8 @@ img.emoji { width: 1.375em; height: 1.375em; object-fit: contain; vertical-align
 .pe-cav { position: relative; flex: none; }
 .pe-names { flex: 1; min-width: 0; display: grid; gap: 4px; justify-items: start; }
 .pe-bub:empty { display: none; }
-.pe-bub .p-bubble { position: static; max-width: 100%; margin-top: 2px; padding: 5px 10px; font-size: .8rem; } .pe-bub .p-bubble i { display: none; }
+.pe-id { position: relative; } .pe-id > .pe-bub { position: absolute; z-index: 6; left: calc(16px + 92px * .8); bottom: calc(100% - 4px); max-width: calc(100% - 32px - 92px * .8); }
+.pe-bub .p-bubble { position: relative; left: auto; top: auto; max-width: 100%; padding: 7px 11px; font-size: .82rem; }
 .pe-cbody { padding: 0 16px 18px; display: grid; gap: 10px; }
 .pe-name { justify-self: start; display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin-left: -6px; padding: 2px 6px; border-radius: 8px; font-size: 1.5rem; font-weight: 800; color: var(--bright); text-align: left; }
 .pe-name:hover { background: var(--hover); } .pe-name > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2169,8 +2170,11 @@ button.dbx-item:hover { background: var(--hover); } .dbx-item.on { background: c
 .pc-name { font-size: 1.35rem; font-weight: 800; color: var(--bright); text-align: left; padding: 0; line-height: 1.2; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow-wrap: anywhere; }
 button.pc-name:hover { text-decoration: underline; }
 .pc-login { color: var(--text); font-size: .86rem; } .pc-pro { color: var(--muted); font-size: .82rem; }
-.pc-names .p-bubble { position: static; max-width: 100%; margin-top: 6px; padding: 5px 10px; font-size: .8rem; }
-.pc-names .p-bubble i { display: none; }
+/* (the bubble floats over the card: a thought from the picture's top corner, over the banner) */
+.pc-id { position: relative; }
+.pc-id > .p-bubble { left: calc(var(--pc-pad, 16px) + var(--pc-size, 72px) * .8); top: auto; bottom: calc(100% - 4px); padding: 7px 11px; font-size: .82rem;
+  max-width: calc(100% - var(--pc-pad, 16px) * 2 - var(--pc-size, 72px) * .8); }
+.fp-card2 .pc-id { --pc-pad: 18px; }
 .pc-sec { margin: 0 16px; padding: 12px 0; border-top: 1px solid var(--edge-soft); font-size: .875rem; }
 .pc-sec:not(:has(> :not(.pc-slot):not([hidden]))) { display: none; }
 .pc-sec h4 { margin: 0 0 6px; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 700; }
