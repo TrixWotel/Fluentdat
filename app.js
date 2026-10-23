@@ -1630,10 +1630,9 @@ async function buyBundleFlow(b) {
   const bal = Bux.wallet().balance;
   if (bal < cost) { toast(`The ${name} costs ${fmtBux(cost)} Datbux, and you have ${fmtBux(bal)}. Earn more with tasks (Direct Messages → Bank).`); return false; }
   const list = b.items.map((x) => `${itemName(x.k, x.i)} (${KIND_NAME[x.k] || x.k}${Bux.owns(x.k, x.i) ? ', yours already' : ''})`).join(', '), off = Bux.bundleOff(b);
-  // (a bundle's own price says nothing about being less than its things; a sale, and what you have already, do)
-  const what = [off ? `${off.pct}% off for ${off.name}` : '', b.items.some((x) => Bux.owns(x.k, x.i)) ? 'only for what you don’t have yet' : ''].filter(Boolean).join(', ');
+  const what = off ? `${off.pct}% off for ${off.name}` : `what ${b.items.some((x) => Bux.owns(x.k, x.i)) ? 'the rest of it costs' : 'its things cost'} one by one`;
   if (!(await confirmBox({ title: `Buy the ${name}?`, ok: `Buy for ${fmtBux(cost)}`,
-    text: `${list}. ${fmtBux(cost)} Datbux${what ? ` (${what})` : ''}. You have ${fmtBux(bal)}, so ${fmtBux(bal - cost)} would be left. They’re yours to keep, or to trade.` }))) return false;
+    text: `${list}. ${fmtBux(cost)} Datbux: ${what}. You have ${fmtBux(bal)}, so ${fmtBux(bal - cost)} would be left. They’re yours to keep, or to trade.` }))) return false;
   if (!(await Bux.buyBundle(b))) return false;
   renderAll();
   return true;
@@ -1895,7 +1894,7 @@ function shopPage() {
   const themed = onNow.filter((h) => h.kind === 'theme').map((h) => [h, Bux.bundles().filter((b) => b.holiday === h.id)]).filter(([, bs]) => bs.length);
   const bundleSub = sale ? `${sale.name}: every bundle is ${sale.pct}% off, until ${dayOf(sale.ends)}.`
     : themed.length ? themed.map(([h, bs]) => `${h.name}: ${bs.map((b) => 'the ' + b.name + ' Bundle').join(' and ')} ${bs.length === 1 ? 'is' : 'are'} ${h.pct}% off, until ${dayOf(h.ends)}.`).join(' ')
-    : 'A few things that go together. A little less on the holiday a bundle is made for, and on sale days like Black Friday.';
+    : 'A few things that go together, for what they cost one by one: less on the holiday a bundle is made for, and on sale days like Black Friday.';
   const sec = (title, sub, list, cls = '') => (list.length ? [el('h2', { className: 'shp-h' }, title), el('p', { className: 'shp-sub' }, sub), el('div', { className: 'shp-grid ' + cls }, ...list)] : []);
   const page = el('div', { className: 'shp-page' },
     el('div', { className: 'shp-hero' }, el('div', {}, el('h1', {}, 'Shop'),

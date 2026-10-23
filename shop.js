@@ -4,9 +4,8 @@
 // A decoration is an SVG a little bigger than the avatar (130 × 130, the avatar being the circle of radius 50 in the
 // middle); an effect is a layer of little pieces the page's CSS moves (index.html, "the Shop").
 import { el } from './ui.js';
-import { MORE_DECORATIONS, moreDecoSVG } from './decorations.js';
 
-// [id, name, the Quest that gives it ('' when there's none)]; a hundred more after these (decorations.js)
+// [id, name, the Quest that gives it ('' when there's none)]
 export const DECORATIONS = [
   ['halo', 'Halo', ''], ['flame', 'Ring of Fire', ''], ['catears', 'Cat Ears', ''], ['leaves', 'Leafy Wreath', ''],
   ['gears', 'Robot Gears', ''], ['glitch', 'Glitch', ''], ['hearts', 'Orbiting Hearts', ''],
@@ -17,7 +16,6 @@ export const DECORATIONS = [
   ['bolts', 'Lightning', ''], ['notes', 'Music Notes', ''], ['pixel', '8-Bit Ring', ''], ['foxears', 'Fox Ears', ''],
   ['clouds', 'Cloud Puffs', ''], ['aurora', 'Aurora Ring', ''], ['sakura', 'Cherry Blossoms', ''], ['witch', 'Witch Hat', ''],
   ['bow', 'Big Bow', ''], ['shades', 'Cool Shades', ''], ['moon', 'Moon and Stars', ''], ['crystals', 'Crystal Ring', ''],
-  ...MORE_DECORATIONS,
 ];
 export const EFFECTS = [
   ['snow', 'Snowfall', ''], ['sparkles', 'Twinkles', ''], ['bubbles', 'Bubbles', ''], ['petals', 'Petals', ''], ['embers', 'Embers', ''], ['pixels', 'Pixel Rain', ''],
@@ -148,7 +146,7 @@ function decoSVG(id) {
       + [[16, 26, 0.7, 0], [32, 8, 0.5, 0.8], [10, 84, 0.6, 1.4], [122, 98, 0.5, 2], [86, 6, 0.45, 1]].map(([x, y, sc, d]) => `<g transform="translate(${x} ${y}) scale(${sc})"><path class="d-tw" style="animation-delay:${d}s" d="${star4}" fill="#fff6c4"/></g>`).join('');
     case 'crystals': return `<g class="d-spin-slow">${Array.from({ length: 10 }, (_, i) => `<g transform="rotate(${i * 36} 65 65) translate(65 6) scale(${i % 2 ? 0.8 : 1.1})"><path d="M0-12 5-2 2 10H-3l-2-12Z" fill="${i % 2 ? '#a5d8ff' : '#d0bfff'}" fill-opacity=".85" stroke="#fff" stroke-width=".8"/></g>`).join('')}</g>`;
   }
-  return moreDecoSVG(id, k);
+  return '';
 }
 // the decoration, to lay over an avatar (it's bigger than the avatar, and lets clicks through)
 export function decoEl(id) {
