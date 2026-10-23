@@ -506,6 +506,13 @@ create table if not exists public.discord_requests (
   outbox bigint[] not null default '{}',
   sent_at timestamptz not null default now()
 );
+-- (each line goes out in Discord under the name of whoever said it, "TrixWotel (#sync)", and their picture when it's on
+-- the web; plain_names: Discord turned a name down, so this channel's go without @ # : and `)
+alter table public.discord_outbox add column if not exists who text not null default '';
+alter table public.discord_outbox add column if not exists avatar text;
+alter table public.discord_sent add column if not exists who text not null default '';
+alter table public.discord_sent add column if not exists avatar text;
+alter table public.discord_links add column if not exists plain_names boolean not null default false;
 
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
@@ -1693,10 +1700,10 @@ end $$;
 drop trigger if exists link_changed on public.channel_link_members;
 create trigger link_changed after insert or delete on public.channel_link_members for each row execute function public.link_changed();
 revoke all on function public.guard_link_copy(), public.copy_to_links(), public.link_changed() from public, anon, authenticated;
--- Discord's linked channels: a message here becomes a line waiting to go to each of them ("#channel / name / <time> /
--- message"; a copy from a linked channel says where it was said, and nothing goes back to the Discord channel it came
--- from). @mentions, channels and emoji go as words; pictures and files as what they are. A line that can't be made
--- doesn't stop the message itself
+-- Discord's linked channels: a message here waits to go to each of them, to show there under the name of whoever said
+-- it and where, "TrixWotel (#sync)", with their picture when it's on the web (a copy from a linked channel says where it
+-- was said, and nothing goes back to the Discord channel it came from). @mentions, channels and emoji go as words;
+-- pictures and files as what they are. One that can't be made doesn't stop the message itself
 create or replace function public.discord_text_out(p_text text, p_server uuid) returns text
 language plpgsql stable security definer set search_path = public as $$
 declare t text := coalesce(p_text, ''); m text[]; v text;
@@ -1713,9 +1720,20 @@ begin
   end loop;
   return regexp_replace(t, '<a?:([A-Za-z0-9_]{2,32}):' || uuid_re || '>', ':\1:', 'g');
 end $$;
+-- the name it goes out under (80 characters at most). Discord won't take "discord" or "clyde" in one, so those get a
+-- look-alike letter; plain, without @ # : and ` as well, for a channel where Discord turned a name down
+create or replace function public.discord_name(p_name text, p_channel text, p_plain boolean default false) returns text
+language plpgsql immutable as $$
+declare tail text := ' (#' || left(coalesce(nullif(trim(p_channel), ''), 'channel'), 30) || ')'; n text;
+begin
+  n := left(coalesce(nullif(regexp_replace(trim(coalesce(p_name, '')), '\s+', ' ', 'g'), ''), 'Someone'), 80 - char_length(tail)) || tail;
+  if p_plain then n := translate(n, '@#:`', ''); end if;
+  n := regexp_replace(n, '(d)(isc)o(rd)', '\1\2' || chr(1086) || '\3', 'gi');
+  return regexp_replace(n, '(cl)y(de)', '\1' || chr(1091) || '\2', 'gi');
+end $$;
 create or replace function public.discord_out() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare c channels%rowtype; ch text; who text; body text; f jsonb; line text;
+declare c channels%rowtype; ch text; who text; body text; f jsonb; av text;
 begin
   if new.bot or not exists (select 1 from discord_links where channel_id = new.channel_id and status = 'ok') then return null; end if;
   begin
@@ -1726,6 +1744,8 @@ begin
       select coalesce(nullif(m.nick, ''), nullif(p.name, ''), p.handle) into who
         from profiles p left join server_members m on m.server_id = c.server_id and m.user_id = p.id where p.id = new.author;
     end if;
+    -- (their picture, when it's on the web: Discord can't show one kept in Fluentdat)
+    if coalesce(new.linked->>'discord', '') <> 'true' then select avatar into av from profiles where id = new.author and avatar ~ '^https://'; end if;
     body := discord_text_out(new.text, c.server_id);
     if new.action and body <> '' then body := '*' || body || '*'; end if;
     if new.sticker is not null then body := concat_ws(' ', nullif(body, ''), case when new.sticker->>'photo' = 'true' then '[picture]' else '[sticker]' end); end if;
@@ -1736,11 +1756,9 @@ begin
       end loop;
     end if;
     if body = '' then return null; end if;
-    -- (Discord shows <t:…:t> as the time where each reader is)
-    line := '#' || coalesce(nullif(ch, ''), 'channel') || ' / ' || coalesce(nullif(who, ''), 'Someone') || ' / <t:' || extract(epoch from new.created_at)::bigint || ':t> / ' || body;
-    if char_length(line) > 2000 then line := left(line, 1999) || '…'; end if;
-    insert into discord_outbox (link_id, kind, message_id, line)
-      select id, 'say', new.id, line from discord_links
+    if char_length(body) > 2000 then body := left(body, 1999) || '…'; end if;
+    insert into discord_outbox (link_id, kind, message_id, line, who, avatar)
+      select id, 'say', new.id, body, discord_name(who, ch, plain_names), av from discord_links
       where channel_id = new.channel_id and status = 'ok' and discord_channel is distinct from (new.linked->>'dchan');
   exception when others then raise notice 'Fluentdat: a line for Discord wasn''t made (%)', sqlerrm;
   end;
@@ -1759,8 +1777,8 @@ begin
     delete from discord_outbox where kind = 'say' and message_id = old.id;
     for s in delete from discord_sent where message_id = old.id returning link_id, dmsg loop
       insert into discord_outbox (link_id, kind, dmsg) values (s.link_id, 'drop', s.dmsg);
-      insert into discord_outbox (link_id, kind, message_id, line)
-        select link_id, 'say', message_id, line from discord_sent where link_id = s.link_id and dmsg = s.dmsg order by pos;
+      insert into discord_outbox (link_id, kind, message_id, line, who, avatar)
+        select link_id, 'say', message_id, line, who, avatar from discord_sent where link_id = s.link_id and dmsg = s.dmsg order by pos;
       delete from discord_sent where link_id = s.link_id and dmsg = s.dmsg;
     end loop;
   exception when others then raise notice 'Fluentdat: a message wasn''t deleted in Discord (%)', sqlerrm;
@@ -1769,7 +1787,7 @@ begin
 end $$;
 drop trigger if exists discord_drop on public.messages;
 create trigger discord_drop after delete on public.messages for each row execute function public.discord_drop();
-revoke all on function public.discord_text_out(text, uuid), public.discord_out(), public.discord_drop() from public, anon, authenticated;
+revoke all on function public.discord_text_out(text, uuid), public.discord_name(text, text, boolean), public.discord_out(), public.discord_drop() from public, anon, authenticated;
 
 -- ===================== actions (the only ways to do these) =====================
 -- a server's boost level: 2 boosts make level 1, 7 level 2, 14 level 3 (as on Discord)
@@ -1862,8 +1880,8 @@ end $$;
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates;
 -- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it;
 -- 16: who sees what of your profile; 17: deleting your account, and handing a server on; 18: linked channels; 19: Discord
--- channels linked too)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 19 $$;
+-- channels linked too; 20: what goes to Discord shows under each person's name)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 20 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -3011,6 +3029,13 @@ begin
     else update discord_links set read_at = now() + interval '10 seconds' where id = k.id; end if;
     return;
   end if;
+  -- Discord turned the name down: this channel's names go plain from now on, and these go again
+  if q.kind = 'send' and p_status = 400 and jsonb_typeof(j->'errors') = 'object' and j->'errors' ? 'username'
+     and exists (select 1 from discord_outbox where id = any(q.outbox) and who ~ '[@#:`]') then
+    update discord_links set plain_names = true where id = k.id;
+    update discord_outbox set who = translate(who, '@#:`', ''), tries = tries + 1 where id = any(q.outbox);
+    return;
+  end if;
   if p_status >= 400 then
     -- (a message already gone there, or a line Discord won't take: let it go)
     if q.kind = 'drop' or (q.kind = 'send' and p_status not in (401, 403, 404)) then delete from discord_outbox where id = any(q.outbox); return; end if;
@@ -3059,7 +3084,7 @@ begin
       for o in select * from discord_outbox where id = any(q.outbox) order by id loop
         i := i + 1;
         if exists (select 1 from messages where id = o.message_id) then
-          insert into discord_sent (message_id, link_id, dmsg, line, pos) values (o.message_id, k.id, j->>'id', o.line, i) on conflict do nothing;
+          insert into discord_sent (message_id, link_id, dmsg, line, pos, who, avatar) values (o.message_id, k.id, j->>'id', o.line, i, o.who, o.avatar) on conflict do nothing;
         end if;
       end loop;
     end if;
@@ -3070,10 +3095,11 @@ begin
 end $$;
 -- every couple of seconds (pg_cron): read Discord's answers, then ask again. For each Discord channel: what's been said
 -- there since last time (while it's starting: which channel the webhook posts in, and its name), and what's waiting to
--- go there, as many lines as fit in one Discord message (Discord takes about 30 messages a minute in a channel)
+-- go there: as many of one person's messages in a row as fit in one Discord message, under their name (Discord takes
+-- about 30 messages a minute in a channel)
 create or replace function public.discord_tick() returns void
 language plpgsql security definer set search_path = public as $$
-declare tok text; r record; k discord_links%rowtype; o discord_outbox%rowtype; hook text; lines text; ids bigint[];
+declare tok text; r record; k discord_links%rowtype; o discord_outbox%rowtype; hook text; lines text; ids bigint[]; who text; av text;
   api constant text := 'https://discord.com/api/v10';
 begin
   if not pg_try_advisory_xact_lock(hashtext('fluentdat-discord')) then return; end if;
@@ -3113,14 +3139,15 @@ begin
     begin
       if o.kind = 'drop' then perform discord_ask(k.id, 'drop', 'DELETE', hook || '/messages/' || o.dmsg, null, '{}', null, array[o.id]);
       else
-        lines := ''; ids := '{}';
+        lines := ''; ids := '{}'; who := o.who; av := o.avatar;
         for o in select * from discord_outbox where link_id = k.id order by id loop
-          exit when o.kind <> 'say' or (cardinality(ids) > 0 and char_length(lines) + 1 + char_length(o.line) > 2000);
+          exit when o.kind <> 'say' or (cardinality(ids) > 0 and (o.who is distinct from who or o.avatar is distinct from av or char_length(lines) + 1 + char_length(o.line) > 2000));
           lines := case when lines = '' then o.line else lines || E'\n' || o.line end;
           ids := ids || o.id;
         end loop;
-        -- (pinging nobody there, whatever it says)
-        perform discord_ask(k.id, 'send', 'POST', hook, null, '{"wait": "true"}', jsonb_build_object('content', lines, 'allowed_mentions', jsonb_build_object('parse', '[]'::jsonb)), ids);
+        -- (pinging nobody there, whatever it says; a line from before there were names goes under the webhook's own)
+        perform discord_ask(k.id, 'send', 'POST', hook, null, '{"wait": "true"}', jsonb_build_object('content', lines, 'allowed_mentions', jsonb_build_object('parse', '[]'::jsonb))
+          || case when who <> '' then jsonb_build_object('username', who) else '{}' end || case when av is not null then jsonb_build_object('avatar_url', av) else '{}' end, ids);
       end if;
     exception when others then
       raise notice 'Fluentdat: Discord couldn''t be told (%)', sqlerrm;

@@ -62,9 +62,14 @@ const DEFAULT_PREFS = {
   cardTheme: 'theirs',
   // what goes between the parts of a message from a linked channel ("#build-log / Trix / 3:41 PM / motor mount is printed")
   linkSep: ' / ',
+  // how a message from a linked channel looks: who said it (and where and when) over the message with a line between,
+  // the same without the line, or all on one line
+  linkStyle: 'divider',
 };
-// (Customize → Messages: the choices for it)
+// (Customize → Messages: the choices for them)
 const LINK_SEPS = [[' / ', 'Slashes  ( a / b )'], [' · ', 'Dots  ( a · b )'], [' | ', 'Bars  ( a | b )'], [' › ', 'Arrows  ( a › b )'], [' — ', 'Dashes  ( a — b )'], [' ', 'Spaces  ( a b )']];
+const LINK_STYLES = [['divider', 'Name, a line, then the message'], ['stack', 'Name, then the message'], ['line', 'All on one line']];
+const oneLine = () => prefs.linkStyle === 'line';
 const LAYOUT_PRESETS = {
   Default: {},
   Compact: { density: 'compact', fontSize: 14, avatarPx: 28, memberAv: 26, railW: 60, sideW: 190, membersW: 180, topH: 44, panelH: 46, chanH: 28,
@@ -2338,7 +2343,7 @@ function fillMessages(wrap, msgs, place, start) {
   const keep = wrap._nodes || new Map(), next = new Map(), order = [];
   const put = (key, make) => { let n = keep.get(key), made = false; if (!n) { n = make(); made = true; } next.set(key, n); order.push(n); return [n, made]; };
   const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars, ordered('msgActions').filter(shown).join('.'), JSON.stringify(prefs.labels || {}),
-    ordered('linkLine').filter(shown).join('.'), prefs.linkSep].join();
+    ordered('linkLine').filter(shown).join('.'), prefs.linkSep, prefs.linkStyle].join();
   const first = !wrap._seen; if (first) wrap._seen = new Set();
   const reacts = Store.reactions ? Store.reactions(place) : new Map(), reactable = mayIn('react');
   if (start) put('start:' + start.key, start.make);
@@ -2367,8 +2372,11 @@ function fillMessages(wrap, msgs, place, start) {
     if (m.call) { fold(); put('call:' + m.id + ':' + (m.call.ended || 0) + ':' + !!(call && call.callId === m.call.id), () => callNode(m)); last = null; continue; }
     if (hiddenAuthor(m.user) && !revealed.has(m.id)) { tucked.push(m); continue; }
     fold();
-    // (lines from a linked channel sit close together, and never under someone's name)
-    const cont = m.linked ? !!(last && last.linked && !m.reply)
+    // (lines from a linked channel sit close together, and never under someone's name; a linked message with its own
+    // heading goes under the one before it as messages do: the same person, from the same channel, not long after)
+    const cont = m.linked && oneLine() ? !!(last && last.linked && !m.reply)
+      : m.linked ? !!(prefs.group && last && last.linked && !m.reply && last.linked.name === m.linked.name && last.linked.channel === m.linked.channel
+        && last.linked.server === m.linked.server && !last.linked.discord === !m.linked.discord && (m.ts - last.ts) < 7 * 60000)
       : prefs.group && last && !last.call && !last.linked && !m.reply && last.user.name === m.user.name && !last.user.bot === !m.user.bot && last.user.via === m.user.via && (m.ts - last.ts) < 7 * 60000;
     const to = m.reply ? all.find((x) => x.id === m.reply) : null;
     const key = 'm:' + m.id + ':' + JSON.stringify([m.text, m.sticker && String(m.sticker.data || m.sticker.path || m.sticker).length, (m.files || []).map((f) => f.path || f.name), !!m.sending, cont, style,
@@ -2391,8 +2399,9 @@ function fillMessages(wrap, msgs, place, start) {
 const STICKER_PATH = /^[0-9a-f-]{36}\/sticker\/[0-9a-f-]{36}\.(png|gif|webp|jpg)$/;
 function messageNode(m, cont, to, all, ctx) {
   const body = el('div', { className: 'body' }), full = new Date(m.ts).toLocaleString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const ln = m.linked;
-  if (ln) body.append(linkLine(m, ctx, full, !m.forwarded));
+  const ln = m.linked, line = ln && oneLine();
+  if (line) body.append(linkLine(m, ctx, full, !m.forwarded));
+  else if (ln) { if (!cont) body.append(...linkHead(m, full)); }
   else if (!cont) {
     const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, nameIn(m.user));
     nm.style.setProperty('--who', nameColor(m.user));
@@ -2406,7 +2415,7 @@ function messageNode(m, cont, to, all, ctx) {
   }
   // (a forwarded message's own content sits in a box that says where it came from, as on Discord)
   const inner = m.forwarded ? el('div', { className: 'fwd-body' }) : body;
-  if (m.text != null && m.text !== '' && !(ln && !m.forwarded)) {
+  if (m.text != null && m.text !== '' && !(line && !m.forwarded)) {
     const t = el('div', { className: 'text' + (m.action ? ' action' : '') + (!m.action && jumbo(m.text) ? ' jumbo' : '') });
     t.innerHTML = richText(m.action ? `${m.user.name} ${m.text}` : m.text, ctx);
     inner.append(t);
@@ -2450,15 +2459,14 @@ function messageNode(m, cont, to, all, ctx) {
     el('span', {}, info ? plural(info.count, 'Message') : 'See Thread'), icon('chevR', 14))); }
   return node;
 }
-// a message from a linked channel, on one line: "#build-log / Trix / 3:41 PM / motor mount is printed", with the parts
-// you chose, in your order, with what you put between them (Customize → Messages). The channel's name opens it, if it's
-// one of yours, and the name opens their profile, if you know them
-function linkLine(m, ctx, full, withText = true) {
-  const ln = m.linked, sep = typeof prefs.linkSep === 'string' ? prefs.linkSep : ' / ', from = ln.from ? Store.channel(ln.from) : null;
+// the parts of a message from a linked channel: the link (or Discord's mark), the server, the channel, who said it, when,
+// and what they said. The channel's name opens it, if it's one of yours, and the name opens their profile, if you know them
+function linkParts(m, ctx, full, withText) {
+  const ln = m.linked, from = ln.from ? Store.channel(ln.from) : null;
   const known = !!(m.user && m.user.id && Store.profile && Store.profile(m.user.id));
   // (from a linked Discord channel: Discord's mark instead of the link, and where it was said there)
   const where = ln.discord ? ` on Discord${ln.server && ln.server !== 'Discord' ? ' (' + ln.server + ')' : ''}` : ln.server ? ' in ' + ln.server : '';
-  const make = {
+  return {
     lnIcon: () => (ln.discord ? el('span', { className: 'ln-ic dc', title: 'From Discord' }, brand('discord', 14)) : el('span', { className: 'ln-ic', title: 'From a linked channel' }, icon('link', 14))),
     lnServer: () => (ln.server ? el('span', { className: 'ln-sv' }, ln.server) : null),
     lnChannel: () => el(from ? 'button' : 'span', { className: 'ln-ch', title: from ? 'Go to #' + ln.channel : `#${ln.channel}${where}`, onclick: from ? () => openChannel(from) : null }, '#' + ln.channel),
@@ -2473,6 +2481,11 @@ function linkLine(m, ctx, full, withText = true) {
       const t = el('span', { className: 'text ln-text' + (m.action ? ' action' : '') }); t.innerHTML = richText(m.text, ctx); return t;
     },
   };
+}
+// …on one line: "#build-log / Trix / 3:41 PM / motor mount is printed", with the parts you chose, in your order, with
+// what you put between them (Customize → Messages)
+function linkLine(m, ctx, full, withText = true) {
+  const sep = typeof prefs.linkSep === 'string' ? prefs.linkSep : ' / ', make = linkParts(m, ctx, full, withText);
   // (the separator goes between the words; the icon belongs to whatever comes after it)
   const line = el('div', { className: 'ln-line' });
   let words = false, icon_ = false;
@@ -2484,6 +2497,21 @@ function linkLine(m, ctx, full, withText = true) {
     line.append(part);
   }
   return line;
+}
+// …or as a heading over the message: who said it, then where and when (the parts you chose, in your order), with a line
+// under it if you like (Customize → Messages). The name always shows
+function linkHead(m, full) {
+  const make = linkParts(m, null, full, false), head = el('div', { className: 'ln-head' }), where = el('span', { className: 'ln-where' });
+  if (shown('lnIcon')) head.append(make.lnIcon());
+  head.append(make.lnUser());
+  for (const id of ordered('linkLine')) {
+    if (!['lnServer', 'lnChannel', 'lnTime'].includes(id) || !shown(id)) continue;
+    const part = make[id](); if (!part) continue;
+    if (where.childNodes.length) where.append(el('span', { className: 'ln-sep' }, ' · '));
+    where.append(part);
+  }
+  if (where.childNodes.length) head.append(where);
+  return prefs.linkStyle === 'divider' ? [head, el('div', { className: 'ln-rule' })] : [head];
 }
 // the line above a reply: who it answers, and the start of what they said (click to jump there)
 function replyLine(m, to, ctx) {
@@ -4512,8 +4540,9 @@ function linkDialog(c) {
   // (what a message from here looks like there, as you have it set in Customize → Messages)
   const sample = () => {
     const u = { ...face(Store.myProfile()), id: Store.myId() };
+    const sm = { linked: { server: (Store.server(serverId) || {}).name || '', channel: c.name, name: Store.nickIn(serverId, u.id) || u.name || 'You', from: null }, ts: Date.now(), text: 'motor mount is printed', user: u };
     return el('div', { className: 'ln-sample msg linked' }, el('div', { className: 'body' },
-      linkLine({ linked: { server: (Store.server(serverId) || {}).name || '', channel: c.name, name: Store.nickIn(serverId, u.id) || u.name || 'You', from: null }, ts: Date.now(), text: 'motor mount is printed', user: u }, fmtCtx(), '')));
+      oneLine() ? linkLine(sm, fmtCtx(), '') : [...linkHead(sm, ''), el('div', { className: 'text' }, sm.text)]));
   };
   const busy = async (btn, fn) => { btn.disabled = true; const r = await attempt(fn); btn.disabled = false; return r; };
   // (Discord channels too, where the database has them: a webhook pasted here, and the database reads and writes)
@@ -4525,8 +4554,8 @@ function linkDialog(c) {
     if (list === null) return m.close();
     const linked = list.length > 0, code = (list.find((r) => r.here) || {}).code || '', others = list.filter((r) => !r.here);
     const parts = [el('p', { className: 'hint' }, linked
-      ? `What’s said here shows in ${others.length ? 'every channel below' : 'any channel added to this link'}, and what’s said there shows here, on one line like this:`
-      : 'Link this channel with channels in other servers: what’s said here shows there, and what’s said there shows here, on one line like this:'), sample()];
+      ? `What’s said here shows in ${others.length ? 'every channel below' : 'any channel added to this link'}, and what’s said there shows here, like this:`
+      : 'Link this channel with channels in other servers: what’s said here shows there, and what’s said there shows here, like this:'), sample()];
     if (linked) {
       const rows = el('div', { className: 'sx-list ln-list' });
       for (const r of list) {
@@ -4594,7 +4623,7 @@ function linkDialog(c) {
           if ((await busy(add, () => Store.linkDiscord(c.id, url))) !== null) { typed = ''; looks = 0; toast('Linking with Discord…'); draw(); }
         };
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add.click(); } });
-        parts.push(el('p', { className: 'hint' }, 'Link a Discord channel: what’s said there shows here, and what’s said here goes there, on one line.'),
+        parts.push(el('p', { className: 'hint' }, 'Link a Discord channel: what’s said there shows here, and what’s said here shows there under each person’s name.'),
           el('ol', { className: 'dc-steps' }, el('li', {}, bot, ' to the Discord server. Fluentdat only reads the channels you link.'),
             el('li', {}, 'In Discord, open the channel’s settings → Integrations → Webhooks → New Webhook, then Copy Webhook URL.'), el('li', {}, 'Paste it here.')),
           el('div', { className: 'ln-join' }, input, add));
@@ -7458,7 +7487,8 @@ function layoutStudio(redraw) {
       pickRow('timestamps', 'Timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']]), flag('group', 'Group messages', 'One heading for several messages in a row.'),
       pickRow('dividers', 'Date dividers', onoff), pickRow('hover', 'Highlight on hover', onoff), pickRow('nameHover', 'Names on hover', [['off', 'No line'], ['underline', 'A line under them']]), pickRow('startHeaders', 'Conversation start', onoff, '“Welcome to #channel”.'),
       pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('msgActions'),
-      pickRow('linkSep', 'Linked channels', LINK_SEPS, 'Between the parts of a message from a linked channel.'), ...buttonRows('linkLine', 'Messages from linked channels'));
+      pickRow('linkStyle', 'Linked channels', LINK_STYLES, 'How a message from a linked channel looks.'),
+      pickRow('linkSep', 'Between the parts', LINK_SEPS, 'Of a linked message all on one line.'), ...buttonRows('linkLine', 'Messages from linked channels'));
     if (id === 'composer') out.push(size('composerH'), size('icComposer'), updown('mainOrder', MAIN_PARTS), ...buttonRows('composer'));
     if (id === 'members') out.push(flag('membersDefault', 'Open by default', 'You can always open it from the top bar.', (on) => { showMembers = on; }), size('membersW', 'The DM profile panel uses it too.'),
       sideways('cols', COLS), size('memberAv'), flag('memberOffline', 'Include offline', ''), flag('memberStatusText', 'Second line', 'Each person’s about text.'),
@@ -7592,8 +7622,8 @@ function czPane(id, redraw) {
     row2('Formatting bar', 'Bold, italics, code and more when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => set('formatBar', on ? 'on' : 'off'))),
     row2('“Live, signed in as @you”', 'The bar across the top when all is well. Off, it only shows when something needs you.', sw(prefs.liveBanner === 'on', (on) => set('liveBanner', on ? 'on' : 'off'))),
     el('h3', {}, 'The buttons over a message'), ...elementGroups(redraw, ['msgActions']),
-    el('h3', {}, 'Messages from linked channels'), el('p', { className: 'hint' }, 'A channel linked with channels in other servers, or on Discord, shows what’s said there on one line, like “#build-log / Trix / 3:41 PM / motor mount is printed”. Choose its parts and their order.'),
-    row2('Between the parts', '', pick('linkSep', LINK_SEPS)), ...elementGroups(redraw, ['linkLine'])];
+    el('h3', {}, 'Messages from linked channels'), el('p', { className: 'hint' }, 'A channel linked with channels in other servers, or on Discord, shows who said it, where and when over the message (with a line between, if you like), or all on one line, like “#build-log / Trix / 3:41 PM / motor mount is printed”. Choose how it looks, its parts and their order.'),
+    row2('How they look', '', pick('linkStyle', LINK_STYLES)), row2('Between the parts', 'All on one line.', pick('linkSep', LINK_SEPS)), ...elementGroups(redraw, ['linkLine'])];
   if (id === 'profiles') return [...head('Profiles', 'Profile cards, and what you see of other people’s looks.'),
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => set('decorations', on ? 'on' : 'off'))),
     row2('Profile effects and frames', 'Snow, sparkles, frames and more on profile cards.', sw(prefs.effects !== 'off', (on) => set('effects', on ? 'on' : 'off'))),

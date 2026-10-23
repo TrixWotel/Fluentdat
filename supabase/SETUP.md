@@ -119,7 +119,7 @@ A boost gets its next day while the person boosting has Fluentdat open (in its l
 
 ## 11. Linking channels with Discord (optional)
 
-A text channel can be linked with channels on Discord (up to 10). What's said in the Discord channel shows here on one line, like `#build-log / Zoe / 3:41 PM / motor mount is printed`, and what's said here shows there the same way. The database does it all, every 2 seconds: it reads Discord with a bot of Fluentdat's own, and writes with a webhook in each Discord channel. Nothing else has to run anywhere.
+A text channel can be linked with channels on Discord (up to 10). What's said in the Discord channel shows here with Discord's mark, under who said it, where and when (or all on one line: Customize → Messages), and what's said here shows in Discord under each person's name and channel, like `TrixWotel (#sync)`, with their picture when it's from Discord or GitHub. The database does it all, every 2 seconds: it reads Discord with a bot of Fluentdat's own, and writes with a webhook in each Discord channel. Nothing else has to run anywhere.
 
 **Once, for all of Fluentdat:**
 
@@ -140,7 +140,7 @@ A text channel can be linked with channels on Discord (up to 10). What's said in
 **For each channel** (whoever manages the channel in Fluentdat, with someone who can manage the channel on Discord):
 
 1. In Fluentdat open the channel's **Linked Channels** (from its menu, Edit Channel or the top bar) and click **Add Fluentdat's bot** to add the bot to the Discord server. All it needs is to see the channel and read its message history.
-2. In Discord open the channel's settings → **Integrations → Webhooks → New Webhook**, then **Copy Webhook URL**. The webhook's name and picture are what Fluentdat's lines show under in Discord.
+2. In Discord open the channel's settings → **Integrations → Webhooks → New Webhook**, then **Copy Webhook URL**. (Its own name and picture don't matter much: each message shows under the name of whoever said it.)
 3. Paste it in **Linked Channels** and click **Link With Discord**. A few seconds later it shows the Discord channel's name, and from then on what's said in either shows in the other.
 
 What goes across: words, replies, and Discord's mentions, channels and emoji (as words). Pictures and files from Discord come as links, which Discord stops after about a day. Pictures and files from Fluentdat show in Discord as `[picture]` or `[file: name]`, because they're only for the people in the server. Deleting a message in Fluentdat deletes it in Discord too. Deleting or editing one in Discord doesn't change it in Fluentdat (the database only sees new messages). Nothing pings anyone on the other side. If the channel is also linked with channels in other Fluentdat servers, what's said in those goes to Discord as well, and what's said on Discord shows in them.

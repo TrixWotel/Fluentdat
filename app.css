@@ -2519,3 +2519,16 @@ button.pc-name:hover { text-decoration: underline; }
 .link-dlg .dc-err { margin: -2px 0 6px 27px; color: #ed4245; }
 .link-dlg .dc-steps { margin: 4px 0 10px; padding-left: 20px; color: var(--muted); line-height: 1.55; }
 .link-dlg .dc-steps a { color: var(--bright); font-weight: 600; }
+/* Round W: a linked message under a heading (Customize → Messages → How they look): who said it, then where and when,
+   small, with a line under it if you like; the message itself below, as any message's */
+.ln-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; line-height: 1.375; }
+.ln-head .ln-ic { display: inline-flex; align-self: center; color: var(--muted); }
+.ln-head .ln-ic.dc { color: #5865f2; }
+.ln-head .ln-who { font-weight: 600; color: var(--who, var(--bright)); }
+.ln-head .ln-who.known { cursor: pointer; } .ln-head .ln-who.known:hover { text-decoration: underline; }
+.ln-head .ln-where { color: var(--muted); font-size: .75rem; }
+.ln-head .ln-sv, .ln-head .ln-ch { color: var(--muted); font-weight: 600; }
+.ln-head button.ln-ch { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.ln-head button.ln-ch:hover { color: var(--bright); text-decoration: underline; }
+.ln-head .ln-sep { white-space: pre; }
+.ln-rule { height: 1px; margin: 4px 0 5px; background: color-mix(in srgb, var(--text) 26%, transparent); }
