@@ -2266,6 +2266,13 @@ button.pc-name:hover { text-decoration: underline; }
 .deco .d-flash { animation: d-flash 2.4s steps(1) infinite; } @keyframes d-flash { 0%, 100% { opacity: 1; } 8% { opacity: .2; } 12% { opacity: 1; } 16% { opacity: .4; } }
 .deco .d-hue { animation: d-hue 6s steps(6) infinite; } @keyframes d-hue { to { filter: hue-rotate(360deg); } }
 .deco .d-glint { animation: d-glint 3.4s ease-in-out infinite; } @keyframes d-glint { 0%, 70%, 100% { opacity: .15; } 80% { opacity: 1; } }
+/* (the hundred more, decorations.js: turning the other way, a propeller, rain, blinking lights, a visor's light, wings) */
+.deco .d-spin-rev { transform-origin: 65px 65px; animation: d-spin 10s linear infinite reverse; }
+.deco .d-prop { transform-box: fill-box; transform-origin: center; animation: d-prop .35s linear infinite; } @keyframes d-prop { 50% { transform: scaleX(.12); } }
+.deco .d-fall { animation: d-fall 1.4s linear infinite; } @keyframes d-fall { from { transform: translateY(-2px); opacity: 1; } to { transform: translateY(14px); opacity: 0; } }
+.deco .d-blink { animation: d-blink 1.6s steps(1) infinite; } @keyframes d-blink { 50% { opacity: .3; } }
+.deco .d-visor { animation: d-visor 3s ease-in-out infinite; } @keyframes d-visor { 50% { transform: translateX(58px); } }
+.deco .d-flutter { transform-box: fill-box; transform-origin: center; animation: d-flutter .5s ease-in-out infinite alternate; } @keyframes d-flutter { to { transform: scaleX(.35); } }
 /* ---------- the Shop's newer profile effects ---------- */
 @keyframes pfx-wander { to { translate: var(--drift) calc(var(--drift) * -1); } }
 @keyframes pfx-flap { to { transform: scaleX(.25); } }
