@@ -16,6 +16,7 @@ const byPos = (a, b) => (a.position - b.position) || String(a.name).localeCompar
 const boostOn = (b) => !b.paid_until || Date.parse(b.paid_until) > Date.now();
 
 let structure7 = null;
+let structure8 = null;
 const tradeListeners = new Set();
 let sb = null, session = null, feed = null, extras = null, structure = null, structure2 = null, structure3 = null, structure4 = null, structure5 = null, structure6 = null, pinsLive = null, reacts = null, active = null, following = false, providersOn = null, beat = 0;
 let styled = true;                  // (false on an older database: no profile themes, name styles or server tags there yet)
@@ -32,7 +33,7 @@ function blank() {
   return { me: null, profiles: {}, full: {}, servers: [], categories: [], channels: [], members: [], roles: [], memberRoles: [], dmIndex: [],
     dmMembers: [], friendRows: [], msgs: {}, dms: {}, calls: {}, reads: {}, unread: {}, loaded: new Set(),
     emoji: [], stickers: [], blocks: [], admin: false, reacts: {}, perms: [], extras: {}, events: [], interest: [], pins: {}, boosts: [], threadInfo: {},
-    wallet: null, owned: [], shop: {}, trades: [], bundles: [], sales: [], settings: null, ban: null };
+    wallet: null, owned: [], shop: {}, trades: [], bundles: [], sales: [], settings: null, ban: null, links: {} };
 }
 const emit = () => { for (const cb of listeners) try { cb(); } catch {} };
 const must = ({ data, error }) => { if (error) throw new Error(friendly(error.message || String(error))); return data; };
@@ -78,9 +79,13 @@ function toUser(p) {
 }
 const userOf = (id) => ({ ...toUser(cache.profiles[id]), id });
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
-const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text, sticker: r.sticker, action: r.action, reply: r.reply_to || null, forwarded: r.forwarded || null,
+// (a linked channel's copy says where it was said, and who said it, as they were called then)
+const toLinked = (r) => (r.link_src && r.linked && typeof r.linked === 'object' ? { server: String(r.linked.server || ''), channel: String(r.linked.channel || ''),
+  name: String(r.linked.name || ''), from: r.linked.from || null, src: r.link_src } : null);
+const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text, sticker: r.sticker, action: r.action, reply: r.reply_to || null, forwarded: r.forwarded || null, linked: toLinked(r),
   files: Array.isArray(r.files) ? r.files : null, mine: r.author === myId(), sending: pending.has(r.id), progress: r._progress,
-  user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : userOf(r.author) });
+  // (a linked channel's copy goes by the name it was said under there, which may be someone you don't otherwise know)
+  user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : r.link_src && r.linked && r.linked.name ? { ...userOf(r.author), name: String(r.linked.name) } : userOf(r.author) });
 const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, owner: r.owner, banner: r.banner || '', description: r.description || '',
   tag: r.tag || '', tagBadge: r.tag_badge || '', tagColor: r.tag_color || '',
   features: r.features && typeof r.features === 'object' ? r.features : {}, guide: r.guide && typeof r.guide === 'object' ? r.guide : {}, gameServers: Array.isArray(r.game_servers) ? r.game_servers : [],
@@ -168,7 +173,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 17;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 18;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -219,6 +224,12 @@ async function loadOnce() {
       const ban = await soft(sb.from('app_bans').select('reason,created_at').eq('user_id', myId()).then(must), []);
       if (seq !== loadSeq) return newestLoad;
       cache.ban = ban[0] ? { reason: ban[0].reason || '', at: Date.parse(ban[0].created_at) || 0 } : null;
+    }
+    // (your channels that are linked with channels elsewhere, and with how many)
+    if (ver >= 18) {
+      const links = await soft(sb.rpc('my_links').then(must), []);
+      if (seq !== loadSeq) return newestLoad;
+      cache.links = Object.fromEntries((links || []).map((r) => [r.channel_id, Number(r.others) || 0]));
     }
     // (your settings, as Customize keeps them with your account)
     if (ver >= 10) {
@@ -291,7 +302,7 @@ function watchMessages() {
   if (feed) return;
   const add = (dm) => ({ new: row }) => {
     const place = dm ? row.dm_id : row.channel_id, bucket = dm ? cache.dms : cache.msgs;
-    if (!row.bot) meet(row.author);
+    if (!row.bot && !row.link_src) meet(row.author);               // (a copy's author may be someone you don't know: the copy says who)
     if (bucket[place] && !bucket[place].some((m) => m.id === row.id)) { bucket[place].push(row); bucket[place].sort(byTime); }
     const mineToo = row.author === myId() && !row.bot;
     const u = (cache.unread[place] = cache.unread[place] || { unread: 0, mentions: 0, last: 0 });
@@ -430,6 +441,10 @@ function watchStructure() {
     if (eventType === 'INSERT' && row && row.to_user === myId()) for (const cb of tradeListeners) try { cb(toTrade(row)); } catch {}
   });
   structure7.subscribe();
+  // a channel linked with others, or taken out (its own channel: an older database has no links)
+  structure8 = sb.channel('fluentdat-structure-8');
+  structure8.on('postgres_changes', { event: '*', schema: 'public', table: 'channel_link_members' }, again);
+  structure8.subscribe();
 }
 // signed in: load everything, keep it live, and notice if the session ends (signed out in another tab, or it ran out)
 async function start() {
@@ -664,8 +679,8 @@ export const SupabaseStore = {
     return found && found[0] ? { ...toUser(found[0]), id: found[0].id } : null;
   },
   async signOut() {
-    for (const ch of [feed, extras, structure, structure2, structure3, structure4, structure5, structure6, structure7, pinsLive, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
-    feed = extras = structure = structure2 = structure3 = structure4 = structure5 = structure6 = structure7 = pinsLive = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
+    for (const ch of [feed, extras, structure, structure2, structure3, structure4, structure5, structure6, structure7, structure8, pinsLive, reacts, ...rooms.values()]) if (ch) sb.removeChannel(ch);
+    feed = extras = structure = structure2 = structure3 = structure4 = structure5 = structure6 = structure7 = structure8 = pinsLive = reacts = null; rooms.clear(); online = {}; voiceNow = {}; myVoice = null; clearInterval(beat);
     if (sb) await sb.auth.signOut({ scope: 'local' });   // (just this browser — your phone stays signed in)
     session = null; cache = blank(); active = null; pending.clear(); emit();
   },
@@ -1279,6 +1294,17 @@ export const SupabaseStore = {
     must(await sb.from('reports').insert({ reporter: myId(), target: isUuid(target) ? target : null, place: isUuid(place) ? place : null,
       message: isUuid(message) ? message : null, excerpt: String(excerpt || '').slice(0, 600), reason: String(reason || '').slice(0, 500) }));
   },
+  // ---- linked channels: what's said in one shows in the others ("#channel / name / time / message") ----
+  canLinks: () => (cache.version || 0) >= 18,
+  linkedWith: (channel) => (channel in cache.links ? cache.links[channel] : -1),     // (how many others; -1: not linked)
+  async linkInfo(channel) {
+    return (must(await sb.rpc('link_info', { p_channel: channel })) || []).map((r) => ({ link: r.link_id, code: r.code || '', channel: r.channel_id, name: r.channel,
+      server: r.server_id, serverName: r.server, here: !!r.here, removable: !!r.removable, at: Date.parse(r.added_at) || 0 }));
+  },
+  async linkChannel(channel) { const code = must(await sb.rpc('link_channel', { p_channel: channel })); await loadAll(); return code; },
+  async joinLink(code, channel) { must(await sb.rpc('join_link', { p_code: code, p_channel: channel })); await loadAll(); },
+  async unlinkChannel(channel) { must(await sb.rpc('unlink_channel', { p_channel: channel })); await loadAll(); },
+  async newLinkCode(channel) { return must(await sb.rpc('new_link_code', { p_channel: channel })); },
   // ---- for the people who run Fluentdat (TrixWotel): one-time links to make an account, and the reports ----
   isAppAdmin: () => !!cache.admin,
   // (and TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux for anyone)

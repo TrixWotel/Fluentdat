@@ -160,6 +160,7 @@ The database checks these itself, so they hold even if someone changes the app:
 36. A role can have an icon, chosen by the server's admins: an emoji, or a small picture of their own (never a web address). It shows beside the names of the people with that role.
 37. Your settings (Customize: your theme, your themes, your layout and every part you changed) are kept with your account, so each device you sign in on has them. Only you can see or change yours, and they're at most 256 KB.
 38. A server's rules (up to 25, a line each) are written by its admins in Server Guide, and everyone in the server can read them. Its admins can switch Boost, Shop and Rules in its sidebar on and off, as they can the rest.
+39. A text channel can be linked with channels in other servers (up to 10 in a link): what's said in one is copied into the others, saying where it was said and who said it. Only whoever manages a channel can link it, or add it to a link with the link's code, and the code is only shown to them. Each side can take its own channel out again (and whoever made the link, any of them). Only the database makes the copies, so nobody can pass a message off as one from somewhere else, and deleting a message deletes its copies.
 
 ## If something goes wrong
 
@@ -175,3 +176,4 @@ The database checks these itself, so they hold even if someone changes the app:
 10. **Boosting is still free, or the Shop has no nameplates or bundles**: run `setup.sql` again (step 2).
 11. **Boosts run out while nobody's on**: turn on pg_cron (step 10).
 12. **A profile's Collection has no times for badges**: run `setup.sql` again (step 2).
+13. **No Linked Channels in a channel's menu**: run `setup.sql` again (step 2).

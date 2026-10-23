@@ -2492,3 +2492,22 @@ button.pc-name:hover { text-decoration: underline; }
 /* Round T: ways to sign in (My Account), each with its own mark */
 .sw-ways .sw-ic { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--input); color: var(--text); }
 .sw-ways .sw-ic .bi { width: 32px; height: 32px; border-radius: 8px; }
+/* Round U: linked channels. A copy is one line ("#build-log / Trix / 3:41 PM / motor mount is printed"), its parts as
+   Customize → Messages sets them; the Linked Channels window lists the channels and holds the code */
+.msg.linked > .body { grid-row: 2; }
+.ln-line { line-height: 1.45; overflow-wrap: anywhere; }
+.ln-line .ln-ic { display: inline-flex; vertical-align: -2px; color: var(--muted); margin-right: 6px; }
+.ln-line .ln-sv, .ln-line .ln-ch { color: var(--muted); font-weight: 600; }
+.ln-line button.ln-ch { background: none; border: 0; padding: 0; font: inherit; color: var(--muted); cursor: pointer; }
+.ln-line button.ln-ch:hover { color: var(--bright); text-decoration: underline; }
+.ln-line .ln-who { font-weight: 600; color: var(--who, var(--bright)); }
+.ln-line .ln-who.known { cursor: pointer; } .ln-line .ln-who.known:hover { text-decoration: underline; }
+.ln-line .ln-when { color: var(--muted); font-size: .85em; }
+.ln-line .ln-sep { color: var(--muted); white-space: pre; }
+.ln-line .ln-text { display: inline; } .ln-line .ln-text > .para:first-child { display: inline; }      /* (its first line stays on the line) */
+.ln-sample { display: block; margin: 4px 0 6px; padding: 8px 12px; border: 1px solid var(--edge); border-radius: 10px; background: var(--input); }
+.link-dlg .ln-list .it { display: flex; align-items: center; gap: 10px; }
+.link-dlg .ln-list .nm3 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-dlg .ln-code { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.link-dlg .ln-code code { font-family: ui-monospace, Menlo, monospace; font-size: 1.05rem; letter-spacing: .06em; padding: 6px 10px; border-radius: 8px; background: var(--input); border: 1px solid var(--edge); color: var(--bright); user-select: all; }
+.link-dlg .ln-join { display: flex; gap: 8px; } .link-dlg .ln-join input { flex: 1; min-width: 0; }

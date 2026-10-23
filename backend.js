@@ -124,6 +124,10 @@ const fallback = {
   unblock: async () => {},
   report: async () => { throw new Error(SIGN_IN + 'report something.'); },
   isAppAdmin: () => false, canStaff: () => false, banned: () => null, canPrivacy: () => false, canAccount: () => false,
+  // (linked channels join servers other people run, so they come with signing in)
+  canLinks: () => false, linkedWith: () => -1, linkInfo: async () => [],
+  linkChannel: async () => { throw new Error(SIGN_IN + 'link channels.'); }, joinLink: async () => { throw new Error(SIGN_IN + 'link channels.'); },
+  unlinkChannel: async () => {}, newLinkCode: async () => '',
   markUnread: () => {},
   emojiAll: () => [], serverEmoji: () => [], serverStickers: () => [], expressionUrl: () => '',
   addEmoji: async () => { throw new Error(SIGN_IN + 'add server emoji.'); },

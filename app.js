@@ -43,7 +43,7 @@ const DEFAULT_PREFS = {
   cols: ['rail', 'side', 'main', 'members'], sideOrder: ['head', 'body', 'panel'], mainOrder: ['top', 'content', 'composer'], statusPos: 'top',
   radius: 'soft', uiFont: 'system',
   // buttons and parts (Customize → Elements): which are hidden, the order of each bar, whether they're labelled, and your own names
-  hidden: { findDM: true, tActivity: true }, order: {}, btnLabels: 'off', labels: {},
+  hidden: { findDM: true, tActivity: true, lnServer: true }, order: {}, btnLabels: 'off', labels: {},
   // pictures and Discord-style extras
   serverBanner: 'on', plates: 'on', memberGroups: 'on', startHeaders: 'on', dmPanel: true,
   micMuted: false, deafened: false,
@@ -60,7 +60,11 @@ const DEFAULT_PREFS = {
   plateMove: 'always',
   // profile cards' buttons and text: in the profile's own colours ('theirs'), or in your theme's ('mine')
   cardTheme: 'theirs',
+  // what goes between the parts of a message from a linked channel ("#build-log / Trix / 3:41 PM / motor mount is printed")
+  linkSep: ' / ',
 };
+// (Customize → Messages: the choices for it)
+const LINK_SEPS = [[' / ', 'Slashes  ( a / b )'], [' · ', 'Dots  ( a · b )'], [' | ', 'Bars  ( a | b )'], [' › ', 'Arrows  ( a › b )'], [' — ', 'Dashes  ( a — b )'], [' ', 'Spaces  ( a b )']];
 const LAYOUT_PRESETS = {
   Default: {},
   Compact: { density: 'compact', fontSize: 14, avatarPx: 28, memberAv: 26, railW: 60, sideW: 190, membersW: 180, topH: 44, panelH: 46, chanH: 28,
@@ -442,9 +446,11 @@ const BUTTONS = {
   dmNav: ['Direct messages sidebar', [['browseNav', 'Browse', 'search'], ['friendsNav', 'Friends', 'users'], ['datbuxNav', 'Bank', 'coin'], ['collectionNav', 'Collection', 'collection'],
     ['shopNav', 'Shop', 'shop'], ['questsNav', 'Quest', 'quest']]],
   top: ['Top bar', [['sideShow', 'Show the sidebar (while it’s hidden)', 'menu'], ['call', 'Start a voice call', 'phone'], ['video', 'Start a video call', 'video'], ['addPeople', 'Add friends to the DM', 'usersPlus'], ['threads', 'Threads', 'thread'],
-    ['notify', 'Notification settings', 'bell'], ['pins', 'Pinned messages', 'pin'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['search', 'Search', 'search'], ['saved', 'Bookmarks', 'bookmark']]],
+    ['notify', 'Notification settings', 'bell'], ['pins', 'Pinned messages', 'pin'], ['linked', 'Linked channels', 'link'], ['dmProfile', 'User profile, in DMs', 'user'], ['members', 'Member list', 'users'], ['search', 'Search', 'search'], ['saved', 'Bookmarks', 'bookmark']]],
   msgActions: ['Message buttons (on hover)', [['quick', 'Quick reactions', 'smile'], ['react', 'Add Reaction', 'smilePlus'], ['reply', 'Reply', 'reply'], ['forward', 'Forward', 'forward'],
     ['thread', 'Create Thread', 'thread'], ['more', 'More', 'more', 1]]],
+  linkLine: ['Messages from linked channels', [['lnIcon', 'Link icon', 'link'], ['lnServer', 'Server name', 'servers'], ['lnChannel', 'Channel name', 'hash'], ['lnUser', 'Who said it', 'user'],
+    ['lnTime', 'Time', 'clock'], ['lnText', 'The message', 'message', 1]]],
   composer: ['Message box', [['upload', 'Attach files and pictures', 'plusCircle'], ['input', 'The text box', 'edit', 1], ['emoji', 'Emoji', 'smile'], ['sticker', 'Stickers', 'sticker'], ['voice', 'Voice message', 'mic'], ['send', 'Send', 'send']]],
   panel: ['Your controls, under the sidebar', [['me', 'You (avatar and name)', 'user', 1], ['mic', 'Mute', 'mic'], ['deafen', 'Deafen', 'headphones'], ['settings', 'User Settings', 'gear', 1]]],
   profileCard: ['Profile cards (DM profile and full profile)', [['pBadges', 'Badges and server tag', 'medal'], ['pMutual', 'Mutual friends and servers', 'users'], ['pSince', 'Member since, boosting since, friends since', 'calendar'],
@@ -1156,6 +1162,10 @@ function renderTop() {
       parts.push(b);
     }
     else if (id === 'pins' && live && text) { const b = act('pin', 'Pinned Messages', (e) => { e.stopPropagation(); showPins(b); }, pop && pop.classList.contains('pins')); parts.push(b); }
+    else if (id === 'linked' && live && where === 'channel' && Store.linkedWith(channelId) >= 0) {
+      const n = Store.linkedWith(channelId);
+      parts.push(act('link', n ? `Linked with ${plural(n, 'channel')}` : 'Linked Channels (no others yet)', () => linkDialog(Store.channel(channelId))));
+    }
     else if (id === 'search' && text) {
       const sv = view === 'server' ? Store.server(serverId) : null;
       searchField.placeholder = sv ? `Search ${sv.name}` : 'Search';
@@ -2327,7 +2337,8 @@ function styledName(node, u, { roleColored = false } = {}) {
 function fillMessages(wrap, msgs, place, start) {
   const keep = wrap._nodes || new Map(), next = new Map(), order = [];
   const put = (key, make) => { let n = keep.get(key), made = false; if (!n) { n = make(); made = true; } next.set(key, n); order.push(n); return [n, made]; };
-  const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars, ordered('msgActions').filter(shown).join('.'), JSON.stringify(prefs.labels || {})].join();
+  const ctx = fmtCtx(), style = [prefs.timestamps, prefs.group, prefs.embeds, prefs.avatars, ordered('msgActions').filter(shown).join('.'), JSON.stringify(prefs.labels || {}),
+    ordered('linkLine').filter(shown).join('.'), prefs.linkSep].join();
   const first = !wrap._seen; if (first) wrap._seen = new Set();
   const reacts = Store.reactions ? Store.reactions(place) : new Map(), reactable = mayIn('react');
   if (start) put('start:' + start.key, start.make);
@@ -2356,7 +2367,9 @@ function fillMessages(wrap, msgs, place, start) {
     if (m.call) { fold(); put('call:' + m.id + ':' + (m.call.ended || 0) + ':' + !!(call && call.callId === m.call.id), () => callNode(m)); last = null; continue; }
     if (hiddenAuthor(m.user) && !revealed.has(m.id)) { tucked.push(m); continue; }
     fold();
-    const cont = prefs.group && last && !last.call && !m.reply && last.user.name === m.user.name && !last.user.bot === !m.user.bot && last.user.via === m.user.via && (m.ts - last.ts) < 7 * 60000;
+    // (lines from a linked channel sit close together, and never under someone's name)
+    const cont = m.linked ? !!(last && last.linked && !m.reply)
+      : prefs.group && last && !last.call && !last.linked && !m.reply && last.user.name === m.user.name && !last.user.bot === !m.user.bot && last.user.via === m.user.via && (m.ts - last.ts) < 7 * 60000;
     const to = m.reply ? all.find((x) => x.id === m.reply) : null;
     const key = 'm:' + m.id + ':' + JSON.stringify([m.text, m.sticker && String(m.sticker.data || m.sticker.path || m.sticker).length, (m.files || []).map((f) => f.path || f.name), !!m.sending, cont, style,
       m.user.name, m.user.color, String(m.user.avatar || '').length, nameColor(m.user), to ? [to.user.name, to.text, !!to.files] : m.reply, m.forwarded, emojiIndex.size, bookmarked(m.id),
@@ -2378,7 +2391,9 @@ function fillMessages(wrap, msgs, place, start) {
 const STICKER_PATH = /^[0-9a-f-]{36}\/sticker\/[0-9a-f-]{36}\.(png|gif|webp|jpg)$/;
 function messageNode(m, cont, to, all, ctx) {
   const body = el('div', { className: 'body' }), full = new Date(m.ts).toLocaleString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-  if (!cont) {
+  const ln = m.linked;
+  if (ln) body.append(linkLine(m, ctx, full, !m.forwarded));
+  else if (!cont) {
     const nm = el('span', { className: 'nm', onclick: (e) => showProfile(m.user, e.currentTarget) }, nameIn(m.user));
     nm.style.setProperty('--who', nameColor(m.user));
     styledName(nm, m.user, { roleColored: view === 'server' && !!(serverId && m.user.id && Store.memberColor(serverId, m.user.id)) });
@@ -2391,7 +2406,7 @@ function messageNode(m, cont, to, all, ctx) {
   }
   // (a forwarded message's own content sits in a box that says where it came from, as on Discord)
   const inner = m.forwarded ? el('div', { className: 'fwd-body' }) : body;
-  if (m.text != null && m.text !== '') {
+  if (m.text != null && m.text !== '' && !(ln && !m.forwarded)) {
     const t = el('div', { className: 'text' + (m.action ? ' action' : '') + (!m.action && jumbo(m.text) ? ' jumbo' : '') });
     t.innerHTML = richText(m.action ? `${m.user.name} ${m.text}` : m.text, ctx);
     inner.append(t);
@@ -2425,15 +2440,48 @@ function messageNode(m, cont, to, all, ctx) {
     more: () => [el('button', { title: labelOf('msgActions', 'more'), onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); messageCtx(m, r.left - 200, r.bottom + 4); } }, icon('more', 18))],
   };
   const tools = el('div', { className: 'msg-tools' }, ...ordered('msgActions').filter((id) => id === 'more' || shown(id)).flatMap((id) => toolOf[id]()));
-  const node = el('div', { className: 'msg' + (cont ? ' cont' : '') + (pingsMe(m, all) ? ' pinged' : '') + (m.sending ? ' sending' : '') + (bookmarked(m.id) ? ' saved' : ''),
+  const node = el('div', { className: 'msg' + (cont ? ' cont' : '') + (ln ? ' linked' : '') + (pingsMe(m, all) ? ' pinged' : '') + (m.sending ? ' sending' : '') + (bookmarked(m.id) ? ' saved' : ''),
     oncontextmenu: (e) => { if (e.target.closest('a')) return; e.preventDefault(); messageCtx(m, e.clientX, e.clientY); } });
   node.dataset.id = m.id;
   if (m.reply) node.append(replyLine(m, to, ctx));
-  node.append(cont ? el('span', { className: 'gut', title: full }, when(m.ts)) : av, body, tools);
+  node.append(cont || ln ? el('span', { className: 'gut', title: full }, when(m.ts)) : av, body, tools);
   const t = view === 'server' ? threadOf(m.id) : null;          // (a thread started from it: its name and how many messages)
   if (t) { const info = Store.threadInfo(t.id); body.append(el('button', { className: 'thread-chip', onclick: (e) => { e.stopPropagation(); openChannel(t); } }, icon('thread', 16), el('b', {}, t.name),
     el('span', {}, info ? plural(info.count, 'Message') : 'See Thread'), icon('chevR', 14))); }
   return node;
+}
+// a message from a linked channel, on one line: "#build-log / Trix / 3:41 PM / motor mount is printed", with the parts
+// you chose, in your order, with what you put between them (Customize → Messages). The channel's name opens it, if it's
+// one of yours, and the name opens their profile, if you know them
+function linkLine(m, ctx, full, withText = true) {
+  const ln = m.linked, sep = typeof prefs.linkSep === 'string' ? prefs.linkSep : ' / ', from = ln.from ? Store.channel(ln.from) : null;
+  const known = !!(m.user && m.user.id && Store.profile && Store.profile(m.user.id));
+  const make = {
+    lnIcon: () => el('span', { className: 'ln-ic', title: 'From a linked channel' }, icon('link', 14)),
+    lnServer: () => (ln.server ? el('span', { className: 'ln-sv' }, ln.server) : null),
+    lnChannel: () => el(from ? 'button' : 'span', { className: 'ln-ch', title: from ? 'Go to #' + ln.channel : `#${ln.channel}${ln.server ? ' in ' + ln.server : ''}`, onclick: from ? () => openChannel(from) : null }, '#' + ln.channel),
+    lnUser: () => {
+      const n = el('span', { className: 'ln-who' + (known ? ' known' : ''), onclick: known ? (e) => showProfile(m.user, e.currentTarget) : null }, m.user.name || 'Someone');
+      if (known) n.style.setProperty('--who', nameColor(m.user));
+      return n;
+    },
+    lnTime: () => el('span', { className: 'ln-when', title: full }, when(m.ts)),
+    lnText: () => {
+      if (!withText || m.text == null || m.text === '') return null;
+      const t = el('span', { className: 'text ln-text' + (m.action ? ' action' : '') }); t.innerHTML = richText(m.text, ctx); return t;
+    },
+  };
+  // (the separator goes between the words; the icon belongs to whatever comes after it)
+  const line = el('div', { className: 'ln-line' });
+  let words = false, icon_ = false;
+  for (const id of ordered('linkLine')) {
+    if (id !== 'lnText' && !shown(id)) continue;
+    const part = make[id] && make[id](); if (!part) continue;
+    if (words && !icon_) line.append(el('span', { className: 'ln-sep' }, sep));
+    if (id === 'lnIcon') icon_ = true; else { icon_ = false; words = true; }
+    line.append(part);
+  }
+  return line;
 }
 // the line above a reply: who it answers, and the start of what they said (click to jump there)
 function replyLine(m, to, ctx) {
@@ -4444,9 +4492,81 @@ function editChannel(c) {
   };
   const m = modal({ title: 'Edit Channel', sub: (c.kind === 'voice' ? '' : '#') + c.name,
     body: [el('div', { className: 'field' }, el('label', {}, 'Channel name'), name), c.kind === 'voice' ? null : el('div', { className: 'field' }, el('label', {}, 'Channel topic'), topic)],
-    actions: [Store.channels(serverId).length > 1 && (Store.canManage(serverId) || Store.can(c.id, 'manage_channels')) ? el('button', { className: 'btn ghost danger', onclick: () => { m.close(); deleteChannel(c); } }, 'Delete Channel') : null, el('span', { style: 'flex:1' }),
+    actions: [Store.channels(serverId).length > 1 && (Store.canManage(serverId) || Store.can(c.id, 'manage_channels')) ? el('button', { className: 'btn ghost danger', onclick: () => { m.close(); deleteChannel(c); } }, 'Delete Channel') : null,
+      linkable(c) ? el('button', { className: 'btn ghost', onclick: () => { m.close(); linkDialog(c); } }, icon('link', 16), 'Linked Channels') : null, el('span', { style: 'flex:1' }),
       el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close() }), save] });
   setTimeout(() => name.focus(), 0);
+}
+// ---------- linked channels ----------
+// a text channel linked with channels in other servers: what's said in one shows in all of them, as one line saying
+// where it was said ("#build-log / Trix / 3:41 PM / motor mount is printed"). Whoever manages a channel links it and
+// gives the code to whoever manages a channel on the other side, who adds theirs with it (up to 10 in a link)
+const linkable = (c) => !!(c && c.kind === 'text' && Store.kind === 'supabase' && Store.canLinks && Store.canLinks());
+function linkDialog(c) {
+  if (!linkable(c)) return;
+  const manage = Store.canManage(serverId) || Store.can(c.id, 'manage_channels');
+  const m = modal({ title: 'Linked Channels', sub: '#' + c.name, cls: 'link-dlg', body: [el('p', { className: 'hint' }, 'Loading…')],
+    actions: [el('button', { className: 'btn primary', textContent: 'Done', onclick: () => m.close() })] });
+  // (what a message from here looks like there, as you have it set in Customize → Messages)
+  const sample = () => {
+    const u = { ...face(Store.myProfile()), id: Store.myId() };
+    return el('div', { className: 'ln-sample msg linked' }, el('div', { className: 'body' },
+      linkLine({ linked: { server: (Store.server(serverId) || {}).name || '', channel: c.name, name: Store.nickIn(serverId, u.id) || u.name || 'You', from: null }, ts: Date.now(), text: 'motor mount is printed', user: u }, fmtCtx(), '')));
+  };
+  const busy = async (btn, fn) => { btn.disabled = true; const r = await attempt(fn); btn.disabled = false; return r; };
+  const draw = async () => {
+    const list = await attempt(() => Store.linkInfo(c.id));
+    if (list === null) return m.close();
+    const linked = list.length > 0, code = (list.find((r) => r.here) || {}).code || '', others = list.filter((r) => !r.here);
+    const parts = [el('p', { className: 'hint' }, linked
+      ? `What’s said here shows in ${others.length ? 'every channel below' : 'any channel added to this link'}, and what’s said there shows here, on one line like this:`
+      : 'Link this channel with channels in other servers: what’s said here shows there, and what’s said there shows here, on one line like this:'), sample()];
+    if (linked) {
+      const rows = el('div', { className: 'sx-list ln-list' });
+      for (const r of list) {
+        const remove = !r.here && r.removable ? iconBtn('x', 'Take it out of the link', async () => {
+          if (!(await confirmBox({ title: 'Take It Out', text: `Stop linking #${r.name} (in ${r.serverName}) with these channels?`, ok: 'Take It Out', danger: true }))) return;
+          if ((await attempt(() => Store.unlinkChannel(r.channel))) !== null) { toast(`#${r.name} isn’t linked any more.`); draw(); }
+        }) : null;
+        rows.append(el('div', { className: 'it' }, icon('hash', 17), el('span', { className: 'nm3' }, el('b', {}, r.name), el('span', { className: 'muted' }, ' in ' + r.serverName)),
+          r.here ? el('span', { className: 'chip' }, 'This channel') : null, remove));
+      }
+      parts.push(el('h4', { className: 'sub-h' }, others.length ? `Linked with ${plural(others.length, 'channel')}` : 'No other channels yet'), rows);
+    }
+    if (manage && linked && code) {
+      const again = el('button', { className: 'btn' }, 'New Code');
+      again.onclick = async () => {
+        if (!(await confirmBox({ title: 'New Code', text: 'The old code stops working. Channels already linked stay linked.', ok: 'Make a New One' }))) return;
+        if ((await busy(again, () => Store.newLinkCode(c.id))) !== null) { toast('A new code is ready.'); draw(); }
+      };
+      parts.push(el('h4', { className: 'sub-h' }, 'Link code'), el('div', { className: 'ln-code' }, el('code', {}, code),
+        el('button', { className: 'btn', onclick: () => copyText(code, 'Link code copied.') }, icon('copy', 16), 'Copy'), again),
+        el('p', { className: 'hint' }, 'Give it to whoever manages a channel in the other server. They open that channel’s Linked Channels and add it with this code.'));
+    }
+    if (manage && !linked) {
+      const make = el('button', { className: 'btn primary' }, icon('link', 16), 'Link This Channel');
+      make.onclick = async () => { if ((await busy(make, () => Store.linkChannel(c.id))) !== null) draw(); };
+      const input = el('input', { type: 'text', placeholder: 'A link code from the other server', maxLength: 200, autocomplete: 'off', spellcheck: false });
+      const add = el('button', { className: 'btn' }, 'Add This Channel');
+      add.onclick = async () => {
+        const got = (input.value.match(/[0-9a-f]{12}/i) || [])[0];
+        if (!got) { input.focus(); return toast('That doesn’t look like a link code (12 letters and numbers).'); }
+        if ((await busy(add, () => Store.joinLink(got, c.id))) !== null) { toast(`#${c.name} is linked.`); draw(); }
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add.click(); } });
+      parts.push(el('h4', { className: 'sub-h' }, 'Start a link'), el('div', { className: 'row', style: 'justify-content:flex-start' }, make),
+        el('h4', { className: 'sub-h' }, 'Or join one'), el('div', { className: 'ln-join' }, input, add));
+    }
+    if (!manage && !linked) parts.push(el('p', { className: 'hint' }, 'Only whoever manages this channel can link it.'));
+    const actions = [];
+    if (manage && linked) actions.push(el('button', { className: 'btn ghost danger', onclick: async () => {
+      if (!(await confirmBox({ title: 'Unlink Channel', text: `Stop linking #${c.name} with ${others.length ? 'the other channels' : 'this link'}? Messages already here stay.`, ok: 'Unlink', danger: true }))) return;
+      if ((await attempt(() => Store.unlinkChannel(c.id))) !== null) { toast(`#${c.name} isn’t linked any more.`); draw(); }
+    } }, 'Unlink This Channel'));
+    actions.push(el('span', { style: 'flex:1' }), el('button', { className: 'btn primary', textContent: 'Done', onclick: () => m.close() }));
+    m.fill([el('h3', {}, 'Linked Channels'), el('p', { className: 'dlg-sub' }, '#' + c.name), ...parts, el('div', { className: 'row' }, ...actions)]);
+  };
+  draw();
 }
 function showTopic(c) {
   const t = el('div', { className: 'text topic-full' }); t.innerHTML = richText(c.topic, fmtCtx());
@@ -4619,6 +4739,7 @@ function channelCtx(c, x, y) {
     c.kind === 'voice' && live && (call && call.place === c.id ? { label: 'Disconnect', icon: 'hangup', danger: true, action: () => leaveCall() } : Store.can(c.id, 'connect') && { label: 'Join Voice', icon: 'volume', action: () => joinVoice(c) }),
     live && '-', muteItem(c.id, 'Channel'), notifyItem(c.id, false, c.category ? 'Category' : 'Server'),
     can && '-', can && { label: 'Edit Channel', icon: 'gear', action: () => editChannel(c) },
+    linkable(c) && (can || Store.linkedWith(c.id) >= 0) && { label: 'Linked Channels', icon: 'link', action: () => linkDialog(c) },
     can && Store.channels(serverId).length > 1 && { label: 'Delete Channel', icon: 'trash', danger: true, action: () => deleteChannel(c) },
     '-', { label: 'Copy Channel ID', icon: 'id', action: () => copyText(c.id, 'Channel ID copied.') },
   ], x, y);
@@ -6920,7 +7041,7 @@ function buttonsSection(redraw) {
 const PARTS = { title: 'Title bar', status: 'Status bar', rail: 'Server rail', side: 'Sidebar', head: 'Server header', body: 'Channel list', panel: 'Your controls',
   main: 'Main area', top: 'Top bar', content: 'Messages', composer: 'Message box', members: 'Member list' };
 const PART_OF_BAR = { rail: 'rail', header: 'head', channels: 'body', dms: 'side', top: 'top', composer: 'composer', panel: 'panel', railPanel: 'panel', titlebar: 'title',
-  serverTop: 'body', dmNav: 'body', msgActions: 'content' };
+  serverTop: 'body', dmNav: 'body', msgActions: 'content', linkLine: 'content' };
 const SIDE_PARTS = ['head', 'body', 'panel'], MAIN_PARTS = ['top', 'content', 'composer'];
 const WIDE_CHIPS = new Set(['servers', 'input', 'me', 'findDM']);
 const LAYOUT_KEYS = Object.keys(DEFAULT_PREFS).filter((k) => !KEEP.includes(k));
@@ -7292,7 +7413,8 @@ function layoutStudio(redraw) {
       size('fontSize', 'Everything in the app scales with it.'), pickRow('density', 'Spacing', [['cozy', 'Cozy'], ['compact', 'Compact']]),
       pickRow('timestamps', 'Timestamps', [['12', '1:30 PM'], ['24', '13:30'], ['rel', '5m ago'], ['off', 'Hidden']]), flag('group', 'Group messages', 'One heading for several messages in a row.'),
       pickRow('dividers', 'Date dividers', onoff), pickRow('hover', 'Highlight on hover', onoff), pickRow('nameHover', 'Names on hover', [['off', 'No line'], ['underline', 'A line under them']]), pickRow('startHeaders', 'Conversation start', onoff, '“Welcome to #channel”.'),
-      pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('msgActions'));
+      pickRow('msgWidth', 'Reading width', [['full', 'Use the full width'], ['readable', 'Readable column']]), updown('mainOrder', MAIN_PARTS), ...buttonRows('msgActions'),
+      pickRow('linkSep', 'Linked channels', LINK_SEPS, 'Between the parts of a message from a linked channel.'), ...buttonRows('linkLine', 'Messages from linked channels'));
     if (id === 'composer') out.push(size('composerH'), size('icComposer'), updown('mainOrder', MAIN_PARTS), ...buttonRows('composer'));
     if (id === 'members') out.push(flag('membersDefault', 'Open by default', 'You can always open it from the top bar.', (on) => { showMembers = on; }), size('membersW', 'The DM profile panel uses it too.'),
       sideways('cols', COLS), size('memberAv'), flag('memberOffline', 'Include offline', ''), flag('memberStatusText', 'Second line', 'Each person’s about text.'),
@@ -7300,7 +7422,7 @@ function layoutStudio(redraw) {
       pickRow('membersStyle', 'Look', [['panel', 'Under the top bar, beside the chat'], ['card', 'A card in the chat'], ['column', 'A column of its own']], 'Beside the chat, the top bar and its search run across it.'));
     insp.replaceChildren(el('div', { className: 'insp-head' }, el('h3', {}, PARTS[id] || 'Layout'), el('span', { className: 'muted' }, 'Selected')), ...out);
   }
-  function buttonRows(group) {
+  function buttonRows(group, heading = '') {
     const [title, items] = BUTTONS[group], order = ordered(group), list = el('div', { className: 'sx-list btn-list' });
     order.forEach((bid, i) => {
       const [, label, ic, fixed] = items.find((b) => b[0] === bid);
@@ -7309,7 +7431,7 @@ function layoutStudio(redraw) {
         fixed ? el('span', { className: 'chip', title: 'Always shown' }, icon('lock', 12), 'Always')
           : sw(shown(bid), (on) => { remember(); prefs.hidden = { ...(prefs.hidden || {}), [bid]: !on }; commit(); })));
     });
-    return [el('h4', { className: 'sub-h' }, title + ' buttons'), list];
+    return [el('h4', { className: 'sub-h' }, heading || title + ' buttons'), list];
   }
 
   // redraw when there's room for a different size (first showing, or the window resizing)
@@ -7425,7 +7547,9 @@ function czPane(id, redraw) {
     row2('Link previews', 'Cards for Fluentdat invites, GitHub repositories and YouTube videos.', sw(prefs.embeds !== 'off', (on) => set('embeds', on ? 'on' : 'off'))),
     row2('Formatting bar', 'Bold, italics, code and more when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => set('formatBar', on ? 'on' : 'off'))),
     row2('“Live, signed in as @you”', 'The bar across the top when all is well. Off, it only shows when something needs you.', sw(prefs.liveBanner === 'on', (on) => set('liveBanner', on ? 'on' : 'off'))),
-    el('h3', {}, 'The buttons over a message'), ...elementGroups(redraw, ['msgActions'])];
+    el('h3', {}, 'The buttons over a message'), ...elementGroups(redraw, ['msgActions']),
+    el('h3', {}, 'Messages from linked channels'), el('p', { className: 'hint' }, 'A channel linked with channels in other servers shows what’s said there on one line, like “#build-log / Trix / 3:41 PM / motor mount is printed”. Choose its parts and their order.'),
+    row2('Between the parts', '', pick('linkSep', LINK_SEPS)), ...elementGroups(redraw, ['linkLine'])];
   if (id === 'profiles') return [...head('Profiles', 'Profile cards, and what you see of other people’s looks.'),
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => set('decorations', on ? 'on' : 'off'))),
     row2('Profile effects and frames', 'Snow, sparkles, frames and more on profile cards.', sw(prefs.effects !== 'off', (on) => set('effects', on ? 'on' : 'off'))),

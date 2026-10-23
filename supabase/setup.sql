@@ -436,6 +436,23 @@ create table if not exists public.trades (
 );
 create index if not exists trades_to on public.trades (to_user, status);
 create index if not exists trades_from on public.trades (from_user, status);
+-- linked channels: text channels (in any servers) where what's said in one shows in all the others, as
+-- "#channel / name / time / message". Whoever manages a channel links it and gets the link's code; whoever manages a
+-- channel somewhere else adds theirs with that code. Up to 10 channels in a link, and a channel is in one link at most
+create table if not exists public.channel_links (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create table if not exists public.channel_link_members (
+  channel_id uuid primary key references public.channels (id) on delete cascade,
+  link_id uuid not null references public.channel_links (id) on delete cascade,
+  added_by uuid references public.profiles (id) on delete set null,
+  added_at timestamptz not null default now(),
+  changed_at timestamptz not null default now()          -- (when its link last got or lost a channel)
+);
+create index if not exists channel_link_members_by_link on public.channel_link_members (link_id);
 
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
@@ -522,6 +539,17 @@ alter table public.dms drop constraint if exists dms_check;
 -- a forwarded message says where it came from: { from, by, at }
 alter table public.messages add column if not exists forwarded jsonb;
 alter table public.dm_messages add column if not exists forwarded jsonb;
+-- a linked channel's copy of a message: the message it was copied from (gone with it), and where that was said
+-- ({ server, channel, name, from }: as they were called then)
+alter table public.messages add column if not exists link_src uuid;
+alter table public.messages add column if not exists linked jsonb;
+create index if not exists messages_by_link_src on public.messages (link_src) where link_src is not null;
+do $$ begin
+  alter table public.messages add constraint messages_link_src_fk foreign key (link_src) references public.messages (id) on delete cascade;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.messages add constraint messages_linked_shape check (linked is null or (jsonb_typeof(linked) = 'object' and octet_length(linked::text) <= 1000));
+exception when duplicate_object then null; end $$;
 
 -- pictures are kept small (the app shrinks them before saving), and these limits stop anyone filling the database
 do $$ begin
@@ -680,7 +708,10 @@ begin
   if place !~ re or who !~ re or split_part(p_name, '/', 4) !~ '^[0-9a-f-]{36}\.[a-z0-9]{1,8}$' or split_part(p_name, '/', 5) <> '' then return false; end if;
   if p_write and (who <> auth.uid()::text or app_banned()) then return false; end if;
   if k = 'dm' then return in_dm(place::uuid); end if;
-  if k = 'ch' then return chan_can(place::uuid, case when p_write then 'attach' else 'view' end); end if;
+  if k = 'ch' then return chan_can(place::uuid, case when p_write then 'attach' else 'view' end)
+    -- (…or, to read it, in a linked channel that has a copy of the message it came with)
+    or (not p_write and exists (select 1 from messages s join messages c on c.link_src = s.id
+      where s.channel_id = place::uuid and s.files @> jsonb_build_array(jsonb_build_object('path', p_name)) and chan_can(c.channel_id, 'view'))); end if;
   return false;
 end $$;
 
@@ -848,6 +879,12 @@ create policy "say you're interested" on public.event_interest for insert to aut
   with check (user_id = auth.uid() and exists (select 1 from server_events e where e.id = event_id and is_member(e.server_id)));
 drop policy if exists "take it back" on public.event_interest;
 create policy "take it back" on public.event_interest for delete to authenticated using (user_id = auth.uid());
+-- linked channels: whoever can read a channel sees that it's linked (the rest, and the code, through link_info); links
+-- are made and changed only through their functions
+alter table public.channel_links enable row level security;
+alter table public.channel_link_members enable row level security;
+drop policy if exists "see that a channel you read is linked" on public.channel_link_members;
+create policy "see that a channel you read is linked" on public.channel_link_members for select to authenticated using (chan_can(channel_id, 'view'));
 
 -- pinned messages: seen by whoever can read the place; pinned and unpinned by whoever may manage its messages (anyone
 -- in a DM)
@@ -1542,6 +1579,59 @@ begin
 end $$;
 drop trigger if exists thread_wakes on public.messages;
 create trigger thread_wakes after insert on public.messages for each row execute function public.thread_wakes();
+-- linked channels: only the database makes their copies, so nobody can pass a message off as one from somewhere else
+create or replace function public.guard_link_copy() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(current_setting('fluentdat.linking', true), '') <> 'on' then new.link_src := null; new.linked := null; end if;
+  return new;
+end $$;
+drop trigger if exists guard_link_copy on public.messages;
+create trigger guard_link_copy before insert on public.messages for each row execute function public.guard_link_copy();
+-- …and a message in a linked channel goes into each of the others, saying where it was said and who said it (a copy
+-- answers the copy of what the original answered). A copy that can't be made doesn't stop the message itself
+create or replace function public.copy_to_links() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare l uuid; c channels%rowtype; sname text; who text; root uuid; t record; rep uuid;
+begin
+  if new.link_src is not null or new.bot then return null; end if;
+  select link_id into l from channel_link_members where channel_id = new.channel_id;
+  if l is null then return null; end if;
+  select * into c from channels where id = new.channel_id;
+  select name into sname from servers where id = c.server_id;
+  select coalesce(nullif(m.nick, ''), nullif(p.name, ''), p.handle) into who
+    from profiles p left join server_members m on m.server_id = c.server_id and m.user_id = p.id where p.id = new.author;
+  if new.reply_to is not null then select coalesce(link_src, id) into root from messages where id = new.reply_to; end if;
+  perform set_config('fluentdat.linking', 'on', true);
+  for t in select k.channel_id from channel_link_members k join channels ch on ch.id = k.channel_id
+           where k.link_id = l and k.channel_id <> new.channel_id and ch.kind = 'text' loop
+    begin
+      rep := null;
+      if root is not null then select id into rep from messages where channel_id = t.channel_id and (id = root or link_src = root) limit 1; end if;
+      insert into messages (channel_id, author, text, sticker, action, files, forwarded, reply_to, link_src, linked, created_at)
+        values (t.channel_id, new.author, new.text, new.sticker, new.action, new.files, new.forwarded, rep, new.id,
+          jsonb_build_object('server', left(coalesce(sname, ''), 100), 'channel', c.name, 'name', left(coalesce(who, ''), 100), 'from', new.channel_id), new.created_at);
+    exception when others then raise notice 'Fluentdat: a linked copy wasn''t made (%)', sqlerrm;
+    end;
+  end loop;
+  perform set_config('fluentdat.linking', '', true);
+  return null;
+end $$;
+drop trigger if exists copy_to_links on public.messages;
+create trigger copy_to_links after insert on public.messages for each row execute function public.copy_to_links();
+-- (a channel joining or leaving a link touches the link's other channels, so the people in them hear of it live: they
+-- can't see the other side's row. A link whose last channel went, taken out or deleted, goes too)
+create or replace function public.link_changed() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare l uuid := coalesce(new.link_id, old.link_id); ch uuid := coalesce(new.channel_id, old.channel_id);
+begin
+  update channel_link_members set changed_at = now() where link_id = l and channel_id <> ch;
+  if TG_OP = 'DELETE' then delete from channel_links where id = l and not exists (select 1 from channel_link_members where link_id = l); end if;
+  return null;
+end $$;
+drop trigger if exists link_changed on public.channel_link_members;
+create trigger link_changed after insert or delete on public.channel_link_members for each row execute function public.link_changed();
+revoke all on function public.guard_link_copy(), public.copy_to_links(), public.link_changed() from public, anon, authenticated;
 
 -- ===================== actions (the only ways to do these) =====================
 -- a server's boost level: 2 boosts make level 1, 7 level 2, 14 level 3 (as on Discord)
@@ -1634,7 +1724,7 @@ end $$;
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates;
 -- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it;
 -- 16: who sees what of your profile; 17: deleting your account, and handing a server on)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 17 $$;
+create or replace function public.setup_version() returns int language sql immutable as $$ select 18 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -1664,11 +1754,11 @@ create or replace function public.task_count(p_user uuid, p_counts text, p_since
 language sql stable security definer set search_path = public as $$
   select (case p_counts
     when 'none' then 1
-    when 'messages' then (select count(*) from messages where author = p_user and not bot and created_at >= p_since)
+    when 'messages' then (select count(*) from messages where author = p_user and not bot and link_src is null and created_at >= p_since)
       + (select count(*) from dm_messages where author = p_user and not bot and created_at >= p_since)
     when 'reactions' then (select count(*) from reactions where user_id = p_user and active and created_at >= p_since)
     when 'threads' then (select count(*) from channels where kind = 'thread' and created_by = p_user and created_at >= p_since)
-    when 'days' then (select count(distinct (x.t at time zone 'utc')::date) from (select created_at t from messages where author = p_user and not bot and created_at >= p_since
+    when 'days' then (select count(distinct (x.t at time zone 'utc')::date) from (select created_at t from messages where author = p_user and not bot and link_src is null and created_at >= p_since
       union all select created_at from dm_messages where author = p_user and not bot and created_at >= p_since) x)
     else 0 end)::int;
 $$;
@@ -1997,7 +2087,7 @@ begin
   select * into wal from wallets where user_id = p_user;
   res := jsonb_build_object(
     'servers', (select count(*) from server_members where user_id = p_user), 'owns', (select count(*) from servers where owner = p_user),
-    'files', (select count(*) from messages where author = p_user and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0)
+    'files', (select count(*) from messages where author = p_user and link_src is null and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0)
       + (select count(*) from dm_messages where author = p_user and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0),
     'pins', (select count(*) from pins where pinned_by = p_user), 'calls', (select count(*) from calls where started_by = p_user),
     'bot_cmds', (select count(*) from messages where author = p_user and bot),
@@ -2006,7 +2096,7 @@ begin
     'self_react', exists (select 1 from reactions r join messages m on m.id = r.message_id where r.user_id = p_user and r.active and m.author = p_user)
       or exists (select 1 from reactions r join dm_messages m on m.id = r.message_id where r.user_id = p_user and r.active and m.author = p_user),
     'emoji_kinds', (select count(distinct emoji) from reactions where user_id = p_user and active),
-    'night', (select count(*) from messages where author = p_user and not bot and extract(hour from created_at at time zone 'utc') < 4)
+    'night', (select count(*) from messages where author = p_user and not bot and link_src is null and extract(hour from created_at at time zone 'utc') < 4)
       + (select count(*) from dm_messages where author = p_user and not bot and extract(hour from created_at at time zone 'utc') < 4),
     'want', coalesce((select sum(jsonb_array_length(v->'g')) from jsonb_array_elements(x.widgets) v where v->>'t' = 'want'), 0),
     'looks', jsonb_build_object('avatar', coalesce(pr.avatar, '') <> '', 'banner', coalesce(pr.banner, '') <> '', 'bio', coalesce(pr.about, '') <> '', 'pronouns', coalesce(pr.pronouns, '') <> '',
@@ -2020,7 +2110,7 @@ begin
     'streak', (select coalesce(max(n), 0) from (select count(*) n from (select d, d - (row_number() over (order by d))::int g
       from (select period::date d from task_claims where user_id = p_user and task = 'daily-checkin') q) r group by g) z)) || jsonb_build_object(
     'since', (select created_at from profiles where id = p_user),
-    'messages', (select count(*) from messages where author = p_user and not bot) + (select count(*) from dm_messages where author = p_user and not bot),
+    'messages', (select count(*) from messages where author = p_user and not bot and link_src is null) + (select count(*) from dm_messages where author = p_user and not bot),
     'reactions', (select count(*) from reactions where user_id = p_user and active),
     'threads', (select count(*) from channels where kind = 'thread' and created_by = p_user),
     'friends', (select count(*) from friends f where f.owner = p_user and exists (select 1 from friends g where g.owner = f.friend and g.friend = p_user)),
@@ -2527,6 +2617,83 @@ language sql stable security definer set search_path = public as $$
   limit 200;
 $$;
 
+-- ===================== linked channels =====================
+-- a channel's link: its channels (the server each is in), for anyone who can read the channel. The code is only for
+-- whoever manages the channel, and "removable" marks the channels you may take out (yours to manage, or any, while
+-- you made the link and still manage one of its channels)
+create or replace function public.link_info(p_channel uuid)
+returns table (link_id uuid, code text, channel_id uuid, channel text, server_id uuid, server text, here boolean, removable boolean, added_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select k.link_id, case when chan_can(p_channel, 'manage_channels') then l.code end, c.id, c.name, s.id, s.name, c.id = p_channel,
+    chan_can(c.id, 'manage_channels') or (l.created_by = auth.uid() and chan_can(p_channel, 'manage_channels')), k.added_at
+  from channel_link_members me join channel_links l on l.id = me.link_id
+    join channel_link_members k on k.link_id = me.link_id join channels c on c.id = k.channel_id join servers s on s.id = c.server_id
+  where me.channel_id = p_channel and chan_can(p_channel, 'view')
+  order by k.added_at, c.name;
+$$;
+-- your channels that are linked, and with how many others (for the top bar)
+create or replace function public.my_links()
+returns table (channel_id uuid, others int)
+language sql stable security definer set search_path = public as $$
+  select k.channel_id, (select count(*)::int - 1 from channel_link_members o where o.link_id = k.link_id)
+  from channel_link_members k join channels c on c.id = k.channel_id
+  where is_member(c.server_id) and chan_can(c.id, 'view');
+$$;
+-- link a channel: a new link with only this channel in it, and its code for the other side
+create or replace function public.link_channel(p_channel uuid)
+returns text language plpgsql security definer set search_path = public as $$
+declare c text; l uuid;
+begin
+  if not chan_can(p_channel, 'manage_channels') then raise exception 'Only whoever manages this channel can link it.'; end if;
+  if not exists (select 1 from channels where id = p_channel and kind = 'text') then raise exception 'Only text channels can be linked.'; end if;
+  if exists (select 1 from channel_link_members where channel_id = p_channel) then raise exception 'This channel is linked already.'; end if;
+  c := substr(replace(gen_random_uuid()::text, '-', ''), 1, 12);
+  insert into channel_links (code, created_by) values (c, auth.uid()) returning id into l;
+  insert into channel_link_members (channel_id, link_id, added_by) values (p_channel, l, auth.uid());
+  return c;
+end $$;
+-- add a channel to a link, with the link's code
+create or replace function public.join_link(p_code text, p_channel uuid)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare l uuid; cur uuid;
+begin
+  if not chan_can(p_channel, 'manage_channels') then raise exception 'Only whoever manages this channel can link it.'; end if;
+  if not exists (select 1 from channels where id = p_channel and kind = 'text') then raise exception 'Only text channels can be linked.'; end if;
+  select id into l from channel_links where code = lower(trim(coalesce(p_code, ''))) for update;
+  if l is null then raise exception 'That link code doesn''t work. (It may have been changed for a new one.)'; end if;
+  select link_id into cur from channel_link_members where channel_id = p_channel;
+  if cur = l then return l; end if;
+  if cur is not null then raise exception 'This channel is in another link. Take it out of that one first.'; end if;
+  if (select count(*) from channel_link_members where link_id = l) >= 10 then raise exception 'A link holds up to 10 channels.'; end if;
+  insert into channel_link_members (channel_id, link_id, added_by) values (p_channel, l, auth.uid());
+  return l;
+end $$;
+-- take a channel out of its link (whoever manages it, or whoever made the link while they still manage one of its
+-- channels)
+create or replace function public.unlink_channel(p_channel uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare l uuid;
+begin
+  select link_id into l from channel_link_members where channel_id = p_channel;
+  if l is null then return; end if;
+  if not (chan_can(p_channel, 'manage_channels') or (exists (select 1 from channel_links where id = l and created_by = auth.uid())
+          and exists (select 1 from channel_link_members k where k.link_id = l and chan_can(k.channel_id, 'manage_channels')))) then
+    raise exception 'Only whoever manages that channel (or made the link) can take it out.';
+  end if;
+  delete from channel_link_members where channel_id = p_channel;
+end $$;
+-- a new code for a channel's link (the old one stops working; channels already in it stay)
+create or replace function public.new_link_code(p_channel uuid)
+returns text language plpgsql security definer set search_path = public as $$
+declare c text; l uuid;
+begin
+  select link_id into l from channel_link_members where channel_id = p_channel;
+  if l is null or not chan_can(p_channel, 'manage_channels') then raise exception 'Only whoever manages a linked channel can change its link''s code.'; end if;
+  c := substr(replace(gen_random_uuid()::text, '-', ''), 1, 12);
+  update channel_links set code = c where id = l;
+  return c;
+end $$;
+
 -- only signed-in people may call the actions (the helpers only ever answer about the caller, so they're harmless)
 revoke all on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
@@ -2578,6 +2745,8 @@ revoke all on function public.profile_more(uuid[]), public.profile_extras_of(uui
 grant execute on function public.profile_more(uuid[]), public.profile_extras_of(uuid) to authenticated;
 revoke all on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) from public, anon;
 grant execute on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) to authenticated;
+revoke all on function public.link_info(uuid), public.my_links(), public.link_channel(uuid), public.join_link(text, uuid), public.unlink_channel(uuid), public.new_link_code(uuid) from public, anon;
+grant execute on function public.link_info(uuid), public.my_links(), public.link_channel(uuid), public.join_link(text, uuid), public.unlink_channel(uuid), public.new_link_code(uuid) to authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -2612,6 +2781,11 @@ end $$;
 grant select on public.app_bans to authenticated;
 revoke insert, update, delete, truncate on public.app_bans from authenticated;
 revoke all on public.app_bans from anon;
+-- (linked channels: seen through link_info and my_links, changed through their functions; a link's code, never directly)
+grant select on public.channel_link_members to authenticated;
+revoke insert, update, delete, truncate on public.channel_link_members from authenticated;
+revoke all on public.channel_links from anon, authenticated;
+revoke all on public.channel_link_members from anon;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
@@ -2710,6 +2884,7 @@ do $$ begin
     begin alter publication supabase_realtime add table public.trades; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.user_settings; exception when duplicate_object then null; end;
     begin alter publication supabase_realtime add table public.app_bans; exception when duplicate_object then null; end;
+    begin alter publication supabase_realtime add table public.channel_link_members; exception when duplicate_object then null; end;
   end if;
 end $$;
 
