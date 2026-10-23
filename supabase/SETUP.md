@@ -117,6 +117,34 @@ A boost gets its next day while the person boosting has Fluentdat open (in its l
 1. In Supabase open **Database → Extensions**, search for **pg_cron** and turn it on.
 2. Run `setup.sql` again (step 2). From then on the database renews boosts every hour, while each person's Datbux last.
 
+## 11. Linking channels with Discord (optional)
+
+A text channel can be linked with channels on Discord (up to 10). What's said in the Discord channel shows here on one line, like `#build-log / Zoe / 3:41 PM / motor mount is printed`, and what's said here shows there the same way. The database does it all, every 2 seconds: it reads Discord with a bot of Fluentdat's own, and writes with a webhook in each Discord channel. Nothing else has to run anywhere.
+
+**Once, for all of Fluentdat:**
+
+1. In Supabase open **Database → Extensions** and turn on **pg_net** and **pg_cron**.
+2. Make the bot: [Discord Developer Portal](https://discord.com/developers/applications) → **New Application** → name it `Fluentdat` → **Create**. On the left open **Bot**:
+   * Under **Privileged Gateway Intents** turn on **Message Content Intent** and **Save Changes**. Without it, messages from Discord arrive with no words in them.
+   * Click **Reset Token** and copy the token. It's the bot's password: never put it in Fluentdat's files, and never send it to anyone (Claude included).
+   * Leave **Public Bot** on if other people should be able to add it to their Discord servers. Turn it off to keep it to the servers you add it to yourself.
+3. Keep the token in Supabase's Vault: **SQL Editor → New query**, paste this with your token in place of `THE_BOT_TOKEN`, and **Run**:
+
+   ```sql
+   select vault.create_secret('THE_BOT_TOKEN', 'fluentdat_discord_bot');
+   ```
+
+   To change it later: `select vault.update_secret((select id from vault.secrets where name = 'fluentdat_discord_bot'), 'THE_NEW_TOKEN');`
+4. Run `setup.sql` again (step 2). That starts the job that reads and writes Discord every 2 seconds.
+
+**For each channel** (whoever manages the channel in Fluentdat, with someone who can manage the channel on Discord):
+
+1. In Fluentdat open the channel's **Linked Channels** (from its menu, Edit Channel or the top bar) and click **Add Fluentdat's bot** to add the bot to the Discord server. All it needs is to see the channel and read its message history.
+2. In Discord open the channel's settings → **Integrations → Webhooks → New Webhook**, then **Copy Webhook URL**. The webhook's name and picture are what Fluentdat's lines show under in Discord.
+3. Paste it in **Linked Channels** and click **Link With Discord**. A few seconds later it shows the Discord channel's name, and from then on what's said in either shows in the other.
+
+What goes across: words, replies, and Discord's mentions, channels and emoji (as words). Pictures and files from Discord come as links, which Discord stops after about a day. Pictures and files from Fluentdat show in Discord as `[picture]` or `[file: name]`, because they're only for the people in the server. Deleting a message in Fluentdat deletes it in Discord too. Deleting or editing one in Discord doesn't change it in Fluentdat (the database only sees new messages). Nothing pings anyone on the other side. If the channel is also linked with channels in other Fluentdat servers, what's said in those goes to Discord as well, and what's said on Discord shows in them.
+
 ## What the rules allow
 
 The database checks these itself, so they hold even if someone changes the app:
@@ -161,6 +189,7 @@ The database checks these itself, so they hold even if someone changes the app:
 37. Your settings (Customize: your theme, your themes, your layout and every part you changed) are kept with your account, so each device you sign in on has them. Only you can see or change yours, and they're at most 256 KB.
 38. A server's rules (up to 25, a line each) are written by its admins in Server Guide, and everyone in the server can read them. Its admins can switch Boost, Shop and Rules in its sidebar on and off, as they can the rest.
 39. A text channel can be linked with channels in other servers (up to 10 in a link): what's said in one is copied into the others, saying where it was said and who said it. Only whoever manages a channel can link it, or add it to a link with the link's code, and the code is only shown to them. Each side can take its own channel out again (and whoever made the link, any of them). Only the database makes the copies, so nobody can pass a message off as one from somewhere else, and deleting a message deletes its copies.
+40. A text channel can be linked with Discord channels (up to 10), only by whoever manages it, and only with a webhook made in the Discord channel (which takes someone who may manage that channel's webhooks on Discord). The webhooks and the bot's token stay in the database: nobody signed in can read them. The database only reads the Discord channels that are linked. What it brings over is marked as from Discord, with the name it was said under there, and is posted for whoever linked the Discord channel, without counting toward their badges or tasks. Nothing from Discord can ping anyone in Fluentdat, and nothing from Fluentdat can ping anyone on Discord.
 
 ## If something goes wrong
 
@@ -177,3 +206,6 @@ The database checks these itself, so they hold even if someone changes the app:
 11. **Boosts run out while nobody's on**: turn on pg_cron (step 10).
 12. **A profile's Collection has no times for badges**: run `setup.sql` again (step 2).
 13. **No Linked Channels in a channel's menu**: run `setup.sql` again (step 2).
+14. **Linked Channels says linking with Discord isn't turned on**: check step 11 (pg_net and pg_cron on, the token in the Vault), then run `setup.sql` again.
+15. **A Discord channel says “Not working”**: Linked Channels says why. Usually the bot isn't in that Discord server, it can't see the channel, or the webhook was deleted. Fix that, then click **Try Again**.
+16. **Messages from Discord arrive empty**: turn on **Message Content Intent** for the bot (step 11).

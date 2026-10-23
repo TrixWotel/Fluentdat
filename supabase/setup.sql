@@ -453,6 +453,59 @@ create table if not exists public.channel_link_members (
   changed_at timestamptz not null default now()          -- (when its link last got or lost a channel)
 );
 create index if not exists channel_link_members_by_link on public.channel_link_members (link_id);
+-- Discord channels linked with a text channel here (up to 10 each): what's said in one shows in the others, as
+-- "#channel / name / time / message", like a linked channel. Whoever manages the channel here pastes a webhook made in
+-- the Discord channel (only someone who may manage that channel's webhooks can make one): the database writes with it,
+-- and reads the Discord channel with Fluentdat's own bot (its token is kept in Supabase's Vault). Nobody signed in can
+-- read these rows, so a webhook's token never leaves the database
+create table if not exists public.discord_links (
+  id uuid primary key default gen_random_uuid(),
+  channel_id uuid not null references public.channels (id) on delete cascade,
+  webhook_id text not null unique,
+  webhook_token text not null,
+  discord_channel text,                                  -- (Discord's number for the channel, once the webhook says it)
+  discord_guild text,
+  name text not null default '',                         -- (the channel's name, and its server's, as Discord last said)
+  guild_name text not null default '',
+  last_seen text not null,                               -- (the newest Discord message already brought over)
+  status text not null default 'starting' check (status in ('starting', 'ok', 'broken')),
+  error text not null default '',
+  read_at timestamptz not null default now(),            -- (not asking Discord again before these: it said to wait)
+  write_at timestamptz not null default now(),
+  added_by uuid references public.profiles (id) on delete set null,
+  added_at timestamptz not null default now()
+);
+create index if not exists discord_links_by_channel on public.discord_links (channel_id);
+create unique index if not exists discord_links_one_each on public.discord_links (discord_channel) where discord_channel is not null;
+-- what's waiting to go to Discord, in order: a line to say, or a message there to delete
+create table if not exists public.discord_outbox (
+  id bigint generated always as identity primary key,
+  link_id uuid not null references public.discord_links (id) on delete cascade,
+  kind text not null check (kind in ('say', 'drop')),
+  message_id uuid,                                       -- (say: the message here it's the line of)
+  line text not null default '',
+  dmsg text,                                             -- (drop: the message in Discord)
+  tries int not null default 0
+);
+create index if not exists discord_outbox_by_link on public.discord_outbox (link_id, id);
+-- the Discord message each message here went out in (lines said close together share one), for replies and deleting
+create table if not exists public.discord_sent (
+  message_id uuid not null,
+  link_id uuid not null references public.discord_links (id) on delete cascade,
+  dmsg text not null,
+  line text not null,
+  pos int not null,
+  primary key (message_id, link_id)
+);
+create index if not exists discord_sent_by_dmsg on public.discord_sent (link_id, dmsg);
+-- what's been asked of Discord and not yet answered (pg_net sends it; the next round reads the answer)
+create table if not exists public.discord_requests (
+  id bigint primary key,                                 -- (pg_net's number for it)
+  link_id uuid not null references public.discord_links (id) on delete cascade,
+  kind text not null,                                    -- (hook, chan, guild and poll read; send and drop write)
+  outbox bigint[] not null default '{}',
+  sent_at timestamptz not null default now()
+);
 
 -- (running this again over an older Fluentdat: add what's new)
 alter table public.profiles add column if not exists banner text not null default '';
@@ -550,6 +603,8 @@ exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.messages add constraint messages_linked_shape check (linked is null or (jsonb_typeof(linked) = 'object' and octet_length(linked::text) <= 1000));
 exception when duplicate_object then null; end $$;
+-- (a message from Discord keeps its number there, for the replies that answer it)
+create index if not exists messages_by_dmsg on public.messages ((linked->>'dmsg')) where linked ? 'dmsg';
 
 -- pictures are kept small (the app shrinks them before saving), and these limits stop anyone filling the database
 do $$ begin
@@ -885,6 +940,11 @@ alter table public.channel_links enable row level security;
 alter table public.channel_link_members enable row level security;
 drop policy if exists "see that a channel you read is linked" on public.channel_link_members;
 create policy "see that a channel you read is linked" on public.channel_link_members for select to authenticated using (chan_can(channel_id, 'view'));
+-- (Discord's linked channels: seen through discord_info, changed through their functions, and never read directly)
+alter table public.discord_links enable row level security;
+alter table public.discord_outbox enable row level security;
+alter table public.discord_sent enable row level security;
+alter table public.discord_requests enable row level security;
 
 -- pinned messages: seen by whoever can read the place; pinned and unpinned by whoever may manage its messages (anyone
 -- in a DM)
@@ -1592,7 +1652,7 @@ create trigger guard_link_copy before insert on public.messages for each row exe
 -- answers the copy of what the original answered). A copy that can't be made doesn't stop the message itself
 create or replace function public.copy_to_links() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare l uuid; c channels%rowtype; sname text; who text; root uuid; t record; rep uuid;
+declare l uuid; c channels%rowtype; sname text; who text; root uuid; t record; rep uuid; lk jsonb;
 begin
   if new.link_src is not null or new.bot then return null; end if;
   select link_id into l from channel_link_members where channel_id = new.channel_id;
@@ -1601,6 +1661,8 @@ begin
   select name into sname from servers where id = c.server_id;
   select coalesce(nullif(m.nick, ''), nullif(p.name, ''), p.handle) into who
     from profiles p left join server_members m on m.server_id = c.server_id and m.user_id = p.id where p.id = new.author;
+  -- (a message from Discord goes on saying it's from there)
+  lk := coalesce(new.linked, jsonb_build_object('server', left(coalesce(sname, ''), 100), 'channel', c.name, 'name', left(coalesce(who, ''), 100), 'from', new.channel_id));
   if new.reply_to is not null then select coalesce(link_src, id) into root from messages where id = new.reply_to; end if;
   perform set_config('fluentdat.linking', 'on', true);
   for t in select k.channel_id from channel_link_members k join channels ch on ch.id = k.channel_id
@@ -1609,8 +1671,7 @@ begin
       rep := null;
       if root is not null then select id into rep from messages where channel_id = t.channel_id and (id = root or link_src = root) limit 1; end if;
       insert into messages (channel_id, author, text, sticker, action, files, forwarded, reply_to, link_src, linked, created_at)
-        values (t.channel_id, new.author, new.text, new.sticker, new.action, new.files, new.forwarded, rep, new.id,
-          jsonb_build_object('server', left(coalesce(sname, ''), 100), 'channel', c.name, 'name', left(coalesce(who, ''), 100), 'from', new.channel_id), new.created_at);
+        values (t.channel_id, new.author, new.text, new.sticker, new.action, new.files, new.forwarded, rep, new.id, lk, new.created_at);
     exception when others then raise notice 'Fluentdat: a linked copy wasn''t made (%)', sqlerrm;
     end;
   end loop;
@@ -1632,6 +1693,83 @@ end $$;
 drop trigger if exists link_changed on public.channel_link_members;
 create trigger link_changed after insert or delete on public.channel_link_members for each row execute function public.link_changed();
 revoke all on function public.guard_link_copy(), public.copy_to_links(), public.link_changed() from public, anon, authenticated;
+-- Discord's linked channels: a message here becomes a line waiting to go to each of them ("#channel / name / <time> /
+-- message"; a copy from a linked channel says where it was said, and nothing goes back to the Discord channel it came
+-- from). @mentions, channels and emoji go as words; pictures and files as what they are. A line that can't be made
+-- doesn't stop the message itself
+create or replace function public.discord_text_out(p_text text, p_server uuid) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare t text := coalesce(p_text, ''); m text[]; v text;
+  uuid_re constant text := '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+begin
+  for m in select regexp_matches(t, '<@(' || uuid_re || ')>', 'g') loop
+    select coalesce(nullif(sm.nick, ''), nullif(p.name, ''), p.handle) into v
+      from profiles p left join server_members sm on sm.server_id = p_server and sm.user_id = p.id where p.id = m[1]::uuid;
+    t := replace(t, '<@' || m[1] || '>', '@' || coalesce(v, 'someone'));
+  end loop;
+  for m in select regexp_matches(t, '<#(' || uuid_re || ')>', 'g') loop
+    select name into v from channels where id = m[1]::uuid;
+    t := replace(t, '<#' || m[1] || '>', '#' || coalesce(v, 'channel'));
+  end loop;
+  return regexp_replace(t, '<a?:([A-Za-z0-9_]{2,32}):' || uuid_re || '>', ':\1:', 'g');
+end $$;
+create or replace function public.discord_out() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare c channels%rowtype; ch text; who text; body text; f jsonb; line text;
+begin
+  if new.bot or not exists (select 1 from discord_links where channel_id = new.channel_id and status = 'ok') then return null; end if;
+  begin
+    select * into c from channels where id = new.channel_id;
+    if new.linked is not null then ch := new.linked->>'channel'; who := new.linked->>'name';
+    else
+      ch := c.name;
+      select coalesce(nullif(m.nick, ''), nullif(p.name, ''), p.handle) into who
+        from profiles p left join server_members m on m.server_id = c.server_id and m.user_id = p.id where p.id = new.author;
+    end if;
+    body := discord_text_out(new.text, c.server_id);
+    if new.action and body <> '' then body := '*' || body || '*'; end if;
+    if new.sticker is not null then body := concat_ws(' ', nullif(body, ''), case when new.sticker->>'photo' = 'true' then '[picture]' else '[sticker]' end); end if;
+    if jsonb_typeof(new.files) = 'array' then
+      for f in select value from jsonb_array_elements(new.files) loop
+        body := concat_ws(' ', nullif(body, ''), case f->>'kind' when 'image' then '[picture]' when 'video' then '[video]' when 'voice' then '[voice message]'
+          else '[file: ' || left(coalesce(f->>'name', 'file'), 100) || ']' end);
+      end loop;
+    end if;
+    if body = '' then return null; end if;
+    -- (Discord shows <t:…:t> as the time where each reader is)
+    line := '#' || coalesce(nullif(ch, ''), 'channel') || ' / ' || coalesce(nullif(who, ''), 'Someone') || ' / <t:' || extract(epoch from new.created_at)::bigint || ':t> / ' || body;
+    if char_length(line) > 2000 then line := left(line, 1999) || '…'; end if;
+    insert into discord_outbox (link_id, kind, message_id, line)
+      select id, 'say', new.id, line from discord_links
+      where channel_id = new.channel_id and status = 'ok' and discord_channel is distinct from (new.linked->>'dchan');
+  exception when others then raise notice 'Fluentdat: a line for Discord wasn''t made (%)', sqlerrm;
+  end;
+  return null;
+end $$;
+drop trigger if exists discord_out on public.messages;
+create trigger discord_out after insert on public.messages for each row execute function public.discord_out();
+-- deleting a message here deletes it in Discord too (a line that hasn't gone yet doesn't go). Lines that went out
+-- together in one Discord message with it are said again without it
+create or replace function public.discord_drop() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare s record;
+begin
+  if not exists (select 1 from discord_sent where message_id = old.id) and not exists (select 1 from discord_outbox where message_id = old.id) then return null; end if;
+  begin
+    delete from discord_outbox where kind = 'say' and message_id = old.id;
+    for s in delete from discord_sent where message_id = old.id returning link_id, dmsg loop
+      insert into discord_outbox (link_id, kind, dmsg) values (s.link_id, 'drop', s.dmsg);
+      insert into discord_outbox (link_id, kind, message_id, line)
+        select link_id, 'say', message_id, line from discord_sent where link_id = s.link_id and dmsg = s.dmsg order by pos;
+      delete from discord_sent where link_id = s.link_id and dmsg = s.dmsg;
+    end loop;
+  exception when others then raise notice 'Fluentdat: a message wasn''t deleted in Discord (%)', sqlerrm;
+  end;
+  return null;
+end $$;
+drop trigger if exists discord_drop on public.messages;
+create trigger discord_drop after delete on public.messages for each row execute function public.discord_drop();
+revoke all on function public.discord_text_out(text, uuid), public.discord_out(), public.discord_drop() from public, anon, authenticated;
 
 -- ===================== actions (the only ways to do these) =====================
 -- a server's boost level: 2 boosts make level 1, 7 level 2, 14 level 3 (as on Discord)
@@ -1723,8 +1861,9 @@ end $$;
 -- which setup.sql this is, so Fluentdat knows what the database can do (8: games' pictures from Wikipedia; 9: Datbux; 10: settings
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates;
 -- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it;
--- 16: who sees what of your profile; 17: deleting your account, and handing a server on)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 18 $$;
+-- 16: who sees what of your profile; 17: deleting your account, and handing a server on; 18: linked channels; 19: Discord
+-- channels linked too)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 19 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -1754,11 +1893,11 @@ create or replace function public.task_count(p_user uuid, p_counts text, p_since
 language sql stable security definer set search_path = public as $$
   select (case p_counts
     when 'none' then 1
-    when 'messages' then (select count(*) from messages where author = p_user and not bot and link_src is null and created_at >= p_since)
+    when 'messages' then (select count(*) from messages where author = p_user and not bot and linked is null and created_at >= p_since)
       + (select count(*) from dm_messages where author = p_user and not bot and created_at >= p_since)
     when 'reactions' then (select count(*) from reactions where user_id = p_user and active and created_at >= p_since)
     when 'threads' then (select count(*) from channels where kind = 'thread' and created_by = p_user and created_at >= p_since)
-    when 'days' then (select count(distinct (x.t at time zone 'utc')::date) from (select created_at t from messages where author = p_user and not bot and link_src is null and created_at >= p_since
+    when 'days' then (select count(distinct (x.t at time zone 'utc')::date) from (select created_at t from messages where author = p_user and not bot and linked is null and created_at >= p_since
       union all select created_at from dm_messages where author = p_user and not bot and created_at >= p_since) x)
     else 0 end)::int;
 $$;
@@ -2087,7 +2226,7 @@ begin
   select * into wal from wallets where user_id = p_user;
   res := jsonb_build_object(
     'servers', (select count(*) from server_members where user_id = p_user), 'owns', (select count(*) from servers where owner = p_user),
-    'files', (select count(*) from messages where author = p_user and link_src is null and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0)
+    'files', (select count(*) from messages where author = p_user and linked is null and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0)
       + (select count(*) from dm_messages where author = p_user and jsonb_typeof(files) = 'array' and jsonb_array_length(files) > 0),
     'pins', (select count(*) from pins where pinned_by = p_user), 'calls', (select count(*) from calls where started_by = p_user),
     'bot_cmds', (select count(*) from messages where author = p_user and bot),
@@ -2096,7 +2235,7 @@ begin
     'self_react', exists (select 1 from reactions r join messages m on m.id = r.message_id where r.user_id = p_user and r.active and m.author = p_user)
       or exists (select 1 from reactions r join dm_messages m on m.id = r.message_id where r.user_id = p_user and r.active and m.author = p_user),
     'emoji_kinds', (select count(distinct emoji) from reactions where user_id = p_user and active),
-    'night', (select count(*) from messages where author = p_user and not bot and link_src is null and extract(hour from created_at at time zone 'utc') < 4)
+    'night', (select count(*) from messages where author = p_user and not bot and linked is null and extract(hour from created_at at time zone 'utc') < 4)
       + (select count(*) from dm_messages where author = p_user and not bot and extract(hour from created_at at time zone 'utc') < 4),
     'want', coalesce((select sum(jsonb_array_length(v->'g')) from jsonb_array_elements(x.widgets) v where v->>'t' = 'want'), 0),
     'looks', jsonb_build_object('avatar', coalesce(pr.avatar, '') <> '', 'banner', coalesce(pr.banner, '') <> '', 'bio', coalesce(pr.about, '') <> '', 'pronouns', coalesce(pr.pronouns, '') <> '',
@@ -2110,7 +2249,7 @@ begin
     'streak', (select coalesce(max(n), 0) from (select count(*) n from (select d, d - (row_number() over (order by d))::int g
       from (select period::date d from task_claims where user_id = p_user and task = 'daily-checkin') q) r group by g) z)) || jsonb_build_object(
     'since', (select created_at from profiles where id = p_user),
-    'messages', (select count(*) from messages where author = p_user and not bot and link_src is null) + (select count(*) from dm_messages where author = p_user and not bot),
+    'messages', (select count(*) from messages where author = p_user and not bot and linked is null) + (select count(*) from dm_messages where author = p_user and not bot),
     'reactions', (select count(*) from reactions where user_id = p_user and active),
     'threads', (select count(*) from channels where kind = 'thread' and created_by = p_user),
     'friends', (select count(*) from friends f where f.owner = p_user and exists (select 1 from friends g where g.owner = f.friend and g.friend = p_user)),
@@ -2631,13 +2770,15 @@ language sql stable security definer set search_path = public as $$
   where me.channel_id = p_channel and chan_can(p_channel, 'view')
   order by k.added_at, c.name;
 $$;
--- your channels that are linked, and with how many others (for the top bar)
+-- your channels that are linked, and with how many others (for the top bar; Discord channels count too)
 create or replace function public.my_links()
 returns table (channel_id uuid, others int)
 language sql stable security definer set search_path = public as $$
-  select k.channel_id, (select count(*)::int - 1 from channel_link_members o where o.link_id = k.link_id)
-  from channel_link_members k join channels c on c.id = k.channel_id
-  where is_member(c.server_id) and chan_can(c.id, 'view');
+  select c.id, (select count(*)::int from channel_link_members o join channel_link_members k on k.link_id = o.link_id where k.channel_id = c.id and o.channel_id <> c.id)
+    + (select count(*)::int from discord_links d where d.channel_id = c.id)
+  from channels c
+  where (exists (select 1 from channel_link_members k where k.channel_id = c.id) or exists (select 1 from discord_links d where d.channel_id = c.id))
+    and is_member(c.server_id) and chan_can(c.id, 'view');
 $$;
 -- link a channel: a new link with only this channel in it, and its code for the other side
 create or replace function public.link_channel(p_channel uuid)
@@ -2694,6 +2835,306 @@ begin
   return c;
 end $$;
 
+-- ===================== Discord's linked channels =====================
+-- Fluentdat's Discord bot's token, from Supabase's Vault (supabase/SETUP.md, step 11), or nothing
+create or replace function public.discord_token() returns text
+language plpgsql stable security definer set search_path = public as $$
+declare t text;
+begin
+  select decrypted_secret into t from vault.decrypted_secrets where name = 'fluentdat_discord_bot' order by created_at desc limit 1;
+  return nullif(trim(t), '');
+exception when others then return null;
+end $$;
+-- whether the database asks Discord every few seconds (pg_net to ask, pg_cron to run discord_tick)
+create or replace function public.discord_cron_on() returns boolean
+language plpgsql stable security definer set search_path = public as $$
+begin
+  return exists (select 1 from pg_extension where extname = 'pg_net') and exists (select 1 from cron.job where jobname = 'fluentdat-discord' and active);
+exception when others then return false;
+end $$;
+-- Discord's number for a moment (to ask for what was said after it)
+create or replace function public.discord_snowflake(p_at timestamptz) returns text
+language sql stable as $$ select ((((extract(epoch from p_at) * 1000)::bigint - 1420070400000) << 22))::text $$;
+-- for the Linked Channels window: whether Discord channels can be linked, and the bot's number (for its invite link:
+-- a bot's token starts with it, in base64)
+create or replace function public.discord_ready() returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare tok text := discord_token(); p text; bot text;
+begin
+  if tok is not null then
+    begin
+      p := translate(split_part(tok, '.', 1), '-_', '+/');
+      bot := convert_from(decode(p || repeat('=', (4 - length(p) % 4) % 4), 'base64'), 'UTF8');
+      if bot !~ '^[0-9]{15,22}$' then bot := null; end if;
+    exception when others then bot := null;
+    end;
+  end if;
+  return jsonb_build_object('ready', tok is not null and discord_cron_on(), 'bot', bot);
+end $$;
+-- a channel's Discord channels, for anyone who can read it (and what's wrong with one, for whoever manages it)
+create or replace function public.discord_info(p_channel uuid)
+returns table (link_id uuid, name text, guild text, status text, error text, added_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select k.id, k.name, k.guild_name, k.status, case when chan_can(p_channel, 'manage_channels') then k.error else '' end, k.added_at
+  from discord_links k where k.channel_id = p_channel and chan_can(p_channel, 'view')
+  order by k.added_at;
+$$;
+-- link a Discord channel with this one, by a webhook made in it (Discord: the channel's settings → Integrations →
+-- Webhooks → New Webhook → Copy Webhook URL). What's said there from now on shows here, and what's said here goes there
+create or replace function public.link_discord(p_channel uuid, p_webhook text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare m text[]; l uuid;
+begin
+  if app_banned() or not chan_can(p_channel, 'manage_channels') then raise exception 'Only whoever manages this channel can link it.'; end if;
+  if not exists (select 1 from channels where id = p_channel and kind = 'text') then raise exception 'Only text channels can be linked.'; end if;
+  if not coalesce((discord_ready()->>'ready')::boolean, false) then raise exception 'Linking with Discord isn''t turned on for this Fluentdat yet (supabase/SETUP.md, step 11).'; end if;
+  m := regexp_match(trim(coalesce(p_webhook, '')), '^https://(?:(?:canary|ptb)\.)?discord(?:app)?\.com/api(?:/v[0-9]+)?/webhooks/([0-9]{15,22})/([A-Za-z0-9_-]{20,100})/?$');
+  if m is null then raise exception 'That isn''t a Discord webhook URL. In Discord, open the channel''s settings → Integrations → Webhooks → New Webhook, then Copy Webhook URL.'; end if;
+  if exists (select 1 from discord_links where webhook_id = m[1]) then raise exception 'That webhook is linked already.'; end if;
+  if (select count(*) from discord_links where channel_id = p_channel) >= 10 then raise exception 'A channel can be linked with up to 10 Discord channels.'; end if;
+  insert into discord_links (channel_id, webhook_id, webhook_token, last_seen, added_by)
+    values (p_channel, m[1], m[2], discord_snowflake(now()), auth.uid()) returning id into l;
+  return l;
+end $$;
+-- take a Discord channel out (whoever manages the channel here; what was already brought over stays)
+create or replace function public.unlink_discord(p_link uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare ch uuid;
+begin
+  select channel_id into ch from discord_links where id = p_link;
+  if ch is null then return; end if;
+  if not chan_can(ch, 'manage_channels') then raise exception 'Only whoever manages this channel can take a Discord channel out.'; end if;
+  delete from discord_links where id = p_link;
+end $$;
+-- start a Discord channel that stopped working again from the beginning (checking the webhook, then catching up on what
+-- was said there meanwhile)
+create or replace function public.retry_discord(p_link uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare ch uuid;
+begin
+  select channel_id into ch from discord_links where id = p_link;
+  if ch is null or not chan_can(ch, 'manage_channels') then raise exception 'Only whoever manages this channel can do that.'; end if;
+  update discord_links set status = 'starting', error = '', discord_channel = null, read_at = now(), write_at = now() where id = p_link;
+end $$;
+-- ask Discord something (pg_net sends it once this round is over, and the next round reads the answer)
+create or replace function public.discord_ask(p_link uuid, p_kind text, p_method text, p_url text, p_token text default null,
+  p_params jsonb default '{}', p_body jsonb default null, p_outbox bigint[] default '{}')
+returns void language plpgsql security definer set search_path = public as $$
+declare h jsonb := '{"User-Agent": "DiscordBot (https://github.com/TrixWotel/Fluentdat, 19)"}'; r bigint;
+begin
+  if p_token is not null then h := h || jsonb_build_object('Authorization', 'Bot ' || p_token); end if;
+  if p_method = 'POST' then
+    r := net.http_post(url => p_url, body => p_body, params => p_params, headers => h || '{"Content-Type": "application/json"}', timeout_milliseconds => 10000);
+  elsif p_method = 'DELETE' then
+    r := net.http_delete(url => p_url, params => p_params, headers => h, timeout_milliseconds => 10000);
+  else
+    r := net.http_get(url => p_url, params => p_params, headers => h, timeout_milliseconds => 10000);
+  end if;
+  insert into discord_requests (id, link_id, kind, outbox) values (r, p_link, p_kind, p_outbox);
+end $$;
+-- a message from Discord, brought over as a line saying where it was said and who said it. Mentions, channels, emoji and
+-- times become words, and pictures and files their links (which Discord stops after a day or so). Nothing in it can
+-- ping anyone here
+create or replace function public.discord_bring(p_link uuid, d jsonb)
+returns void language plpgsql security definer set search_path = public as $$
+declare k discord_links%rowtype; t text; who text; u jsonb; m text[]; ref text; rep uuid; author uuid;
+begin
+  select * into k from discord_links where id = p_link;
+  -- (only what people said: not joins, pins and the like, and not what Fluentdat itself said there)
+  if not found or coalesce((d->>'type')::int, 0) not in (0, 19, 20, 23) or d->>'webhook_id' = k.webhook_id then return; end if;
+  t := coalesce(d->>'content', '');
+  for u in select value from jsonb_array_elements(case when jsonb_typeof(d->'mentions') = 'array' then d->'mentions' else '[]' end) loop
+    who := '@' || coalesce(nullif(u->>'global_name', ''), u->>'username', 'someone');
+    t := replace(replace(t, '<@' || (u->>'id') || '>', who), '<@!' || (u->>'id') || '>', who);
+  end loop;
+  t := replace(t, '<#' || k.discord_channel || '>', '#' || k.name);
+  t := regexp_replace(t, '<@!?[0-9]+>', '@someone', 'g');
+  t := regexp_replace(t, '<@&[0-9]+>', '@role', 'g');
+  t := regexp_replace(t, '<#[0-9]+>', '#channel', 'g');
+  t := regexp_replace(t, '<a?:([A-Za-z0-9_]{2,32}):[0-9]+>', ':\1:', 'g');
+  for m in select regexp_matches(t, '(<t:(-?[0-9]{1,12})(?::[tTdDfFR])?>)', 'g') loop
+    t := replace(t, m[1], to_char(to_timestamp(m[2]::bigint) at time zone 'utc', 'Mon FMDD, YYYY HH24:MI "UTC"'));
+  end loop;
+  -- (no <@someone here>, and no @everyone)
+  t := regexp_replace(t, '<(@|#|a?:[A-Za-z0-9_]{2,32}:)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})>', '\1\2', 'g');
+  t := regexp_replace(t, '@(everyone|here)', '@' || chr(8203) || '\1', 'g');
+  for u in select value from jsonb_array_elements(case when jsonb_typeof(d->'attachments') = 'array' then d->'attachments' else '[]' end) loop
+    t := concat_ws(E'\n', nullif(t, ''), u->>'url');
+  end loop;
+  for u in select value from jsonb_array_elements(case when jsonb_typeof(d->'sticker_items') = 'array' then d->'sticker_items' else '[]' end) loop
+    t := concat_ws(' ', nullif(t, ''), '[sticker: ' || coalesce(u->>'name', '') || ']');
+  end loop;
+  -- (a bot's message may be all embed: its title and words)
+  if trim(t) = '' and jsonb_typeof(d->'embeds') = 'array' then
+    select coalesce(string_agg(concat_ws(' — ', nullif(e->>'title', ''), nullif(e->>'description', '')), E'\n'), '') into t from jsonb_array_elements(d->'embeds') e;
+  end if;
+  if trim(t) = '' then return; end if;
+  who := coalesce(nullif(d->'author'->>'global_name', ''), d->'author'->>'username', 'Someone');
+  ref := d->'message_reference'->>'message_id';
+  if ref is not null then
+    select id into rep from messages where channel_id = k.channel_id and linked->>'dmsg' = ref limit 1;
+    if rep is null then select message_id into rep from discord_sent where link_id = k.id and dmsg = ref order by pos desc limit 1; end if;
+  end if;
+  -- (posted here by whoever linked the Discord channel, else the server's owner: the line says who said it there)
+  author := k.added_by;
+  if author is null then select s.owner into author from channels c join servers s on s.id = c.server_id where c.id = k.channel_id; end if;
+  perform set_config('fluentdat.linking', 'on', true);
+  insert into messages (channel_id, author, text, reply_to, linked, created_at)
+    values (k.channel_id, author, left(t, 4000), rep, jsonb_build_object('server', left(coalesce(nullif(k.guild_name, ''), 'Discord'), 60), 'channel', left(k.name, 60),
+      'name', left(who, 40), 'from', null, 'discord', true, 'dchan', k.discord_channel, 'dmsg', d->>'id'), coalesce((d->>'timestamp')::timestamptz, now()));
+  perform set_config('fluentdat.linking', '', true);
+end $$;
+-- what Discord answered
+create or replace function public.discord_answer(p_req bigint, p_status int, p_body text, p_failed boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare q discord_requests%rowtype; k discord_links%rowtype; j jsonb; d jsonb; newest text; wait interval; why text; i int := 0; o record;
+begin
+  delete from discord_requests where id = p_req returning * into q;
+  if not found then return; end if;
+  begin delete from net._http_response where id = p_req; exception when others then null; end;
+  select * into k from discord_links where id = q.link_id;
+  if not found then return; end if;
+  begin j := p_body::jsonb; exception when others then j := null; end;
+  -- Discord said to wait: ask again after that
+  if p_status = 429 then
+    wait := make_interval(secs => least(greatest(coalesce((j->>'retry_after')::numeric, 5), 1), 600)::double precision);
+    if q.kind in ('send', 'drop') then update discord_links set write_at = now() + wait where id = k.id;
+    else update discord_links set read_at = now() + wait where id = k.id; end if;
+    return;
+  end if;
+  -- no answer, or Discord in trouble: again in a little while (what's waiting to go is let go after three tries)
+  if p_failed or p_status is null or p_status >= 500 then
+    if q.kind in ('send', 'drop') then
+      update discord_outbox set tries = tries + 1 where id = any(q.outbox);
+      delete from discord_outbox where id = any(q.outbox) and tries >= 3;
+      update discord_links set write_at = now() + interval '10 seconds' where id = k.id;
+    else update discord_links set read_at = now() + interval '10 seconds' where id = k.id; end if;
+    return;
+  end if;
+  if p_status >= 400 then
+    -- (a message already gone there, or a line Discord won't take: let it go)
+    if q.kind = 'drop' or (q.kind = 'send' and p_status not in (401, 403, 404)) then delete from discord_outbox where id = any(q.outbox); return; end if;
+    if q.kind = 'guild' then update discord_links set guild_name = 'Discord' where id = k.id; return; end if;
+    why := case
+      when q.kind in ('hook', 'send') then 'The webhook doesn''t work any more (it may have been deleted in Discord). Make a new one there, and link it again.'
+      when p_status = 401 then 'Fluentdat''s Discord bot can''t sign in: its token in Supabase''s Vault needs changing (supabase/SETUP.md, step 11).'
+      when p_status = 403 then 'Fluentdat''s Discord bot can''t read that channel. Add the bot to the Discord server, and let it see the channel and read its message history.'
+      when p_status = 404 then 'That Discord channel is gone.'
+      else 'Discord said no (' || p_status || ').' end;
+    update discord_links set status = 'broken', error = why where id = k.id;
+    delete from discord_outbox where link_id = k.id;
+    return;
+  end if;
+  if q.kind = 'hook' then
+    -- (the webhook says which channel it posts in)
+    if j->>'id' is distinct from k.webhook_id or coalesce(j->>'type', '') <> '1' or coalesce(j->>'channel_id', '') !~ '^[0-9]{15,22}$' then
+      update discord_links set status = 'broken', error = 'That isn''t a webhook Fluentdat can post with. Make one in the channel''s settings → Integrations → Webhooks.' where id = k.id;
+    elsif exists (select 1 from discord_links where discord_channel = j->>'channel_id' and id <> k.id) then
+      update discord_links set status = 'broken', error = 'That Discord channel is linked with a channel here already.' where id = k.id;
+    else
+      update discord_links set discord_channel = j->>'channel_id', discord_guild = j->>'guild_id', error = '' where id = k.id;
+    end if;
+  elsif q.kind = 'chan' then
+    if coalesce(j->>'type', '') not in ('0', '5') then
+      update discord_links set status = 'broken', error = 'Only Discord text and announcement channels can be linked.' where id = k.id;
+    else
+      update discord_links set name = left(coalesce(j->>'name', ''), 60), discord_guild = coalesce(discord_guild, j->>'guild_id'), status = 'ok', error = '' where id = k.id;
+    end if;
+  elsif q.kind = 'guild' then
+    update discord_links set guild_name = left(coalesce(nullif(j->>'name', ''), 'Discord'), 60) where id = k.id;
+  elsif q.kind = 'poll' then
+    -- (Discord gives the newest first; one message that can't be brought over doesn't hold up the rest)
+    if jsonb_typeof(j) = 'array' then
+      for d in select value from jsonb_array_elements(j) where value->>'id' ~ '^[0-9]{1,20}$' order by (value->>'id')::numeric loop
+        begin perform discord_bring(k.id, d);
+        exception when others then raise notice 'Fluentdat: a message from Discord wasn''t brought over (%)', sqlerrm;
+        end;
+        newest := d->>'id';
+      end loop;
+    end if;
+    update discord_links set last_seen = coalesce(newest, last_seen), error = '' where id = k.id;
+  elsif q.kind = 'send' then
+    -- (which Discord message each line went out in)
+    if j->>'id' is not null then
+      for o in select * from discord_outbox where id = any(q.outbox) order by id loop
+        i := i + 1;
+        if exists (select 1 from messages where id = o.message_id) then
+          insert into discord_sent (message_id, link_id, dmsg, line, pos) values (o.message_id, k.id, j->>'id', o.line, i) on conflict do nothing;
+        end if;
+      end loop;
+    end if;
+    delete from discord_outbox where id = any(q.outbox);
+  else
+    delete from discord_outbox where id = any(q.outbox);
+  end if;
+end $$;
+-- every couple of seconds (pg_cron): read Discord's answers, then ask again. For each Discord channel: what's been said
+-- there since last time (while it's starting: which channel the webhook posts in, and its name), and what's waiting to
+-- go there, as many lines as fit in one Discord message (Discord takes about 30 messages a minute in a channel)
+create or replace function public.discord_tick() returns void
+language plpgsql security definer set search_path = public as $$
+declare tok text; r record; k discord_links%rowtype; o discord_outbox%rowtype; hook text; lines text; ids bigint[];
+  api constant text := 'https://discord.com/api/v10';
+begin
+  if not pg_try_advisory_xact_lock(hashtext('fluentdat-discord')) then return; end if;
+  -- (what went out first, so a reply there to a line that just went out finds what it answers)
+  for r in select h.id, h.status_code, h.content, coalesce(h.timed_out, false) or h.error_msg is not null as failed
+           from discord_requests q join net._http_response h on h.id = q.id order by q.kind in ('send', 'drop') desc, q.id loop
+    begin
+      perform discord_answer(r.id, r.status_code, r.content, r.failed);
+    exception when others then
+      raise notice 'Fluentdat: an answer from Discord couldn''t be read (%)', sqlerrm;
+      delete from discord_requests where id = r.id;
+    end;
+  end loop;
+  -- (asked a minute ago and never answered: as good as failed)
+  for r in select id from discord_requests where sent_at < now() - interval '1 minute' loop
+    perform discord_answer(r.id, null, null, true);
+  end loop;
+  tok := discord_token();
+  if tok is null then return; end if;
+  for k in select * from discord_links l where l.status <> 'broken' and l.read_at <= now()
+           and not exists (select 1 from discord_requests q where q.link_id = l.id and q.kind in ('hook', 'chan', 'guild', 'poll')) loop
+    begin
+      if k.discord_channel is null then perform discord_ask(k.id, 'hook', 'GET', api || '/webhooks/' || k.webhook_id || '/' || k.webhook_token);
+      elsif k.status = 'starting' then perform discord_ask(k.id, 'chan', 'GET', api || '/channels/' || k.discord_channel, tok);
+      elsif k.guild_name = '' and k.discord_guild is not null then perform discord_ask(k.id, 'guild', 'GET', api || '/guilds/' || k.discord_guild, tok);
+      else perform discord_ask(k.id, 'poll', 'GET', api || '/channels/' || k.discord_channel || '/messages', tok, jsonb_build_object('after', k.last_seen, 'limit', '50'));
+      end if;
+    exception when others then
+      raise notice 'Fluentdat: Discord couldn''t be asked (%)', sqlerrm;
+      update discord_links set read_at = now() + interval '30 seconds' where id = k.id;
+    end;
+  end loop;
+  for k in select * from discord_links l where l.status = 'ok' and l.write_at <= now() and exists (select 1 from discord_outbox b where b.link_id = l.id)
+           and not exists (select 1 from discord_requests q where q.link_id = l.id and q.kind in ('send', 'drop')) loop
+    hook := api || '/webhooks/' || k.webhook_id || '/' || k.webhook_token;
+    select * into o from discord_outbox where link_id = k.id order by id limit 1;
+    begin
+      if o.kind = 'drop' then perform discord_ask(k.id, 'drop', 'DELETE', hook || '/messages/' || o.dmsg, null, '{}', null, array[o.id]);
+      else
+        lines := ''; ids := '{}';
+        for o in select * from discord_outbox where link_id = k.id order by id loop
+          exit when o.kind <> 'say' or (cardinality(ids) > 0 and char_length(lines) + 1 + char_length(o.line) > 2000);
+          lines := case when lines = '' then o.line else lines || E'\n' || o.line end;
+          ids := ids || o.id;
+        end loop;
+        -- (pinging nobody there, whatever it says)
+        perform discord_ask(k.id, 'send', 'POST', hook, null, '{"wait": "true"}', jsonb_build_object('content', lines, 'allowed_mentions', jsonb_build_object('parse', '[]'::jsonb)), ids);
+      end if;
+    exception when others then
+      raise notice 'Fluentdat: Discord couldn''t be told (%)', sqlerrm;
+      delete from discord_outbox where link_id = k.id and kind = 'drop' and id = o.id;
+      update discord_links set write_at = now() + interval '30 seconds' where id = k.id;
+    end;
+  end loop;
+  -- (pg_cron keeps a line for every round: of this one's, only the last few minutes)
+  begin
+    delete from cron.job_run_details where jobid in (select jobid from cron.job where jobname = 'fluentdat-discord') and end_time < now() - interval '5 minutes';
+  exception when others then null;
+  end;
+end $$;
+
 -- only signed-in people may call the actions (the helpers only ever answer about the caller, so they're harmless)
 revoke all on function public.create_server(text, text), public.create_invite(uuid, int, int), public.join_server(text),
   public.set_member_role(uuid, uuid, text), public.find_user(text), public.open_dm(uuid), public.discover(text, text),
@@ -2747,6 +3188,12 @@ revoke all on function public.app_ban(uuid, text), public.app_unban(uuid), publi
 grant execute on function public.app_ban(uuid, text), public.app_unban(uuid), public.app_ban_list(), public.staff_kick(uuid, uuid), public.staff_give_bux(uuid, int) to authenticated;
 revoke all on function public.link_info(uuid), public.my_links(), public.link_channel(uuid), public.join_link(text, uuid), public.unlink_channel(uuid), public.new_link_code(uuid) from public, anon;
 grant execute on function public.link_info(uuid), public.my_links(), public.link_channel(uuid), public.join_link(text, uuid), public.unlink_channel(uuid), public.new_link_code(uuid) to authenticated;
+revoke all on function public.discord_ready(), public.discord_info(uuid), public.link_discord(uuid, text), public.unlink_discord(uuid), public.retry_discord(uuid) from public, anon;
+grant execute on function public.discord_ready(), public.discord_info(uuid), public.link_discord(uuid, text), public.unlink_discord(uuid), public.retry_discord(uuid) to authenticated;
+-- (and what only the database itself runs: above all the bot's token, which nobody signed in may ever ask for)
+revoke all on function public.discord_token(), public.discord_cron_on(), public.discord_snowflake(timestamptz),
+  public.discord_ask(uuid, text, text, text, text, jsonb, jsonb, bigint[]), public.discord_bring(uuid, jsonb), public.discord_answer(bigint, int, text, boolean),
+  public.discord_tick() from public, anon, authenticated;
 
 -- ===================== who may touch the tables at all =====================
 -- signed-in people go through the rules above; signed-out visitors get nothing
@@ -2786,6 +3233,8 @@ grant select on public.channel_link_members to authenticated;
 revoke insert, update, delete, truncate on public.channel_link_members from authenticated;
 revoke all on public.channel_links from anon, authenticated;
 revoke all on public.channel_link_members from anon;
+-- (Discord's linked channels: through their functions only, so a webhook's token never leaves the database)
+revoke all on public.discord_links, public.discord_outbox, public.discord_sent, public.discord_requests from anon, authenticated;
 
 -- TrixWotel runs Fluentdat. (To add someone else: insert into public.app_admins select id from public.profiles where handle = 'their handle';)
 insert into public.app_admins (user_id) select id from public.profiles where handle = 'trixwotel' on conflict do nothing;
@@ -2847,10 +3296,18 @@ insert into public.quest_rewards (quest, kind, item) values ('first-steps', 'dec
   ('connected', 'deco', 'neon'), ('show-and-tell', 'deco', 'orbit'), ('party-up', 'effect', 'confetti'), ('game-on', 'effect', 'stars'), ('planner', 'deco', 'crown')
 on conflict (quest) do update set kind = excluded.kind, item = excluded.item;
 insert into public.owned_items (user_id, kind, item, how) select x.id, q.kind, q.item, 'quest' from public.profile_extras x join public.quest_rewards q on x.quests ? q.quest on conflict do nothing;
--- (where Supabase's pg_cron is turned on: everyone's boosts are kept paid every hour, with Fluentdat open or not)
+-- (where Supabase's pg_cron is turned on: everyone's boosts are kept paid every hour, with Fluentdat open or not; and,
+-- with pg_net on too, Discord's linked channels are read and written every 2 seconds, or every minute where pg_cron is
+-- too old for seconds)
 do $$ begin
   if exists (select 1 from pg_extension where extname = 'pg_cron') then
     begin perform cron.schedule('fluentdat-boosts', '7 * * * *', 'select public.renew_all_boosts()'); exception when others then null; end;
+    if exists (select 1 from pg_extension where extname = 'pg_net') then
+      begin perform cron.schedule('fluentdat-discord', '2 seconds', 'select public.discord_tick()');
+      exception when others then
+        begin perform cron.schedule('fluentdat-discord', '* * * * *', 'select public.discord_tick()'); exception when others then null; end;
+      end;
+    end if;
   end if;
 end $$;
 

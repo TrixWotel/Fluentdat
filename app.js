@@ -2456,10 +2456,12 @@ function messageNode(m, cont, to, all, ctx) {
 function linkLine(m, ctx, full, withText = true) {
   const ln = m.linked, sep = typeof prefs.linkSep === 'string' ? prefs.linkSep : ' / ', from = ln.from ? Store.channel(ln.from) : null;
   const known = !!(m.user && m.user.id && Store.profile && Store.profile(m.user.id));
+  // (from a linked Discord channel: Discord's mark instead of the link, and where it was said there)
+  const where = ln.discord ? ` on Discord${ln.server && ln.server !== 'Discord' ? ' (' + ln.server + ')' : ''}` : ln.server ? ' in ' + ln.server : '';
   const make = {
-    lnIcon: () => el('span', { className: 'ln-ic', title: 'From a linked channel' }, icon('link', 14)),
+    lnIcon: () => (ln.discord ? el('span', { className: 'ln-ic dc', title: 'From Discord' }, brand('discord', 14)) : el('span', { className: 'ln-ic', title: 'From a linked channel' }, icon('link', 14))),
     lnServer: () => (ln.server ? el('span', { className: 'ln-sv' }, ln.server) : null),
-    lnChannel: () => el(from ? 'button' : 'span', { className: 'ln-ch', title: from ? 'Go to #' + ln.channel : `#${ln.channel}${ln.server ? ' in ' + ln.server : ''}`, onclick: from ? () => openChannel(from) : null }, '#' + ln.channel),
+    lnChannel: () => el(from ? 'button' : 'span', { className: 'ln-ch', title: from ? 'Go to #' + ln.channel : `#${ln.channel}${where}`, onclick: from ? () => openChannel(from) : null }, '#' + ln.channel),
     lnUser: () => {
       const n = el('span', { className: 'ln-who' + (known ? ' known' : ''), onclick: known ? (e) => showProfile(m.user, e.currentTarget) : null }, m.user.name || 'Someone');
       if (known) n.style.setProperty('--who', nameColor(m.user));
@@ -4514,8 +4516,12 @@ function linkDialog(c) {
       linkLine({ linked: { server: (Store.server(serverId) || {}).name || '', channel: c.name, name: Store.nickIn(serverId, u.id) || u.name || 'You', from: null }, ts: Date.now(), text: 'motor mount is printed', user: u }, fmtCtx(), '')));
   };
   const busy = async (btn, fn) => { btn.disabled = true; const r = await attempt(fn); btn.disabled = false; return r; };
+  // (Discord channels too, where the database has them: a webhook pasted here, and the database reads and writes)
+  const discord = !!(Store.canDiscord && Store.canDiscord());
+  let typed = '', looks = 0;
   const draw = async () => {
-    const list = await attempt(() => Store.linkInfo(c.id));
+    const [list, dc, ready] = await Promise.all([attempt(() => Store.linkInfo(c.id)), discord ? attempt(() => Store.discordInfo(c.id)) : [],
+      discord && manage ? Store.discordReady().catch(() => null) : null]);
     if (list === null) return m.close();
     const linked = list.length > 0, code = (list.find((r) => r.here) || {}).code || '', others = list.filter((r) => !r.here);
     const parts = [el('p', { className: 'hint' }, linked
@@ -4557,7 +4563,43 @@ function linkDialog(c) {
       parts.push(el('h4', { className: 'sub-h' }, 'Start a link'), el('div', { className: 'row', style: 'justify-content:flex-start' }, make),
         el('h4', { className: 'sub-h' }, 'Or join one'), el('div', { className: 'ln-join' }, input, add));
     }
-    if (!manage && !linked) parts.push(el('p', { className: 'hint' }, 'Only whoever manages this channel can link it.'));
+    if (!manage && !linked && !(dc && dc.length)) parts.push(el('p', { className: 'hint' }, 'Only whoever manages this channel can link it.'));
+    // Discord channels: what's said in each shows here (with Discord's mark), and what's said here goes to each
+    if (discord && ((dc && dc.length) || manage)) {
+      parts.push(el('h4', { className: 'sub-h dc-h' }, brand('discord', 15), 'Discord channels'));
+      if (dc && dc.length) {
+        const rows = el('div', { className: 'sx-list ln-list' });
+        for (const d of dc) {
+          const state = d.status === 'ok' ? null : el('span', { className: 'chip' + (d.status === 'broken' ? ' bad' : '') }, d.status === 'broken' ? 'Not working' : 'Connecting…');
+          const again = manage && d.status === 'broken' ? el('button', { className: 'btn small', onclick: async () => { if ((await attempt(() => Store.retryDiscord(d.link))) !== null) draw(); } }, 'Try Again') : null;
+          const remove = manage ? iconBtn('x', 'Take it out', async () => {
+            if (!(await confirmBox({ title: 'Take It Out', text: `Stop linking ${d.name ? '#' + d.name : 'that Discord channel'} with #${c.name}? Messages already here stay.`, ok: 'Take It Out', danger: true }))) return;
+            if ((await attempt(() => Store.unlinkDiscord(d.link))) !== null) { toast('That Discord channel isn’t linked any more.'); draw(); }
+          }) : null;
+          rows.append(el('div', { className: 'it' }, el('span', { className: 'dc-mark' }, brand('discord', 17)),
+            el('span', { className: 'nm3' }, el('b', {}, d.name ? '#' + d.name : 'A Discord channel'), d.guild ? el('span', { className: 'muted' }, ' in ' + d.guild) : null), state, again, remove));
+          if (manage && d.error) rows.append(el('p', { className: 'hint dc-err' }, d.error));
+        }
+        parts.push(rows);
+      }
+      if (manage && !(ready && ready.ready)) parts.push(el('p', { className: 'hint' }, 'Linking with Discord isn’t turned on for this Fluentdat yet. Whoever runs it follows supabase/SETUP.md, step 11.'));
+      else if (manage) {
+        // (the bot only needs to see the channel and read its history: 1024 + 65536)
+        const bot = ready.bot ? el('a', { href: `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(ready.bot)}&scope=bot&permissions=66560`, target: '_blank', rel: 'noopener noreferrer' }, 'Add Fluentdat’s bot') : 'Add Fluentdat’s bot';
+        const input = el('input', { type: 'text', value: typed, placeholder: 'https://discord.com/api/webhooks/…', maxLength: 300, autocomplete: 'off', spellcheck: false, oninput: () => { typed = input.value; } });
+        const add = el('button', { className: 'btn' }, brand('discord', 16), 'Link With Discord');
+        add.onclick = async () => {
+          const url = input.value.trim();
+          if (!/^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[\w-]+\/?$/.test(url)) { input.focus(); return toast('That doesn’t look like a Discord webhook URL.'); }
+          if ((await busy(add, () => Store.linkDiscord(c.id, url))) !== null) { typed = ''; looks = 0; toast('Linking with Discord…'); draw(); }
+        };
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add.click(); } });
+        parts.push(el('p', { className: 'hint' }, 'Link a Discord channel: what’s said there shows here, and what’s said here goes there, on one line.'),
+          el('ol', { className: 'dc-steps' }, el('li', {}, bot, ' to the Discord server. Fluentdat only reads the channels you link.'),
+            el('li', {}, 'In Discord, open the channel’s settings → Integrations → Webhooks → New Webhook, then Copy Webhook URL.'), el('li', {}, 'Paste it here.')),
+          el('div', { className: 'ln-join' }, input, add));
+      }
+    }
     const actions = [];
     if (manage && linked) actions.push(el('button', { className: 'btn ghost danger', onclick: async () => {
       if (!(await confirmBox({ title: 'Unlink Channel', text: `Stop linking #${c.name} with ${others.length ? 'the other channels' : 'this link'}? Messages already here stay.`, ok: 'Unlink', danger: true }))) return;
@@ -4565,6 +4607,8 @@ function linkDialog(c) {
     } }, 'Unlink This Channel'));
     actions.push(el('span', { style: 'flex:1' }), el('button', { className: 'btn primary', textContent: 'Done', onclick: () => m.close() }));
     m.fill([el('h3', {}, 'Linked Channels'), el('p', { className: 'dlg-sub' }, '#' + c.name), ...parts, el('div', { className: 'row' }, ...actions)]);
+    // (a Discord channel connecting: look again in a moment, for half a minute)
+    if (dc && dc.some((d) => d.status === 'starting') && looks++ < 10) setTimeout(() => { if (m.scrim.isConnected) draw(); }, 3000);
   };
   draw();
 }
@@ -4811,7 +4855,7 @@ function messageCtx(m, x, y) {
     speakable && { label: 'Speak Message', icon: 'volume', action: () => speak(m) },
     '-',
     (m.files || []).length === 1 && m.files[0].kind !== 'voice' && { label: 'Save File', icon: 'download', action: async () => { const f = m.files[0]; const u = await attempt(() => Store.downloadUrl(f.path, f.name || 'file')); if (u) { const a = el('a', { href: u, download: f.name || '' }); document.body.append(a); a.click(); a.remove(); } } },
-    !m.user.bot && !isMe(m.user) && { label: 'Profile', icon: 'user', action: () => profileAt(m.user, x, y) },
+    !m.user.bot && !m.user.discord && !isMe(m.user) && { label: 'Profile', icon: 'user', action: () => profileAt(m.user, x, y) },
     canDel && { label: 'Delete Message', icon: 'trash', danger: true, action: async () => {
       if (await confirmBox({ title: 'Delete Message', text: 'Are you sure you want to delete this message?', ok: 'Delete', danger: true })) Store.deleteMessage(where, m.id);
     } },
@@ -7548,7 +7592,7 @@ function czPane(id, redraw) {
     row2('Formatting bar', 'Bold, italics, code and more when you select some of what you wrote.', sw(prefs.formatBar !== 'off', (on) => set('formatBar', on ? 'on' : 'off'))),
     row2('“Live, signed in as @you”', 'The bar across the top when all is well. Off, it only shows when something needs you.', sw(prefs.liveBanner === 'on', (on) => set('liveBanner', on ? 'on' : 'off'))),
     el('h3', {}, 'The buttons over a message'), ...elementGroups(redraw, ['msgActions']),
-    el('h3', {}, 'Messages from linked channels'), el('p', { className: 'hint' }, 'A channel linked with channels in other servers shows what’s said there on one line, like “#build-log / Trix / 3:41 PM / motor mount is printed”. Choose its parts and their order.'),
+    el('h3', {}, 'Messages from linked channels'), el('p', { className: 'hint' }, 'A channel linked with channels in other servers, or on Discord, shows what’s said there on one line, like “#build-log / Trix / 3:41 PM / motor mount is printed”. Choose its parts and their order.'),
     row2('Between the parts', '', pick('linkSep', LINK_SEPS)), ...elementGroups(redraw, ['linkLine'])];
   if (id === 'profiles') return [...head('Profiles', 'Profile cards, and what you see of other people’s looks.'),
     row2('Avatar decorations', 'Frames and things around people’s avatars, from the Shop.', sw(prefs.decorations !== 'off', (on) => set('decorations', on ? 'on' : 'off'))),

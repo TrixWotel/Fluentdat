@@ -2511,3 +2511,11 @@ button.pc-name:hover { text-decoration: underline; }
 .link-dlg .ln-code { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .link-dlg .ln-code code { font-family: ui-monospace, Menlo, monospace; font-size: 1.05rem; letter-spacing: .06em; padding: 6px 10px; border-radius: 8px; background: var(--input); border: 1px solid var(--edge); color: var(--bright); user-select: all; }
 .link-dlg .ln-join { display: flex; gap: 8px; } .link-dlg .ln-join input { flex: 1; min-width: 0; }
+/* Round V: Discord channels linked too. Their lines carry Discord's mark instead of the link, and Linked Channels lists
+   them, with how to add one (the bot, a webhook) */
+.ln-line .ln-ic.dc { color: #5865f2; }
+.link-dlg .dc-h { display: flex; align-items: center; gap: 6px; }
+.link-dlg .dc-mark { display: inline-flex; flex: none; color: #5865f2; }
+.link-dlg .dc-err { margin: -2px 0 6px 27px; color: #ed4245; }
+.link-dlg .dc-steps { margin: 4px 0 10px; padding-left: 20px; color: var(--muted); line-height: 1.55; }
+.link-dlg .dc-steps a { color: var(--bright); font-weight: 600; }

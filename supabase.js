@@ -79,13 +79,17 @@ function toUser(p) {
 }
 const userOf = (id) => ({ ...toUser(cache.profiles[id]), id });
 // (Flubot's lines are posted by whoever ran the command — say who, so nobody can pass words off as the bot's)
-// (a linked channel's copy says where it was said, and who said it, as they were called then)
-const toLinked = (r) => (r.link_src && r.linked && typeof r.linked === 'object' ? { server: String(r.linked.server || ''), channel: String(r.linked.channel || ''),
-  name: String(r.linked.name || ''), from: r.linked.from || null, src: r.link_src } : null);
+// (a linked channel's copy says where it was said, and who said it, as they were called then; so does a message from a
+// linked Discord channel, which only the database makes too)
+const fromDiscord = (r) => !!(r.linked && typeof r.linked === 'object' && r.linked.discord);
+const toLinked = (r) => ((r.link_src || fromDiscord(r)) && r.linked && typeof r.linked === 'object' ? { server: String(r.linked.server || ''), channel: String(r.linked.channel || ''),
+  name: String(r.linked.name || ''), from: r.linked.from || null, src: r.link_src || null, discord: fromDiscord(r) } : null);
 const toMessage = (r) => ({ id: r.id, ts: Date.parse(r.created_at), text: r.text, sticker: r.sticker, action: r.action, reply: r.reply_to || null, forwarded: r.forwarded || null, linked: toLinked(r),
-  files: Array.isArray(r.files) ? r.files : null, mine: r.author === myId(), sending: pending.has(r.id), progress: r._progress,
-  // (a linked channel's copy goes by the name it was said under there, which may be someone you don't otherwise know)
-  user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : r.link_src && r.linked && r.linked.name ? { ...userOf(r.author), name: String(r.linked.name) } : userOf(r.author) });
+  files: Array.isArray(r.files) ? r.files : null, mine: r.author === myId() && !fromDiscord(r), sending: pending.has(r.id), progress: r._progress,
+  // (a linked channel's copy goes by the name it was said under there, which may be someone you don't otherwise know;
+  // someone on Discord is only a name here, posted for them by whoever linked the channel)
+  user: r.bot ? { ...FLUBOT, via: (cache.profiles[r.author] || {}).handle || '' } : fromDiscord(r) ? { name: String(r.linked.name || 'Someone'), discord: true }
+    : r.link_src && r.linked && r.linked.name ? { ...userOf(r.author), name: String(r.linked.name) } : userOf(r.author) });
 const toServer = (r) => ({ id: r.id, name: r.name, icon: r.icon, img: r.img, owner: r.owner, banner: r.banner || '', description: r.description || '',
   tag: r.tag || '', tagBadge: r.tag_badge || '', tagColor: r.tag_color || '',
   features: r.features && typeof r.features === 'object' ? r.features : {}, guide: r.guide && typeof r.guide === 'object' ? r.guide : {}, gameServers: Array.isArray(r.game_servers) ? r.game_servers : [],
@@ -173,7 +177,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 18;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 19;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -302,9 +306,9 @@ function watchMessages() {
   if (feed) return;
   const add = (dm) => ({ new: row }) => {
     const place = dm ? row.dm_id : row.channel_id, bucket = dm ? cache.dms : cache.msgs;
-    if (!row.bot && !row.link_src) meet(row.author);               // (a copy's author may be someone you don't know: the copy says who)
+    if (!row.bot && !row.link_src && !fromDiscord(row)) meet(row.author);   // (a copy's author may be someone you don't know: the copy says who)
     if (bucket[place] && !bucket[place].some((m) => m.id === row.id)) { bucket[place].push(row); bucket[place].sort(byTime); }
-    const mineToo = row.author === myId() && !row.bot;
+    const mineToo = row.author === myId() && !row.bot && !fromDiscord(row);     // (what Discord says in a channel you linked isn't yours)
     const u = (cache.unread[place] = cache.unread[place] || { unread: 0, mentions: 0, last: 0 });
     u.last = Date.parse(row.created_at) || Date.now();
     const ti = !dm && cache.threadInfo[place]; if (ti) { ti.count++; ti.last = u.last; }       // (a thread's message count)
@@ -361,7 +365,7 @@ function pings(row, place) {
   const me = myId(), text = row.text || '';
   if (mentionIds(text).includes(String(me).toLowerCase())) return true;
   if (mentionsEveryone(text) && chanPerm(row.author, place, 'mention_everyone')) return true;
-  if (row.reply_to) { const to = (cache.msgs[place] || []).find((m) => m.id === row.reply_to); if (to && to.author === me) return true; }
+  if (row.reply_to) { const to = (cache.msgs[place] || []).find((m) => m.id === row.reply_to); if (to && to.author === me && !fromDiscord(to)) return true; }
   return false;
 }
 function callChanged(row, started) {
@@ -1305,6 +1309,16 @@ export const SupabaseStore = {
   async joinLink(code, channel) { must(await sb.rpc('join_link', { p_code: code, p_channel: channel })); await loadAll(); },
   async unlinkChannel(channel) { must(await sb.rpc('unlink_channel', { p_channel: channel })); await loadAll(); },
   async newLinkCode(channel) { return must(await sb.rpc('new_link_code', { p_channel: channel })); },
+  // ---- Discord channels linked with a channel here, by a webhook made in each (the database reads and writes them) ----
+  canDiscord: () => (cache.version || 0) >= 19,
+  async discordReady() { const r = must(await sb.rpc('discord_ready')) || {}; return { ready: !!r.ready, bot: r.bot || '' }; },
+  async discordInfo(channel) {
+    return (must(await sb.rpc('discord_info', { p_channel: channel })) || []).map((r) => ({ link: r.link_id, name: r.name || '', guild: r.guild || '', status: r.status,
+      error: r.error || '', at: Date.parse(r.added_at) || 0 }));
+  },
+  async linkDiscord(channel, webhook) { must(await sb.rpc('link_discord', { p_channel: channel, p_webhook: webhook })); await loadAll(); },
+  async unlinkDiscord(link) { must(await sb.rpc('unlink_discord', { p_link: link })); await loadAll(); },
+  async retryDiscord(link) { must(await sb.rpc('retry_discord', { p_link: link })); },
   // ---- for the people who run Fluentdat (TrixWotel): one-time links to make an account, and the reports ----
   isAppAdmin: () => !!cache.admin,
   // (and TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux for anyone)

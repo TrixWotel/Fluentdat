@@ -128,6 +128,8 @@ const fallback = {
   canLinks: () => false, linkedWith: () => -1, linkInfo: async () => [],
   linkChannel: async () => { throw new Error(SIGN_IN + 'link channels.'); }, joinLink: async () => { throw new Error(SIGN_IN + 'link channels.'); },
   unlinkChannel: async () => {}, newLinkCode: async () => '',
+  canDiscord: () => false, discordReady: async () => ({ ready: false, bot: '' }), discordInfo: async () => [],
+  linkDiscord: async () => { throw new Error(SIGN_IN + 'link Discord channels.'); }, unlinkDiscord: async () => {}, retryDiscord: async () => {},
   markUnread: () => {},
   emojiAll: () => [], serverEmoji: () => [], serverStickers: () => [], expressionUrl: () => '',
   addEmoji: async () => { throw new Error(SIGN_IN + 'add server emoji.'); },
