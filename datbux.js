@@ -25,6 +25,24 @@ export const PRICES = {
   'deco:headphones': 1100, 'deco:flowers': 1100, 'deco:bolts': 1250, 'deco:notes': 950, 'deco:pixel': 800, 'deco:foxears': 950,
   'deco:clouds': 800, 'deco:aurora': 1400, 'deco:sakura': 1100, 'deco:witch': 1250, 'deco:bow': 950, 'deco:shades': 1100,
   'deco:moon': 1250, 'deco:crystals': 1400,
+  // (the hundred more: decorations.js)
+  'deco:sunsetring': 950, 'deco:oceanring': 950, 'deco:mintring': 850, 'deco:lavaring': 1200, 'deco:goldring': 1300, 'deco:silverring': 1050,
+  'deco:doublering': 1000, 'deco:dashring': 850, 'deco:chainring': 1000, 'deco:prismring': 1250, 'deco:heartbeat': 1000, 'deco:bearears': 950,
+  'deco:mouseears': 900, 'deco:pandaears': 950, 'deco:dogears': 1000, 'deco:wolfears': 1000, 'deco:frogeyes': 950, 'deco:antennae': 1000,
+  'deco:antlers': 1100, 'deco:unicorn': 1300, 'deco:dragonhorns': 1250, 'deco:ramhorns': 1150, 'deco:tigerears': 1000, 'deco:elfears': 950,
+  'deco:partyhat': 950, 'deco:santahat': 1100, 'deco:tophat': 1100, 'deco:cowboy': 1100, 'deco:beanie': 950, 'deco:chefhat': 950,
+  'deco:gradcap': 1050, 'deco:pirate': 1150, 'deco:viking': 1200, 'deco:propeller': 1050, 'deco:wizard': 1200, 'deco:tiara': 1300,
+  'deco:beret': 900, 'deco:jester': 1150, 'deco:roundglasses': 900, 'deco:heartglasses': 1000, 'deco:starglasses': 1000, 'deco:monocle': 950,
+  'deco:blush': 850, 'deco:visor': 1250, 'deco:zzz': 850, 'deco:question': 850, 'deco:exclaim': 850, 'deco:angry': 850,
+  'deco:idea': 950, 'deco:lovebubbles': 950, 'deco:sunflower': 1100, 'deco:daisies': 950, 'deco:vines': 950, 'deco:mushrooms': 1050,
+  'deco:mapleleaves': 1000, 'deco:pinewreath': 1100, 'deco:raincloud': 950, 'deco:sunrays': 1100, 'deco:rainbowarc': 1150, 'deco:tulips': 950,
+  'deco:bees': 1050, 'deco:butterflies': 1100, 'deco:ladybugs': 950, 'deco:goldfish': 1050, 'deco:ducks': 950, 'deco:catpaws': 950,
+  'deco:birds': 1000, 'deco:octopus': 1250, 'deco:sharkfin': 1100, 'deco:donuts': 950, 'deco:pizza': 950, 'deco:sushi': 1000,
+  'deco:candies': 950, 'deco:lollipops': 900, 'deco:cherries': 850, 'deco:boba': 950, 'deco:rocket': 1150, 'deco:ufo': 1150,
+  'deco:planets': 1250, 'deco:blackhole': 1350, 'deco:satellite': 1050, 'deco:spacehelmet': 1300, 'deco:pumpkins': 1100, 'deco:ghosts': 1100,
+  'deco:bats': 1050, 'deco:skulls': 1050, 'deco:xmaslights': 1150, 'deco:holly': 1050, 'deco:cupid': 1100, 'deco:eastereggs': 950,
+  'deco:fireworks': 1200, 'deco:shamrocks': 950, 'deco:controller': 1050, 'deco:hpbar': 950, 'deco:swords': 1150, 'deco:dice': 950,
+  'deco:magiccircle': 1400, 'deco:fairydust': 1000, 'deco:phoenix': 1400, 'deco:batwings': 1250,
   'font:tempo': 100, 'font:sakura': 100, 'font:jelly': 150, 'font:modern': 150, 'font:medieval': 200, 'font:pixel': 200,
   'font:vampyre': 250, 'font:chunky': 150, 'font:comic': 80, 'font:script': 200, 'font:type': 80, 'font:marker': 150,
   'font:elegant': 250, 'font:lobster': 150, 'font:bangers': 150, 'font:righteous': 120, 'font:audiowide': 150, 'font:monoton': 250,
@@ -49,15 +67,15 @@ export const PRICES = {
   'plate:rainbow': 120, 'plate:marble': 150, 'plate:camo': 80, 'plate:honey': 100, 'plate:music': 100, 'plate:paws': 80,
 };
 export const WELCOME = 200;
-// the Shop's holidays (in UTC, as setup.sql's shop_sales): a bundle made for one costs less while it's on, and on a sale
-// day (Black Friday, the year's end) every bundle does. { id, name, kind 'theme' | 'sale', pct, from [month, day], to }
+// the Shop's holidays (in UTC, as setup.sql's shop_sales): a bundle made for one costs a little less while it's on, and on
+// a sale day (Black Friday, the year's end) every bundle does. { id, name, kind 'theme' | 'sale', pct, from [month, day], to }
 export const HOLIDAYS = [
-  { id: 'valentines', name: 'Valentine’s Day', kind: 'theme', pct: 25, from: [2, 7], to: [2, 14] },
-  { id: 'hanami', name: 'Cherry Blossom Season', kind: 'theme', pct: 25, from: [3, 20], to: [4, 10] },
-  { id: 'halloween', name: 'Halloween', kind: 'theme', pct: 25, from: [10, 17], to: [10, 31] },
-  { id: 'winter', name: 'Winter Holidays', kind: 'theme', pct: 25, from: [12, 15], to: [12, 31] },
-  { id: 'blackfriday', name: 'Black Friday', kind: 'sale', pct: 30 },                // (the Friday after Thanksgiving to Cyber Monday)
-  { id: 'yearend', name: 'Year-End Sale', kind: 'sale', pct: 30, from: [12, 26], to: [12, 31] },
+  { id: 'valentines', name: 'Valentine’s Day', kind: 'theme', pct: 10, from: [2, 7], to: [2, 14] },
+  { id: 'hanami', name: 'Cherry Blossom Season', kind: 'theme', pct: 10, from: [3, 20], to: [4, 10] },
+  { id: 'halloween', name: 'Halloween', kind: 'theme', pct: 10, from: [10, 17], to: [10, 31] },
+  { id: 'winter', name: 'Winter Holidays', kind: 'theme', pct: 10, from: [12, 15], to: [12, 31] },
+  { id: 'blackfriday', name: 'Black Friday', kind: 'sale', pct: 15 },                // (the Friday after Thanksgiving to Cyber Monday)
+  { id: 'yearend', name: 'Year-End Sale', kind: 'sale', pct: 10, from: [12, 26], to: [12, 31] },
 ];
 // the holidays on at a time: { ...holiday, ends (ms, the start of its last day) }
 export function activeHolidays(t = Date.now()) {
@@ -66,26 +84,26 @@ export function activeHolidays(t = Date.now()) {
   return HOLIDAYS.map((h) => { const [s, e] = h.id === 'blackfriday' ? [thanks + 864e5, thanks + 4 * 864e5] : [at(h.from), at(h.to)]; return { ...h, starts: s, ends: e }; })
     .filter((h) => day >= h.starts && day <= h.ends);
 }
-// the Shop's bundles, as in setup.sql: a few things that go together, for what they cost one by one (what you have
-// already isn't paid for again), and less on their holiday or a sale day
+// the Shop's bundles, as in setup.sql: a few things that go together, for 10–25% less than they cost one by one (cut:
+// that's simply its price; what you have already isn't paid for again), and a little less on their holiday or a sale day
 export const BUNDLES = [
-  { id: 'spooky', name: 'Spooky Night', holiday: 'halloween', items: [{ k: 'deco', i: 'witch' }, { k: 'effect', i: 'ghosts' }, { k: 'frame', i: 'bats' }, { k: 'font', i: 'vampyre' }] },
-  { id: 'blossom', name: 'Cherry Blossom', holiday: 'hanami', items: [{ k: 'deco', i: 'sakura' }, { k: 'effect', i: 'petals' }, { k: 'frame', i: 'blossom' }, { k: 'plate', i: 'sakura' }] },
-  { id: 'cosmic', name: 'Cosmic', holiday: null, items: [{ k: 'deco', i: 'moon' }, { k: 'effect', i: 'galaxy' }, { k: 'plate', i: 'galaxy' }] },
-  { id: 'arcade', name: 'Arcade', holiday: null, items: [{ k: 'deco', i: 'pixel' }, { k: 'effect', i: 'pixels' }, { k: 'frame', i: 'pixelhearts' }, { k: 'plate', i: 'pixel' }, { k: 'font', i: 'silkscreen' }] },
-  { id: 'inferno', name: 'Inferno', holiday: null, items: [{ k: 'deco', i: 'flame' }, { k: 'effect', i: 'flames' }, { k: 'frame', i: 'inferno' }, { k: 'plate', i: 'lava' }] },
-  { id: 'frost', name: 'Winter Frost', holiday: 'winter', items: [{ k: 'deco', i: 'snowflakes' }, { k: 'effect', i: 'snow' }, { k: 'frame', i: 'frost' }] },
-  { id: 'synthwave', name: 'Synthwave', holiday: null, items: [{ k: 'deco', i: 'neon' }, { k: 'frame', i: 'synth' }, { k: 'plate', i: 'neon' }, { k: 'font', i: 'audiowide' }] },
-  { id: 'royal', name: 'Royal Court', holiday: null, items: [{ k: 'deco', i: 'crown' }, { k: 'frame', i: 'royal' }, { k: 'plate', i: 'gold' }] },
-  { id: 'lovestruck', name: 'Love Struck', holiday: 'valentines', items: [{ k: 'deco', i: 'hearts' }, { k: 'effect', i: 'hearts' }] },
-  { id: 'headliner', name: 'Headliner', holiday: null, items: [{ k: 'deco', i: 'headphones' }, { k: 'effect', i: 'music' }, { k: 'frame', i: 'melody' }, { k: 'plate', i: 'music' }] },
+  { id: 'spooky', name: 'Spooky Night', holiday: 'halloween', cut: 20, items: [{ k: 'deco', i: 'witch' }, { k: 'effect', i: 'ghosts' }, { k: 'frame', i: 'bats' }, { k: 'font', i: 'vampyre' }] },
+  { id: 'blossom', name: 'Cherry Blossom', holiday: 'hanami', cut: 20, items: [{ k: 'deco', i: 'sakura' }, { k: 'effect', i: 'petals' }, { k: 'frame', i: 'blossom' }, { k: 'plate', i: 'sakura' }] },
+  { id: 'cosmic', name: 'Cosmic', holiday: null, cut: 15, items: [{ k: 'deco', i: 'moon' }, { k: 'effect', i: 'galaxy' }, { k: 'plate', i: 'galaxy' }] },
+  { id: 'arcade', name: 'Arcade', holiday: null, cut: 25, items: [{ k: 'deco', i: 'pixel' }, { k: 'effect', i: 'pixels' }, { k: 'frame', i: 'pixelhearts' }, { k: 'plate', i: 'pixel' }, { k: 'font', i: 'silkscreen' }] },
+  { id: 'inferno', name: 'Inferno', holiday: null, cut: 20, items: [{ k: 'deco', i: 'flame' }, { k: 'effect', i: 'flames' }, { k: 'frame', i: 'inferno' }, { k: 'plate', i: 'lava' }] },
+  { id: 'frost', name: 'Winter Frost', holiday: 'winter', cut: 15, items: [{ k: 'deco', i: 'snowflakes' }, { k: 'effect', i: 'snow' }, { k: 'frame', i: 'frost' }] },
+  { id: 'synthwave', name: 'Synthwave', holiday: null, cut: 20, items: [{ k: 'deco', i: 'neon' }, { k: 'frame', i: 'synth' }, { k: 'plate', i: 'neon' }, { k: 'font', i: 'audiowide' }] },
+  { id: 'royal', name: 'Royal Court', holiday: null, cut: 15, items: [{ k: 'deco', i: 'crown' }, { k: 'frame', i: 'royal' }, { k: 'plate', i: 'gold' }] },
+  { id: 'lovestruck', name: 'Love Struck', holiday: 'valentines', cut: 10, items: [{ k: 'deco', i: 'hearts' }, { k: 'effect', i: 'hearts' }] },
+  { id: 'headliner', name: 'Headliner', holiday: null, cut: 20, items: [{ k: 'deco', i: 'headphones' }, { k: 'effect', i: 'music' }, { k: 'frame', i: 'melody' }, { k: 'plate', i: 'music' }] },
 ];
-// how much off a bundle is now (its holiday's, or a sale's: whichever is more), and what it costs you (to the nearest 10
-// when there's something off)
+// how much off a bundle is now (its holiday's, or a sale's: whichever is more), and what it costs you: what you don't
+// have yet, at the bundle's rate, less that (to the nearest 10)
 export const bundlePct = (b, sales) => Math.max(0, ...sales.filter((h) => h.kind === 'sale' || h.id === b.holiday).map((h) => h.pct));
 export const bundleCost = (b, price, owns, pct = 0) => {
   const sum = b.items.filter((x) => !owns(x.k, x.i)).reduce((n, x) => n + (price(x.k, x.i) || 0), 0);
-  return pct > 0 ? Math.round(sum * (100 - pct) / 1000) * 10 : sum;
+  return sum > 0 ? Math.max(10, Math.round(sum * (100 - (b.cut || 0)) * (100 - pct) / 100000) * 10) : 0;
 };
 export const fmtBux = (n) => Math.floor(Number(n) || 0).toLocaleString('en-US');
 // this day, week (Monday to Sunday), month or year, as the database names it (UTC): its name, and when it began and ends

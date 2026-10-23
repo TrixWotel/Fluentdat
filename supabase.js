@@ -177,7 +177,7 @@ let loadSeq = 0;
 // what you just said about events, kept on top of a reload until the database has surely caught up
 const interestOps = new Map();          // event id → { on, at }
 const statsKept = new Map();            // person → { at, v }: what their badges are made of, as last asked
-const SETUP_VERSION = 20;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
+const SETUP_VERSION = 21;               // (the setup.sql this Fluentdat goes with: see setup_version() there)
 // what you just changed on your profile, kept on top of a reload until the database has surely caught up (a reload that
 // set off before your change, and came back after it, would show the old name, status or bubble for a moment)
 const meOps = new Map();                // column → { v, until }
@@ -211,11 +211,11 @@ async function loadOnce() {
       const [wal, owned, shop, trades, bundles, sales] = await Promise.all([soft(sb.from('wallets').select('*').eq('user_id', myId()).then(must), []),
         soft(sb.from('owned_items').select('kind,item,how,got_at').eq('user_id', myId()).then(must), []), soft(q('shop_items'), []),
         soft(sb.from('trades').select('*').order('created_at', { ascending: false }).limit(80).then(must), []),
-        ver >= 13 ? soft(sb.from('shop_bundles').select('id,name,holiday,items,position').order('position').then(must), []) : [],
+        ver >= 13 ? soft(sb.from('shop_bundles').select(ver >= 21 ? 'id,name,holiday,items,position,cut' : 'id,name,holiday,items,position').order('position').then(must), []) : [],
         ver >= 13 ? soft(sb.rpc('shop_sales').then(must), []) : []]);
       if (seq !== loadSeq) return newestLoad;
       cache.wallet = wal[0] || null; cache.owned = owned; cache.shop = Object.fromEntries(shop.map((r) => [r.kind + ':' + r.item, Number(r.price) || 0])); cache.trades = trades;
-      cache.bundles = bundles.filter((b) => Array.isArray(b.items)).map((b) => ({ id: b.id, name: b.name, holiday: b.holiday || null, items: b.items.filter((x) => x && x.k && x.i) }));
+      cache.bundles = bundles.filter((b) => Array.isArray(b.items)).map((b) => ({ id: b.id, name: b.name, holiday: b.holiday || null, cut: Number(b.cut) || 0, items: b.items.filter((x) => x && x.k && x.i) }));
       cache.sales = (Array.isArray(sales) ? sales : []).filter((h) => h && h.id).map((h) => ({ id: h.id, name: h.name, kind: h.kind, pct: Number(h.pct) || 0, ends: Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(String(h.ends)) ? h.ends + 'T00:00:00Z' : String(h.ends)) || 0 }));
       // (something you were putting on that isn't yours any more, after a trade, isn't kept on top)
       for (const [k, kind] of [['decoration', 'deco'], ['name_font', 'font'], ['effect', 'effect'], ['frame', 'frame']]) {

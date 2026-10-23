@@ -407,8 +407,9 @@ create table if not exists public.quest_rewards (
   kind text not null check (kind in ('deco', 'font', 'effect', 'frame', 'plate')),
   item text not null check (item ~ '^[a-z0-9-]{1,24}$')
 );
--- the Shop's bundles: a few things that go together, for what they cost one by one (what you have already isn't paid
--- for again), less on the holiday one is made for and on sale days (shop_sales)
+-- the Shop's bundles: a few things that go together, for 10–25% less than they cost one by one (cut: that's simply its
+-- price, so nothing says so; what you have already isn't paid for again), and a little less again on the holiday one is
+-- made for and on sale days (shop_sales)
 create table if not exists public.shop_bundles (
   id text primary key check (id ~ '^[a-z0-9-]{1,24}$'),
   name text not null check (char_length(name) between 1 and 40),
@@ -418,6 +419,7 @@ create table if not exists public.shop_bundles (
 );
 alter table public.shop_bundles add column if not exists holiday text check (holiday ~ '^[a-z0-9-]{1,24}$');
 alter table public.shop_bundles drop column if exists pct;
+alter table public.shop_bundles add column if not exists cut int not null default 15 check (cut between 10 and 25);
 -- a trade between two people: Datbux and things from the Shop each way; the other person accepts or declines it
 create table if not exists public.trades (
   id uuid primary key default gen_random_uuid(),
@@ -1880,8 +1882,9 @@ end $$;
 -- that follow your account, and a server's rules; 11: boosts for Datbux, everything in the Shop for Datbux, nameplates;
 -- 15: TrixWotel's commands: bans from all of Fluentdat, taking someone out of a server, Datbux from the people who run it;
 -- 16: who sees what of your profile; 17: deleting your account, and handing a server on; 18: linked channels; 19: Discord
--- channels linked too; 20: what goes to Discord shows under each person's name)
-create or replace function public.setup_version() returns int language sql immutable as $$ select 20 $$;
+-- channels linked too; 20: what goes to Discord shows under each person's name; 21: a hundred more decorations, and
+-- bundles 10–25% less than their things, with smaller sales)
+create or replace function public.setup_version() returns int language sql immutable as $$ select 21 $$;
 
 -- ===================== Datbux =====================
 -- someone's wallet, made the first time it's needed (with a welcome of 200 Datbux)
@@ -1979,12 +1982,12 @@ language sql stable set search_path = public as $$
   with d as (select (p_at at time zone 'utc')::date as day),
   t as (select day, extract(year from day)::int as yr, make_date(extract(year from day)::int, 11, 1) as nov1 from d),
   h (id, name, kind, pct, starts, ends) as (
-    select 'valentines', 'Valentine’s Day', 'theme', 25, make_date(yr, 2, 7), make_date(yr, 2, 14) from t union all
-    select 'hanami', 'Cherry Blossom Season', 'theme', 25, make_date(yr, 3, 20), make_date(yr, 4, 10) from t union all
-    select 'halloween', 'Halloween', 'theme', 25, make_date(yr, 10, 17), make_date(yr, 10, 31) from t union all
-    select 'winter', 'Winter Holidays', 'theme', 25, make_date(yr, 12, 15), make_date(yr, 12, 31) from t union all
-    select 'blackfriday', 'Black Friday', 'sale', 30, nov1 + ((4 - extract(dow from nov1)::int + 7) % 7) + 22, nov1 + ((4 - extract(dow from nov1)::int + 7) % 7) + 25 from t union all
-    select 'yearend', 'Year-End Sale', 'sale', 30, make_date(yr, 12, 26), make_date(yr, 12, 31) from t)
+    select 'valentines', 'Valentine’s Day', 'theme', 10, make_date(yr, 2, 7), make_date(yr, 2, 14) from t union all
+    select 'hanami', 'Cherry Blossom Season', 'theme', 10, make_date(yr, 3, 20), make_date(yr, 4, 10) from t union all
+    select 'halloween', 'Halloween', 'theme', 10, make_date(yr, 10, 17), make_date(yr, 10, 31) from t union all
+    select 'winter', 'Winter Holidays', 'theme', 10, make_date(yr, 12, 15), make_date(yr, 12, 31) from t union all
+    select 'blackfriday', 'Black Friday', 'sale', 15, nov1 + ((4 - extract(dow from nov1)::int + 7) % 7) + 22, nov1 + ((4 - extract(dow from nov1)::int + 7) % 7) + 25 from t union all
+    select 'yearend', 'Year-End Sale', 'sale', 10, make_date(yr, 12, 26), make_date(yr, 12, 31) from t)
   select h.id, h.name, h.kind, h.pct, h.ends from h, d where d.day between h.starts and h.ends;
 $$;
 -- how much off a bundle is at a time: its holiday's, or a sale's (whichever is more)
@@ -1992,15 +1995,16 @@ create or replace function public.bundle_pct(p_bundle text, p_at timestamptz def
 language sql stable set search_path = public as $$
   select coalesce(max(s.pct), 0)::int from shop_bundles b, shop_sales(p_at) s where b.id = p_bundle and (s.kind = 'sale' or s.id = b.holiday);
 $$;
--- what a bundle costs someone now: its things they don't have yet, one by one, less what's off (to the nearest 10 then;
--- 0: they have it all)
+-- what a bundle costs someone now: its things they don't have yet, at the bundle's own rate (their prices less its cut),
+-- less what's off today; to the nearest 10 (0: they have it all)
 create or replace function public.bundle_cost(p_bundle text, p_user uuid) returns bigint
 language sql stable security definer set search_path = public as $$
   with s as (select coalesce(sum(i.price), 0)::bigint as total from shop_bundles b cross join lateral jsonb_array_elements(b.items) it
                join shop_items i on i.kind = it ->> 'k' and i.item = it ->> 'i'
              where b.id = p_bundle and not exists (select 1 from owned_items o where o.user_id = p_user and o.kind = it ->> 'k' and o.item = it ->> 'i')),
+       c as (select coalesce((select cut from shop_bundles where id = p_bundle), 0) as cut),
        p as (select bundle_pct(p_bundle, now()) as pct)
-  select case when p.pct > 0 then (round(s.total * (100 - p.pct) / 1000.0) * 10)::bigint else s.total end from s, p;
+  select case when s.total = 0 then 0 else greatest(10, round(s.total * (100 - c.cut) * (100 - p.pct) / 100000.0) * 10)::bigint end from s, c, p;
 $$;
 -- buy a bundle: everything in it is yours (what you had already, you keep; it isn't paid for twice)
 create or replace function public.buy_bundle(p_bundle text) returns bigint
@@ -3275,6 +3279,24 @@ insert into public.shop_items (kind, item, price) values
   ('deco', 'headphones', 1100), ('deco', 'flowers', 1100), ('deco', 'bolts', 1250), ('deco', 'notes', 950), ('deco', 'pixel', 800), ('deco', 'foxears', 950),
   ('deco', 'clouds', 800), ('deco', 'aurora', 1400), ('deco', 'sakura', 1100), ('deco', 'witch', 1250), ('deco', 'bow', 950), ('deco', 'shades', 1100),
   ('deco', 'moon', 1250), ('deco', 'crystals', 1400),
+  -- (the hundred more: decorations.js)
+  ('deco', 'sunsetring', 950), ('deco', 'oceanring', 950), ('deco', 'mintring', 850), ('deco', 'lavaring', 1200), ('deco', 'goldring', 1300), ('deco', 'silverring', 1050),
+  ('deco', 'doublering', 1000), ('deco', 'dashring', 850), ('deco', 'chainring', 1000), ('deco', 'prismring', 1250), ('deco', 'heartbeat', 1000), ('deco', 'bearears', 950),
+  ('deco', 'mouseears', 900), ('deco', 'pandaears', 950), ('deco', 'dogears', 1000), ('deco', 'wolfears', 1000), ('deco', 'frogeyes', 950), ('deco', 'antennae', 1000),
+  ('deco', 'antlers', 1100), ('deco', 'unicorn', 1300), ('deco', 'dragonhorns', 1250), ('deco', 'ramhorns', 1150), ('deco', 'tigerears', 1000), ('deco', 'elfears', 950),
+  ('deco', 'partyhat', 950), ('deco', 'santahat', 1100), ('deco', 'tophat', 1100), ('deco', 'cowboy', 1100), ('deco', 'beanie', 950), ('deco', 'chefhat', 950),
+  ('deco', 'gradcap', 1050), ('deco', 'pirate', 1150), ('deco', 'viking', 1200), ('deco', 'propeller', 1050), ('deco', 'wizard', 1200), ('deco', 'tiara', 1300),
+  ('deco', 'beret', 900), ('deco', 'jester', 1150), ('deco', 'roundglasses', 900), ('deco', 'heartglasses', 1000), ('deco', 'starglasses', 1000), ('deco', 'monocle', 950),
+  ('deco', 'blush', 850), ('deco', 'visor', 1250), ('deco', 'zzz', 850), ('deco', 'question', 850), ('deco', 'exclaim', 850), ('deco', 'angry', 850),
+  ('deco', 'idea', 950), ('deco', 'lovebubbles', 950), ('deco', 'sunflower', 1100), ('deco', 'daisies', 950), ('deco', 'vines', 950), ('deco', 'mushrooms', 1050),
+  ('deco', 'mapleleaves', 1000), ('deco', 'pinewreath', 1100), ('deco', 'raincloud', 950), ('deco', 'sunrays', 1100), ('deco', 'rainbowarc', 1150), ('deco', 'tulips', 950),
+  ('deco', 'bees', 1050), ('deco', 'butterflies', 1100), ('deco', 'ladybugs', 950), ('deco', 'goldfish', 1050), ('deco', 'ducks', 950), ('deco', 'catpaws', 950),
+  ('deco', 'birds', 1000), ('deco', 'octopus', 1250), ('deco', 'sharkfin', 1100), ('deco', 'donuts', 950), ('deco', 'pizza', 950), ('deco', 'sushi', 1000),
+  ('deco', 'candies', 950), ('deco', 'lollipops', 900), ('deco', 'cherries', 850), ('deco', 'boba', 950), ('deco', 'rocket', 1150), ('deco', 'ufo', 1150),
+  ('deco', 'planets', 1250), ('deco', 'blackhole', 1350), ('deco', 'satellite', 1050), ('deco', 'spacehelmet', 1300), ('deco', 'pumpkins', 1100), ('deco', 'ghosts', 1100),
+  ('deco', 'bats', 1050), ('deco', 'skulls', 1050), ('deco', 'xmaslights', 1150), ('deco', 'holly', 1050), ('deco', 'cupid', 1100), ('deco', 'eastereggs', 950),
+  ('deco', 'fireworks', 1200), ('deco', 'shamrocks', 950), ('deco', 'controller', 1050), ('deco', 'hpbar', 950), ('deco', 'swords', 1150), ('deco', 'dice', 950),
+  ('deco', 'magiccircle', 1400), ('deco', 'fairydust', 1000), ('deco', 'phoenix', 1400), ('deco', 'batwings', 1250),
   ('font', 'tempo', 100), ('font', 'sakura', 100), ('font', 'jelly', 150), ('font', 'modern', 150), ('font', 'medieval', 200), ('font', 'pixel', 200),
   ('font', 'vampyre', 250), ('font', 'chunky', 150), ('font', 'comic', 80), ('font', 'script', 200), ('font', 'type', 80), ('font', 'marker', 150),
   ('font', 'elegant', 250), ('font', 'lobster', 150), ('font', 'bangers', 150), ('font', 'righteous', 120), ('font', 'audiowide', 150), ('font', 'monoton', 250),
@@ -3298,19 +3320,20 @@ insert into public.shop_items (kind, item, price) values
   ('plate', 'waves', 100), ('plate', 'polka', 60), ('plate', 'zigzag', 60), ('plate', 'hearts', 100), ('plate', 'bubbles', 100), ('plate', 'flames', 150),
   ('plate', 'rainbow', 120), ('plate', 'marble', 150), ('plate', 'camo', 80), ('plate', 'honey', 100), ('plate', 'music', 100), ('plate', 'paws', 80)
 on conflict (kind, item) do update set price = excluded.price;
--- the bundles, and the holiday each is made for (their prices are their things', less on that holiday and on sale days)
-insert into public.shop_bundles (id, name, holiday, items, position) values
-  ('spooky', 'Spooky Night', 'halloween', '[{"k":"deco","i":"witch"},{"k":"effect","i":"ghosts"},{"k":"frame","i":"bats"},{"k":"font","i":"vampyre"}]', 0),
-  ('blossom', 'Cherry Blossom', 'hanami', '[{"k":"deco","i":"sakura"},{"k":"effect","i":"petals"},{"k":"frame","i":"blossom"},{"k":"plate","i":"sakura"}]', 1),
-  ('cosmic', 'Cosmic', null, '[{"k":"deco","i":"moon"},{"k":"effect","i":"galaxy"},{"k":"plate","i":"galaxy"}]', 2),
-  ('arcade', 'Arcade', null, '[{"k":"deco","i":"pixel"},{"k":"effect","i":"pixels"},{"k":"frame","i":"pixelhearts"},{"k":"plate","i":"pixel"},{"k":"font","i":"silkscreen"}]', 3),
-  ('inferno', 'Inferno', null, '[{"k":"deco","i":"flame"},{"k":"effect","i":"flames"},{"k":"frame","i":"inferno"},{"k":"plate","i":"lava"}]', 4),
-  ('frost', 'Winter Frost', 'winter', '[{"k":"deco","i":"snowflakes"},{"k":"effect","i":"snow"},{"k":"frame","i":"frost"}]', 5),
-  ('synthwave', 'Synthwave', null, '[{"k":"deco","i":"neon"},{"k":"frame","i":"synth"},{"k":"plate","i":"neon"},{"k":"font","i":"audiowide"}]', 6),
-  ('royal', 'Royal Court', null, '[{"k":"deco","i":"crown"},{"k":"frame","i":"royal"},{"k":"plate","i":"gold"}]', 7),
-  ('lovestruck', 'Love Struck', 'valentines', '[{"k":"deco","i":"hearts"},{"k":"effect","i":"hearts"}]', 8),
-  ('headliner', 'Headliner', null, '[{"k":"deco","i":"headphones"},{"k":"effect","i":"music"},{"k":"frame","i":"melody"},{"k":"plate","i":"music"}]', 9)
-on conflict (id) do update set name = excluded.name, holiday = excluded.holiday, items = excluded.items, position = excluded.position;
+-- the bundles, the holiday each is made for, and how much less than its things it costs (more for a bigger bundle: 2
+-- things 10%, 3 15%, 4 20%, 5 25%); a little less again on that holiday and on sale days
+insert into public.shop_bundles (id, name, holiday, items, position, cut) values
+  ('spooky', 'Spooky Night', 'halloween', '[{"k":"deco","i":"witch"},{"k":"effect","i":"ghosts"},{"k":"frame","i":"bats"},{"k":"font","i":"vampyre"}]', 0, 20),
+  ('blossom', 'Cherry Blossom', 'hanami', '[{"k":"deco","i":"sakura"},{"k":"effect","i":"petals"},{"k":"frame","i":"blossom"},{"k":"plate","i":"sakura"}]', 1, 20),
+  ('cosmic', 'Cosmic', null, '[{"k":"deco","i":"moon"},{"k":"effect","i":"galaxy"},{"k":"plate","i":"galaxy"}]', 2, 15),
+  ('arcade', 'Arcade', null, '[{"k":"deco","i":"pixel"},{"k":"effect","i":"pixels"},{"k":"frame","i":"pixelhearts"},{"k":"plate","i":"pixel"},{"k":"font","i":"silkscreen"}]', 3, 25),
+  ('inferno', 'Inferno', null, '[{"k":"deco","i":"flame"},{"k":"effect","i":"flames"},{"k":"frame","i":"inferno"},{"k":"plate","i":"lava"}]', 4, 20),
+  ('frost', 'Winter Frost', 'winter', '[{"k":"deco","i":"snowflakes"},{"k":"effect","i":"snow"},{"k":"frame","i":"frost"}]', 5, 15),
+  ('synthwave', 'Synthwave', null, '[{"k":"deco","i":"neon"},{"k":"frame","i":"synth"},{"k":"plate","i":"neon"},{"k":"font","i":"audiowide"}]', 6, 20),
+  ('royal', 'Royal Court', null, '[{"k":"deco","i":"crown"},{"k":"frame","i":"royal"},{"k":"plate","i":"gold"}]', 7, 15),
+  ('lovestruck', 'Love Struck', 'valentines', '[{"k":"deco","i":"hearts"},{"k":"effect","i":"hearts"}]', 8, 10),
+  ('headliner', 'Headliner', null, '[{"k":"deco","i":"headphones"},{"k":"effect","i":"music"},{"k":"frame","i":"melody"},{"k":"plate","i":"music"}]', 9, 20)
+on conflict (id) do update set name = excluded.name, holiday = excluded.holiday, items = excluded.items, position = excluded.position, cut = excluded.cut;
 delete from public.shop_bundles where id not in ('spooky', 'blossom', 'cosmic', 'arcade', 'inferno', 'frost', 'synthwave', 'royal', 'lovestruck', 'headliner');
 -- (what people wore before there was anything to pay with stays theirs)
 insert into public.owned_items (user_id, kind, item, how) select id, 'deco', decoration, 'grant' from public.profiles where decoration ~ '^[a-z0-9-]{1,24}$' on conflict do nothing;
